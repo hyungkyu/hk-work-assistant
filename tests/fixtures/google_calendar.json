@@ -1,0 +1,32 @@
+[
+  {
+    "calendar_id": "team@example.com",
+    "id": "event-public",
+    "created": "2026-02-02T02:00:00Z",
+    "updated": "2026-02-02T02:00:00Z",
+    "status": "confirmed",
+    "visibility": "public",
+    "summary": "Robot hand review",
+    "description": "Decide sensor specification",
+    "start": {"dateTime": "2026-02-02T05:00:00Z"},
+    "end": {"dateTime": "2026-02-02T06:00:00Z"},
+    "creator": {"email": "owner@example.com"},
+    "attendees": [{"email": "member@example.com"}],
+    "htmlLink": "https://calendar.google.com/event?eid=public"
+  },
+  {
+    "calendar_id": "person@example.com",
+    "id": "event-private",
+    "created": "2026-02-02T03:00:00Z",
+    "updated": "2026-02-02T03:30:00Z",
+    "status": "confirmed",
+    "visibility": "private",
+    "summary": "Secret title",
+    "description": "Must not be retained",
+    "start": {"dateTime": "2026-02-02T07:00:00Z"},
+    "end": {"dateTime": "2026-02-02T08:00:00Z"},
+    "creator": {"email": "person@example.com"},
+    "htmlLink": "https://calendar.google.com/event?eid=private"
+  }
+]
+

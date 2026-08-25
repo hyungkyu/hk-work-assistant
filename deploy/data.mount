@@ -1,0 +1,13 @@
+[Unit]
+Description=RLWRLD worklog archive disk
+
+[Mount]
+What=/dev/disk/by-label/rlwrld-data
+Where=/data
+Type=ext4
+Options=defaults,noatime
+TimeoutSec=30s
+
+[Install]
+WantedBy=multi-user.target
+

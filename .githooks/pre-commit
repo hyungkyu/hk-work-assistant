@@ -1,0 +1,34 @@
+#!/bin/sh
+set -eu
+
+blocked_path_pattern='(^|/)(secrets|data|raw|daily_raw|legacy-data|manifests|exports|backups|logs|checkpoints)(/|$)|\.(jsonl|ndjson|json\.gz|parquet|sqlite3?|db|dump|sql\.gz|log)$|(^|/)(client_secret[^/]*|credentials[^/]*|google-token[^/]*|token)\.json$'
+blocked_secret_pattern='xox[baprs]-[A-Za-z0-9-]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|-----BEGIN ([A-Z ]+)?PRIVATE KEY-----|"(refresh_token|private_key|client_secret)"[[:space:]]*:'
+
+staged_files=$(git diff --cached --name-only --diff-filter=ACMR)
+if [ -z "$staged_files" ]; then
+    exit 0
+fi
+
+if printf '%s\n' "$staged_files" | grep -E "$blocked_path_pattern" >/dev/null; then
+    echo "Commit blocked: collected data, credentials, or runtime artifacts are staged:" >&2
+    printf '%s\n' "$staged_files" | grep -E "$blocked_path_pattern" >&2
+    exit 1
+fi
+
+oversized=$(printf '%s\n' "$staged_files" | while IFS= read -r path; do
+    size=$(git cat-file -s ":$path" 2>/dev/null || printf 0)
+    if [ "$size" -gt 1048576 ]; then
+        printf '%s (%s bytes)\n' "$path" "$size"
+    fi
+done)
+if [ -n "$oversized" ]; then
+    echo "Commit blocked: files larger than 1 MiB require explicit review:" >&2
+    printf '%s\n' "$oversized" >&2
+    exit 1
+fi
+
+if git grep --cached -I -E "$blocked_secret_pattern" -- . >/dev/null; then
+    echo "Commit blocked: a credential-like value was found in staged content." >&2
+    git grep --cached -n -I -E "$blocked_secret_pattern" -- . | sed -E 's/(:.{0,24}).*/\1[REDACTED]/' >&2
+    exit 1
+fi

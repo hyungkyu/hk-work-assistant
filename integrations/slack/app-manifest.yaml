@@ -1,0 +1,25 @@
+display_information:
+  name: RLWRLD Worklog Collector
+  description: Read-only local activity archive for the RLWRLD workspace
+  background_color: "#18202A"
+oauth_config:
+  scopes:
+    user:
+      - channels:history
+      - channels:read
+      - files:read
+      - groups:history
+      - groups:read
+      - im:history
+      - im:read
+      - mpim:history
+      - mpim:read
+      - reactions:read
+      - search:read
+      - usergroups:read
+      - users:read
+      - users:read.email
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

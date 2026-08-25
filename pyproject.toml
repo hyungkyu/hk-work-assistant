@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rlwrld-worklog"
+version = "0.1.0"
+description = "Local activity ledger for Slack, Google Calendar, and GitHub"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "google-api-python-client>=2.170,<3",
+  "google-auth-oauthlib>=1.2,<2",
+  "psycopg[binary]>=3.2,<4",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[project.scripts]
+worklog = "rlwrld_worklog.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

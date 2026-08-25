@@ -1,0 +1,26 @@
+[
+  {
+    "channel": "C_PUBLIC",
+    "ts": "1770000000.000001",
+    "user": "U0OTHER",
+    "text": "<@U0SELF> 센서 사양을 확인해주세요?",
+    "permalink": "https://example.slack.com/archives/C_PUBLIC/p1770000000000001",
+    "files": [
+      {
+        "id": "F1",
+        "name": "sensor.pdf",
+        "mimetype": "application/pdf",
+        "size": 2048,
+        "permalink": "https://example.slack.com/files/F1"
+      }
+    ]
+  },
+  {
+    "channel": "C_PUBLIC",
+    "ts": "1770000300.000002",
+    "thread_ts": "1770000000.000001",
+    "user": "U0SELF",
+    "text": "<@U0OTHER> 오늘 확인하겠습니다.",
+    "permalink": "https://example.slack.com/archives/C_PUBLIC/p1770000300000002"
+  }
+]
