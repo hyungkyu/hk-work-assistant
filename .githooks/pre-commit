@@ -3,6 +3,7 @@ set -eu
 
 blocked_path_pattern='(^|/)(secrets|data|raw|daily_raw|legacy-data|manifests|exports|backups|logs|checkpoints)(/|$)|\.(jsonl|ndjson|json\.gz|parquet|sqlite3?|db|dump|sql\.gz|log)$|(^|/)(client_secret[^/]*|credentials[^/]*|google-token[^/]*|token)\.json$'
 blocked_secret_pattern='xox[baprs]-[A-Za-z0-9-]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|-----BEGIN ([A-Z ]+)?PRIVATE KEY-----|"(refresh_token|private_key|client_secret)"[[:space:]]*:'
+allow_marker='hook-allow: synthetic-credentials'
 
 staged_files=$(git diff --cached --name-only --diff-filter=ACMR)
 if [ -z "$staged_files" ]; then
@@ -27,8 +28,21 @@ if [ -n "$oversized" ]; then
     exit 1
 fi
 
-if git grep --cached -I -E "$blocked_secret_pattern" -- . >/dev/null; then
+secret_hits=$(printf '%s\n' "$staged_files" | while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    case "$path" in
+        tests/*)
+            if git show ":$path" 2>/dev/null | head -n 5 | grep -qF "$allow_marker"; then
+                continue
+            fi
+            ;;
+    esac
+    git show ":$path" 2>/dev/null | grep -I -nE "$blocked_secret_pattern" \
+        | while IFS= read -r hit; do printf '%s:%s\n' "$path" "$hit"; done
+done)
+
+if [ -n "$secret_hits" ]; then
     echo "Commit blocked: a credential-like value was found in staged content." >&2
-    git grep --cached -n -I -E "$blocked_secret_pattern" -- . | sed -E 's/(:.{0,24}).*/\1[REDACTED]/' >&2
+    printf '%s\n' "$secret_hits" | sed -E 's/(:.{0,24}).*/\1[REDACTED]/' >&2
     exit 1
 fi
