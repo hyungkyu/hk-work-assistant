@@ -516,6 +516,10 @@ class SlackCollector:
             "search_matches_context_filtered": search_filtered,
             "search_matches_before_window": search_before_window,
             "watched_threads_after_run": sum(len(value) for value in thread_watch.values()),
+            # Beside rate_limit_hits, so a run that limped is distinguishable
+            # from one that flew: a rising count is the signal that the next
+            # long backfill needs a look before it is trusted.
+            "transport_retries": getattr(self.client, "transport_retries", 0),
             "api_call_counts": dict(getattr(self.client, "call_counts", {}) or {}),
         }
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import json
 import time
 import urllib.error
@@ -7,6 +8,18 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Mapping, Protocol
+
+# A response that stops mid-body, a reset connection, a read that times out:
+# the request never reached a verdict, so repeating it asks the same question
+# rather than a second one. `urllib.error.HTTPError` is deliberately absent -
+# it is a verdict, and `UrllibTransport` already turns it into a response.
+TRANSIENT_TRANSPORT_ERRORS = (
+    http.client.IncompleteRead,
+    http.client.RemoteDisconnected,
+    ConnectionError,
+    TimeoutError,
+    urllib.error.URLError,
+)
 
 
 class SlackApiError(RuntimeError):
@@ -54,6 +67,12 @@ class SlackClient:
         transport: Transport | None = None,
         sleeper: Callable[[float], None] = time.sleep,
         max_attempts: int = 6,
+        # Four attempts spends at most 7s of backoff on one call. A Slack blip
+        # is over well inside that; a fifth consecutive failure on the same
+        # request is not a blip, and pretending otherwise turns a broken run
+        # into a slow one. Kept separate from `max_attempts` so a transport
+        # stumble never eats the budget a rate limit needs.
+        max_transport_attempts: int = 4,
     ) -> None:
         if not token.startswith("xoxp-"):
             raise ValueError("Slack collector requires a user OAuth token beginning with xoxp-")
@@ -61,9 +80,29 @@ class SlackClient:
         self._transport = transport or UrllibTransport()
         self._sleeper = sleeper
         self._max_attempts = max_attempts
+        self._max_transport_attempts = max_transport_attempts
         self._last_response_headers: dict[str, str] = {}
         self.rate_limit_hits = 0
+        self.transport_retries = 0
         self.call_counts: dict[str, int] = {}
+
+    def _get(self, url: str, headers: Mapping[str, str], params: Mapping[str, Any]) -> HttpResponse:
+        """One GET, retried while the transport fails to deliver a verdict.
+
+        A long backfill makes thousands of these calls, so a single dropped
+        response used to end the whole run and throw away everything already
+        fetched. Retrying is safe here because a GET that never completed
+        changes nothing at Slack.
+        """
+        for attempt in range(1, self._max_transport_attempts + 1):
+            try:
+                return self._transport.get(url, headers, params)
+            except TRANSIENT_TRANSPORT_ERRORS:
+                if attempt == self._max_transport_attempts:
+                    raise
+                self.transport_retries += 1
+                self._sleeper(float(2 ** (attempt - 1)))
+        raise AssertionError("unreachable")
 
     @property
     def last_response_headers(self) -> dict[str, str]:
@@ -74,7 +113,7 @@ class SlackClient:
         headers = {"Authorization": f"Bearer {self._token}", "User-Agent": "rlwrld-worklog/0.1"}
         self.call_counts[method] = self.call_counts.get(method, 0) + 1
         for attempt in range(1, self._max_attempts + 1):
-            response = self._transport.get(url, headers, params)
+            response = self._get(url, headers, params)
             if response.status == 429:
                 self.rate_limit_hits += 1
                 if attempt == self._max_attempts:

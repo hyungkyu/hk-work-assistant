@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import http.client
 import json
 import sys
 import unittest
@@ -25,6 +26,21 @@ class QueueTransport:
         return self.responses.pop(0)
 
 
+class FlakyTransport:
+    """Queue of outcomes: an exception is raised, a response is returned."""
+
+    def __init__(self, outcomes: list[Any]) -> None:
+        self.outcomes = outcomes
+        self.attempts = 0
+
+    def get(self, url: str, headers: Mapping[str, str], params: Mapping[str, Any]) -> HttpResponse:
+        self.attempts += 1
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
 def response(body: dict[str, Any], *, status: int = 200, headers: Mapping[str, str] | None = None) -> HttpResponse:
     return HttpResponse(status, headers or {}, body)
 
@@ -46,6 +62,51 @@ class SlackClientTests(unittest.TestCase):
         self.assertEqual([page["items"] for page in pages], [[1], [2]])
         self.assertEqual(sleeps, [2.0])
         self.assertEqual(transport.calls[-1][2]["cursor"], "next")
+
+    def test_a_dropped_response_is_asked_again_instead_of_ending_the_run(self) -> None:
+        """A GET that never delivered a verdict can be repeated safely.
+
+        Two August backfills died this way, thousands of calls in, throwing
+        away everything already fetched.
+        """
+        transport = FlakyTransport(
+            [
+                http.client.IncompleteRead(b"half", 40),
+                ConnectionResetError("peer went away"),
+                response({"ok": True, "items": [1], "response_metadata": {"next_cursor": ""}}),
+            ]
+        )
+        sleeps: list[float] = []
+        client = SlackClient("xoxp-secret", transport=transport, sleeper=sleeps.append)
+
+        body = client.call("example.list")
+
+        self.assertEqual(body["items"], [1])
+        self.assertEqual(sleeps, [1.0, 2.0], "backoff doubles between attempts")
+        self.assertEqual(client.transport_retries, 2)
+        self.assertEqual(client.call_counts["example.list"], 1, "one logical call, not three")
+
+    def test_a_transport_that_keeps_failing_raises_rather_than_returning_less(self) -> None:
+        """Exhaustion has to stay loud: a run that gave up is a failed run."""
+        transport = FlakyTransport([http.client.IncompleteRead(b"", 10)] * 4)
+        client = SlackClient("xoxp-secret", transport=transport, sleeper=lambda _: None)
+
+        with self.assertRaises(http.client.IncompleteRead):
+            client.call("example.list")
+        self.assertEqual(client.transport_retries, 3, "the final attempt is not a retry")
+
+    def test_an_answered_request_is_not_retried(self) -> None:
+        """Only a missing verdict is worth repeating.
+
+        Retrying a request Slack actually answered would multiply real errors
+        into silence.
+        """
+        transport = FlakyTransport([response({"ok": False, "error": "missing_scope"})])
+        client = SlackClient("xoxp-secret", transport=transport, sleeper=lambda _: None)
+
+        with self.assertRaises(SlackApiError):
+            client.call("users.list")
+        self.assertEqual(client.transport_retries, 0)
 
     def test_slack_error_does_not_expose_token(self) -> None:
         client = SlackClient(
