@@ -131,15 +131,30 @@ _LEGACY_INVENTORY_CACHE = _TtlCache(ttl_seconds=300, max_entries=8)
 _LEGACY_META_CACHE = _TtlCache(ttl_seconds=300, max_entries=2_048)
 
 
-def clear_caches() -> None:
-    for cache in (
-        _MANIFEST_CACHE,
-        _RAW_SCAN_CACHE,
-        _LEDGER_CACHE,
-        _LEGACY_INVENTORY_CACHE,
-        _LEGACY_META_CACHE,
-    ):
-        cache.clear()
+_ALL_CACHES = {
+    "manifest": _MANIFEST_CACHE,
+    "raw_scan": _RAW_SCAN_CACHE,
+    "ledger": _LEDGER_CACHE,
+    "legacy_inventory": _LEGACY_INVENTORY_CACHE,
+    "legacy_meta": _LEGACY_META_CACHE,
+}
+
+# Which caches a screen depends on, so a refresh can drop just those. The TTLs
+# themselves are deliberately left alone: they are set by what a read costs,
+# and the honest answer to "is this stale?" is to say so, not to poll harder.
+CACHE_GROUPS = {
+    "overview": ("manifest", "raw_scan", "ledger"),
+    "runs": ("manifest", "raw_scan", "ledger"),
+    "coverage": ("manifest", "raw_scan", "legacy_inventory", "legacy_meta"),
+}
+
+
+def clear_caches(names: Iterable[str] | None = None) -> list[str]:
+    """Drop every cache, or just the named ones. Returns what was dropped."""
+    wanted = list(_ALL_CACHES) if names is None else [n for n in names if n in _ALL_CACHES]
+    for name in wanted:
+        _ALL_CACHES[name].clear()
+    return wanted
 
 
 # ------------------------------------------------------------------- paths
@@ -1116,8 +1131,47 @@ _INCOMPLETE_STATES = {"degraded", "failed"}
 _ACTIVE_STATES = {"running", "stale"}
 
 
-def _run_covers(run: Mapping[str, Any], start: datetime, end: datetime) -> bool:
-    """Does this run's observation window intersect [start, end)?"""
+# Time-coverage of a date, kept apart from observation quality. A run that
+# merely touched a date says nothing about whether the whole date was seen.
+TIME_COVERAGE_COMPLETE = "complete"
+TIME_COVERAGE_PARTIAL = "partial"
+TIME_COVERAGE_IN_PROGRESS = "in_progress"
+
+
+def _run_window_end(run: Mapping[str, Any]) -> datetime | None:
+    """How far into time this run actually observed."""
+    window = run.get("window") or {}
+    return (
+        parse_instant(window.get("end"))
+        or parse_instant(run.get("last_activity_at"))
+        or parse_instant(run.get("started_at"))
+    )
+
+
+def _time_coverage(
+    observed_through: datetime | None, day_end: datetime, now: datetime
+) -> str:
+    """Whether the whole of a KST date has been observed yet.
+
+    A date still in progress can never be complete, however clean the runs
+    that touched it are: the hours that have not happened cannot have been
+    collected. This is the same rule as the legacy and skips fixes -- a badge
+    may not claim more than the evidence supports.
+    """
+    if now < day_end:
+        return TIME_COVERAGE_IN_PROGRESS
+    if observed_through is not None and observed_through >= day_end:
+        return TIME_COVERAGE_COMPLETE
+    return TIME_COVERAGE_PARTIAL
+
+
+def _run_intersects_day(run: Mapping[str, Any], start: datetime, end: datetime) -> bool:
+    """Does this run's observation window intersect [start, end)?
+
+    Intersection is the right rule for *attribution* -- it means this run has
+    something to say about this date. It is not a completeness claim; that is
+    `_time_coverage`'s job.
+    """
     window = run.get("window") or {}
     window_start = parse_instant(window.get("start")) or parse_instant(run.get("started_at"))
     window_end = (
@@ -1258,6 +1312,53 @@ def _cell_from_runs(runs: list[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _apply_time_coverage(
+    cell: dict[str, Any],
+    runs: list[Mapping[str, Any]],
+    *,
+    day_end: datetime,
+    now: datetime,
+) -> None:
+    """Add the time axis to a run-backed cell and gate its completeness.
+
+    Observation quality (`coverage`) and time coverage are separate questions.
+    A run can be flawless and still have seen only half a day. `completeness`
+    is the place the two meet, so it may never say `complete` for a date whose
+    remaining hours nobody has observed -- including every date still running.
+    """
+    ends = [end for end in (_run_window_end(run) for run in runs) if end is not None]
+    observed_through = max(ends) if ends else None
+    time_coverage = _time_coverage(observed_through, day_end, now)
+    cell["observed_through"] = observed_through.isoformat() if observed_through else None
+    cell["time_coverage"] = time_coverage
+
+    if cell["coverage"] not in {COVERAGE_COLLECTED, COVERAGE_COLLECTED_WITH_SKIPS}:
+        return
+    if time_coverage == TIME_COVERAGE_COMPLETE:
+        return
+    if time_coverage == TIME_COVERAGE_IN_PROGRESS:
+        cell["completeness"] = "in_progress"
+        cell["notes"].append(
+            "이 날짜는 아직 끝나지 않았습니다. 남은 시간대는 아직 발생하지 않아 수집될 수 없습니다."
+        )
+    else:
+        cell["completeness"] = "incomplete"
+        cell["notes"].append(
+            "이 날짜의 뒷부분을 관측한 실행이 없습니다. "
+            + (
+                f"마지막 관측 {observed_through.astimezone(KST):%H:%M} KST 까지입니다."
+                if observed_through
+                else "관측 종료 시각을 알 수 없습니다."
+            )
+        )
+    # search.messages is an index and lags the live channel, so a date is only
+    # settled once a run has read past its end.
+    cell["notes"].append(
+        "날짜 완결은 그 날짜가 끝난 뒤 최소 한 번의 실행을 요구합니다 "
+        "(검색 인덱스 지연을 26시간 겹침 창이 덮습니다)."
+    )
+
+
 def _legacy_evidence(
     paths: CollectionPaths, *, day: str, entries: list[str], limit: int = 12
 ) -> list[str]:
@@ -1310,6 +1411,10 @@ def _legacy_cell(
         "evidence": _legacy_evidence(paths, day=day, entries=relative_dirs),
         "states": [],
         "evidence_class": EVIDENCE_DIRECTORY_ONLY,
+        # V0 dumps have no observation window, so there is nothing to measure
+        # a date's time coverage against. Left null rather than invented.
+        "observed_through": None,
+        "time_coverage": None,
         "legacy_meta": metas,
         "notes": notes,
     }
@@ -1366,11 +1471,13 @@ def coverage(
         cells: dict[str, Any] = {}
         for source in wanted:
             matching = [
-                run for run in runs_by_source[source] if _run_covers(run, day_start, day_end)
+                run for run in runs_by_source[source]
+                if _run_intersects_day(run, day_start, day_end)
             ]
             legacy_dirs = (inventory["dates"].get(iso) or {}).get(source) or []
             if matching:
                 cell = _cell_from_runs(matching)
+                _apply_time_coverage(cell, matching, day_end=day_end, now=moment)
                 if legacy_dirs:
                     cell["rule_versions"].append(
                         {"version": "V0", "attribution": "legacy", "count": len(legacy_dirs)}
@@ -1399,6 +1506,8 @@ def coverage(
                     "evidence": [],
                     "states": [],
                     "evidence_class": None,
+                    "observed_through": None,
+                    "time_coverage": None,
                     "notes": (
                         []
                         if inventory["complete"]
@@ -1426,12 +1535,14 @@ def coverage(
         day += timedelta(days=1)
 
     payload: dict[str, Any] = {
+        "generated_at": moment.isoformat(),
         "start": start.isoformat(),
         "end": end.isoformat(),
         "timezone": "Asia/Seoul (+09:00)",
         "group": "weekday" if group == "weekday" else "date",
         "sources": wanted,
         "environment": environment,
+        "environment_scope": environment or "all",
         "range_truncated": truncated_range,
         "legacy_inventory": {
             "complete": inventory["complete"],
@@ -1636,6 +1747,7 @@ def overview(
         "generated_at": moment.isoformat(),
         "timezone": "Asia/Seoul (+09:00)",
         "environment": environment,
+        "environment_scope": environment or "all",
         "environments": {key: sorted(value) for key, value in sorted(index.environments.items())},
         "cards": cards,
         "recent_runs": [run_view(paths, run) for run in ordered[: max(1, limit)]],

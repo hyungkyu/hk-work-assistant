@@ -59,7 +59,14 @@ def test_the_landing_screen_after_login_is_the_work_board(html: str, script: str
     assert '<button data-page="work" class="active">업무 현황</button>' in html
     assert html.count('class="page active"') == 1
     assert 'class="page active" id="page-work"' in html
-    assert script.count("await loadSettings();\n        await loadWork();\n        startWorkPolling();") == 2
+    # Both login paths now hand control to the hash router, which opens the
+    # work board when there is no hash and loads whatever screen a shared
+    # link names. The landing screen is the router's default, not a hardcoded
+    # call, so the assertion moved with it.
+    # Assert the shape, not the exact spacing: a comment between the two calls
+    # is not a behaviour change.
+    assert len(re.findall(r"await loadSettings\(\);(?:\s|//[^\n]*\n)*applyHash\(\);", script)) == 2
+    assert "const DEFAULT_PAGE = 'work';" in script
 
 
 def test_the_roadmap_is_a_disabled_placeholder_with_no_behaviour(
@@ -153,10 +160,60 @@ def test_the_schedule_screen_shows_state_it_read_and_never_invents_it(
     assert 'id="daily-hour"' in html and 'id="timezone"' in html
 
 
-def test_leaving_the_collection_screen_stops_its_polling(script: str) -> None:
-    assert "if (button.dataset.page === 'collection') { loadCollection(); startCollectionPolling(); } else { stopCollectionPolling(); }" in script
-    assert "if (button.dataset.page === 'work') { loadWork(); startWorkPolling(); } else { stopWorkPolling(); }" in script
-    assert script.count("stopCollectionPolling();") >= 3
+def test_leaving_a_screen_stops_its_polling(script: str) -> None:
+    """Navigation goes through one router, which stops every poller first.
+
+    Previously each nav branch had to remember to stop the other screen's
+    timer. Now `applyHash` stops both unconditionally and starts only the one
+    the target screen needs, so a screen can no longer be left polling behind
+    another one's back.
+    """
+    router = script[script.index("function applyHash()") : script.index("window.addEventListener('hashchange'")]
+    assert router.index("stopWorkPolling();") < router.index("if (page === 'work') { loadWork();")
+    assert (
+        router.index("stopCollectionPolling();")
+        < router.index("if (page === 'collection') { loadCollection(")
+    )
+    assert "startWorkPolling();" in router and "startCollectionPolling();" in router
+
+
+def test_navigation_is_routed_through_the_hash(html: str, script: str) -> None:
+    """One path for a click, a reload, the back button and a shared link."""
+    assert "window.addEventListener('hashchange', applyHash);" in script
+    assert "location.hash = target;" in script
+    # Routable screens are derived from the nav, so a screen added later
+    # cannot silently become unlinkable; disabled entries stay out.
+    assert "document.querySelectorAll('nav button[data-page]')" in script
+    assert "filter((button) => !button.disabled)" in script
+    assert "history.replaceState" in script and "history.pushState" in script
+
+
+def test_an_unsaved_editing_dialog_is_never_restored_by_a_link(script: str) -> None:
+    router = script[script.index("function applyHash()") : script.index("window.addEventListener('hashchange'")]
+    assert "closeWorkEditor();" in router
+    assert "closeTimeline();" in router
+
+
+def test_the_screen_shows_when_the_server_built_the_answer(html: str, script: str) -> None:
+    """Not the browser's clock: that would claim a freshness the data lacks."""
+    assert 'id="collection-freshness"' in html
+    assert "collectionState.overviewAt = overview.generated_at;" in script
+    assert "collectionState.coverageAt = payload.generated_at;" in script
+    assert 'id="collection-hard-refresh"' in html
+    assert "/api/v1/admin/collection/refresh?screen=all" in script
+
+
+def test_the_coverage_table_shows_newest_dates_first(script: str) -> None:
+    assert "payload.rows.slice().reverse()" in script
+
+
+def test_a_date_still_in_progress_cannot_be_badged_as_collected(script: str) -> None:
+    """The time axis gates the badge, mirroring the server-side verdict."""
+    badge = script[script.index("function coverageBadge(cell)") : script.index("function renderCoverage")]
+    assert "time === 'in_progress'" in badge
+    assert "진행 중 (${at}까지)" in badge
+    assert "부분수집 (${at}까지)" in badge
+    assert "TIME_COVERAGE_LABELS" in script
 
 
 def test_the_page_stays_usable_on_a_narrow_screen(html: str) -> None:

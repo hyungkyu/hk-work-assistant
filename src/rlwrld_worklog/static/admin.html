@@ -253,11 +253,13 @@
         <p class="lead">외부 원본 수집이 어디까지 왔는지, 어떤 규칙으로 모았는지 봅니다. 원본 내용은 표시하지 않고 개수·시각·경로만 보여줍니다.</p>
         <div class="collection-toolbar">
           <div class="work-filters">
-            <select id="collection-environment"><option value="">환경 전체</option></select>
-            <button class="button" id="collection-refresh">새로고침</button>
+            <select id="collection-environment"><option value="">운영 (production)</option><option value="all">전체 환경 (시험 포함)</option></select>
+            <button class="button" id="collection-refresh">다시 읽기</button>
+            <button class="button" id="collection-hard-refresh" title="서버 캐시를 비우고 디스크에서 다시 읽습니다">캐시 비우고 새로고침</button>
           </div>
           <span class="badge" id="collection-rule-badge">규칙 -</span>
         </div>
+        <p class="work-state" id="collection-freshness"></p>
         <p class="work-state" id="collection-state">불러오는 중…</p>
         <div class="grid three" id="collection-cards"></div>
 
@@ -523,8 +525,9 @@
         state.csrf = session.csrf_token;
         $('auth-overlay').classList.add('hidden');
         await loadSettings();
-        await loadWork();
-        startWorkPolling();
+        // The hash router decides which screen to open and which loader to
+        // run, so a shared link, a reload and a first visit all agree.
+        applyHash();
       } catch (error) { showAuth({setup_required:false,google_login_available:false,emergency_login_available:false}); $('auth-notice').textContent = error.message; }
     }
 
@@ -542,8 +545,9 @@
         $('auth-overlay').classList.add('hidden');
         $('admin-password').value = ''; $('admin-password-confirm').value = ''; $('auth-notice').textContent = '';
         await loadSettings();
-        await loadWork();
-        startWorkPolling();
+        // The hash router decides which screen to open and which loader to
+        // run, so a shared link, a reload and a first visit all agree.
+        applyHash();
       } catch (error) { $('auth-notice').textContent = error.message; }
     });
 
@@ -1123,6 +1127,36 @@
       unverified: '레거시만(검증 불가)', running: '수집 중', failed: '실패',
       not_collected: '미수집', unknown: '불명',
     };
+    const TIME_COVERAGE_LABELS = {
+      complete: '하루 전체 관측', partial: '뒷부분 미관측', in_progress: '진행 중인 날짜',
+    };
+
+    function coverageKst(iso) {
+      if (!iso) return null;
+      const moment = new Date(iso);
+      if (Number.isNaN(moment.getTime())) return null;
+      return new Intl.DateTimeFormat('ko-KR', {
+        hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Seoul',
+      }).format(moment);
+    }
+
+    // Observation quality and time coverage are separate axes. A date whose
+    // remaining hours have not happened yet cannot be called collected, however
+    // clean the runs that touched it are.
+    function coverageBadge(cell) {
+      const quality = cell.coverage;
+      const time = cell.time_coverage;
+      const settled = quality === 'collected' || quality === 'collected_with_skips';
+      if (settled && time === 'in_progress') {
+        const at = coverageKst(cell.observed_through);
+        return { key: 'running', text: at ? `진행 중 (${at}까지)` : '진행 중' };
+      }
+      if (settled && time === 'partial') {
+        const at = coverageKst(cell.observed_through);
+        return { key: 'partial', text: at ? `부분수집 (${at}까지)` : '부분수집' };
+      }
+      return { key: quality, text: COVERAGE_LABELS[quality] || quality };
+    }
     const EVIDENCE_LABELS = {
       manifest: '근거: 실행 매니페스트',
       directory_only: '근거: 레거시 디렉터리뿐 (완전성을 주장할 수 없음)',
@@ -1140,7 +1174,7 @@
     };
     const COMPLETENESS_LABELS = { complete: '완전', incomplete: '불완전', unknown: '불명' };
     const COLLECTION_POLL_MS = 20000;
-    const collectionState = { timer: null, rulesLoaded: false, busy: false, environments: [] };
+    const collectionState = { timer: null, rulesLoaded: false, busy: false, environments: [], overviewAt: null, coverageAt: null, scope: 'production' };
 
     function collectionBytes(value) {
       if (value === null || value === undefined) return '불명';
@@ -1301,7 +1335,15 @@
     function coverageCellNode(cell) {
       const wrap = document.createElement('div');
       wrap.className = 'collection-cell';
-      wrap.appendChild(collectionPill(COVERAGE_LABELS[cell.coverage] || cell.coverage, cell.coverage));
+      const badge = coverageBadge(cell);
+      wrap.appendChild(collectionPill(badge.text, badge.key));
+      if (cell.time_coverage) {
+        const node = collectionNote(`시간 커버리지: ${TIME_COVERAGE_LABELS[cell.time_coverage] || cell.time_coverage}`);
+        if (node) {
+          node.title = `observed_through: ${cell.observed_through || '없음'}`;
+          wrap.appendChild(node);
+        }
+      }
       const versions = (cell.rule_versions || [])
         .map((entry) => `${entry.version || '불명'}·${RULE_ATTRIBUTION_LABELS[entry.attribution] || entry.attribution}${entry.count ? ` ×${entry.count}` : ''}`)
         .join(', ');
@@ -1357,7 +1399,9 @@
           body.appendChild(tr);
         });
       } else {
-        payload.rows.forEach((row) => {
+        // Newest first: the operator's question is almost always about today.
+        // The API stays chronological so its contract is unchanged.
+        payload.rows.slice().reverse().forEach((row) => {
           const tr = document.createElement('tr');
           const first = document.createElement('td');
           first.textContent = `${row.date} (${row.weekday})`;
@@ -1469,15 +1513,20 @@
       const select = $('collection-environment');
       const current = select.value;
       select.textContent = '';
+      // Blank means production, not everything: a smoke run must never fill in
+      // a gap in the production picture someone is about to make a call on.
+      const production = document.createElement('option');
+      production.value = ''; production.textContent = '운영 (production)';
+      select.appendChild(production);
       const all = document.createElement('option');
-      all.value = ''; all.textContent = '환경 전체';
+      all.value = 'all'; all.textContent = '전체 환경 (시험 포함)';
       select.appendChild(all);
-      ordered.forEach((name) => {
+      ordered.filter((name) => name !== 'production').forEach((name) => {
         const option = document.createElement('option');
         option.value = name; option.textContent = name;
         select.appendChild(option);
       });
-      select.value = ordered.includes(current) ? current : '';
+      select.value = current === 'all' || ordered.includes(current) ? current : '';
     }
 
     function coverageQuery() {
@@ -1498,6 +1547,8 @@
         if (!$('coverage-start').value) $('coverage-start').value = payload.start;
         if (!$('coverage-end').value) $('coverage-end').value = payload.end;
         renderCoverage(payload);
+        collectionState.coverageAt = payload.generated_at;
+        renderFreshness(collectionState.overviewAt, collectionState.coverageAt);
       } catch (error) {
         $('coverage-note').textContent = `커버리지를 불러오지 못했습니다: ${error.message}`;
       }
@@ -1514,6 +1565,9 @@
         renderCollectionCards(overview);
         renderCollectionRuns(overview);
         $('collection-rule-badge').textContent = `원본 루트 ${overview.roots.archive_root}`;
+        collectionState.overviewAt = overview.generated_at;
+        collectionState.scope = overview.environment_scope || 'production';
+        renderFreshness(collectionState.overviewAt, collectionState.coverageAt);
         setCollectionState(`갱신 ${new Date(overview.generated_at).toLocaleTimeString()} · 진행 중 판정 기준 ${Math.round(overview.stale_after_seconds / 60)}분 · 진행 스냅숏 ${overview.roots.progress_available ? '사용 가능' : '미생성'}`);
         if (!collectionState.rulesLoaded) {
           renderCollectionRules(await api('/api/v1/admin/collection/rules'));
@@ -1536,10 +1590,129 @@
       if (collectionState.timer) { clearInterval(collectionState.timer); collectionState.timer = null; }
     }
 
+    // The server says when it built the payload. Showing the browser's clock
+    // here would claim a freshness the data may not have.
+    function renderFreshness(overviewAt, coverageAt) {
+      const parts = [];
+      if (overviewAt) parts.push(`현황 ${collectionWhen(overviewAt)}`);
+      if (coverageAt) parts.push(`커버리지 ${collectionWhen(coverageAt)}`);
+      const scope = collectionState.scope === 'all'
+        ? '전체 환경 (시험 수집 포함)'
+        : `환경 ${collectionState.scope || 'production'}`;
+      $('collection-freshness').textContent = parts.length
+        ? `${scope} · 서버 응답 생성 시각 — ${parts.join(' · ')} (매니페스트·원장 캐시 1시간, 실행 중 디렉터리 15초)`
+        : '';
+    }
+
+    async function hardRefreshCollection() {
+      const button = $('collection-hard-refresh');
+      button.disabled = true;
+      try {
+        await api('/api/v1/admin/collection/refresh?screen=all', { method: 'POST', body: '{}' });
+        await loadCollection({ coverage: true });
+        toast('서버 캐시를 비우고 다시 읽었습니다');
+      } catch (error) {
+        toast(`캐시 비우기에 실패했습니다: ${error.message}`, true);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
     $('collection-refresh').addEventListener('click', () => loadCollection({ coverage: true }));
-    $('coverage-load').addEventListener('click', () => loadCoverage());
-    $('coverage-group').addEventListener('change', () => loadCoverage());
-    $('collection-environment').addEventListener('change', () => loadCollection({ coverage: true }));
+    $('collection-hard-refresh').addEventListener('click', hardRefreshCollection);
+    $('coverage-load').addEventListener('click', () => { loadCoverage(); writeHash(); });
+    $('coverage-group').addEventListener('change', () => { loadCoverage(); writeHash(); });
+    $('collection-environment').addEventListener('change', () => { loadCollection({ coverage: true }); writeHash(); });
+
+    // ------------------------------------------------------- URL 해시 라우팅
+    // Hash-only, so no server route changes and no existing bookmark breaks.
+    // A page with no hash behaves exactly as it did before.
+    // Derived from the nav itself so a screen added later cannot be silently
+    // unroutable. Disabled entries stay out: linking to one would land on a
+    // screen the operator cannot reach by clicking.
+    const HASH_PAGES = Array.from(document.querySelectorAll('nav button[data-page]'))
+      .filter((button) => !button.disabled)
+      .map((button) => button.dataset.page);
+    const DEFAULT_PAGE = 'work';
+    let applyingHash = false;
+
+    function currentPage() {
+      const active = document.querySelector('nav button.active');
+      return active ? active.dataset.page : DEFAULT_PAGE;
+    }
+
+    function hashState() {
+      const page = currentPage();
+      const parameters = new URLSearchParams();
+      if (page === 'collection') {
+        const environment = $('collection-environment').value;
+        if (environment) parameters.set('environment', environment);
+        if ($('coverage-group').value !== 'date') parameters.set('group', $('coverage-group').value);
+        if ($('coverage-start').value) parameters.set('start', $('coverage-start').value);
+        if ($('coverage-end').value) parameters.set('end', $('coverage-end').value);
+      } else if (page === 'work') {
+        if (workState.assignee) parameters.set('assigned_to', workState.assignee);
+      }
+      const query = parameters.toString();
+      return `#/${page}${query ? `?${query}` : ''}`;
+    }
+
+    function writeHash({ replace = false } = {}) {
+      if (applyingHash) return;
+      const next = hashState();
+      if (next === location.hash) return;
+      const url = location.pathname + location.search + next;
+      if (replace) history.replaceState(null, '', url); else history.pushState(null, '', url);
+    }
+
+    function selectPage(page) {
+      document.querySelectorAll('nav button').forEach((node) => node.classList.remove('active'));
+      document.querySelectorAll('.page').forEach((node) => node.classList.remove('active'));
+      const button = document.querySelector(`nav button[data-page="${page}"]`);
+      if (button) button.classList.add('active');
+      const section = $(`page-${page}`);
+      if (section) section.classList.add('active');
+    }
+
+    function applyHash() {
+      const raw = location.hash.replace(/^#\/?/, '');
+      const [rawPage, rawQuery] = raw.split('?');
+      // An unknown or absent hash falls back to the default screen, and the
+      // address bar is corrected rather than left saying something untrue.
+      const page = HASH_PAGES.includes(rawPage) ? rawPage : DEFAULT_PAGE;
+      const parameters = new URLSearchParams(rawQuery || '');
+      applyingHash = true;
+      try {
+        selectPage(page);
+        if (page === 'collection') {
+          const environment = parameters.get('environment');
+          if (environment !== null) $('collection-environment').value = environment;
+          const group = parameters.get('group');
+          if (group === 'weekday' || group === 'date') $('coverage-group').value = group;
+          if (parameters.get('start')) $('coverage-start').value = parameters.get('start');
+          if (parameters.get('end')) $('coverage-end').value = parameters.get('end');
+        } else if (page === 'work') {
+          const assignee = parameters.get('assigned_to');
+          if (assignee !== null) { workState.assignee = assignee; $('work-filter-assignee').value = assignee; }
+        }
+      } finally {
+        applyingHash = false;
+      }
+      // Editing dialogs are deliberately never restored: reviving text someone
+      // abandoned would look like their unsaved input had come back.
+      closeWorkEditor();
+      closeTimeline();
+      stopWorkPolling();
+      stopCollectionPolling();
+      if (page === 'audit') loadAudit();
+      if (page === 'work') { loadWork(); startWorkPolling(); }
+      if (page === 'collection') { loadCollection({ coverage: true }); startCollectionPolling(); }
+      if (page === 'schedules' && typeof loadSchedules === 'function') loadSchedules();
+      if (page === 'server' && typeof loadServerStatus === 'function') loadServerStatus();
+      if (!HASH_PAGES.includes(rawPage)) writeHash({ replace: true });
+    }
+
+    window.addEventListener('hashchange', applyHash);
 
 
     // -------------------------------------------------- 스케줄 · 서버 상태
@@ -1662,14 +1835,10 @@
     $('nav').addEventListener('click', (event) => {
       const button = event.target.closest('button[data-page]');
       if (!button || button.disabled) return;
-      document.querySelectorAll('nav button').forEach((node) => node.classList.remove('active'));
-      document.querySelectorAll('.page').forEach((node) => node.classList.remove('active'));
-      button.classList.add('active'); $(`page-${button.dataset.page}`).classList.add('active');
-      if (button.dataset.page === 'audit') loadAudit();
-      if (button.dataset.page === 'work') { loadWork(); startWorkPolling(); } else { stopWorkPolling(); }
-      if (button.dataset.page === 'collection') { loadCollection(); startCollectionPolling(); } else { stopCollectionPolling(); }
-      if (button.dataset.page === 'schedules') loadSchedules();
-      if (button.dataset.page === 'server') loadServerStatus();
+      // The hash is the single source of truth for which screen is shown, so a
+      // click, a reload, the back button and a shared link all take one path.
+      const target = `#/${button.dataset.page}`;
+      if (location.hash === target) applyHash(); else location.hash = target;
     });
 
     $('logout').addEventListener('click', async () => {

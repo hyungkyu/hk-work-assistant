@@ -20,7 +20,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from . import collection_status
-from .admin_web import require_super_admin_session
+from .admin_web import _require_csrf, require_super_admin_session
 from .collection_progress import is_safe_name
 from .collection_rules import COLLECTOR_SOURCES, SOURCES, registry_as_dict
 
@@ -28,7 +28,7 @@ router = APIRouter(prefix="/api/v1/admin/collection")
 
 _SOURCE_PATTERN = "^(slack|notion|google-calendar)$"
 _LEDGER_SOURCE_PATTERN = "^(slack|notion|google_calendar)$"
-_ENVIRONMENT_PATTERN = "^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$"
+_ENVIRONMENT_PATTERN = "^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$"  # `all` is a valid segment and is the widening sentinel
 _DATE_PATTERN = "^\\d{4}-\\d{2}-\\d{2}$"
 
 DEFAULT_COVERAGE_DAYS = 30
@@ -38,9 +38,26 @@ def _paths() -> collection_status.CollectionPaths:
     return collection_status.paths_from_environment()
 
 
+# What an unqualified request means. A test capture must never fill in a gap
+# in the production picture: someone reads this board to decide whether real
+# data was collected, and a smoke run answering that question is a lie.
+DEFAULT_ENVIRONMENT = "production"
+
+# The one value that deliberately means "every environment", so the test view
+# stays reachable without making it the default.
+ALL_ENVIRONMENTS = "all"
+
+
 def _environment(value: str | None) -> str | None:
-    """A single safe path segment, or a 400. Never a path."""
+    """The environment to report on. Defaults to production, never to all.
+
+    `None` and an empty value both mean "unqualified", which resolves to
+    production. Only the explicit sentinel `all` widens the view, and it
+    returns `None` because that is what the reader treats as unfiltered.
+    """
     if value is None or value == "":
+        return DEFAULT_ENVIRONMENT
+    if value == ALL_ENVIRONMENTS:
         return None
     if not is_safe_name(value):
         raise HTTPException(status_code=400, detail="environment name is not allowed")
@@ -88,6 +105,24 @@ def collection_runs(
     return collection_status.list_runs(
         _paths(), source=source, environment=_environment(environment), limit=limit
     )
+
+
+@router.post("/refresh")
+def collection_refresh(
+    request: Request,
+    screen: Annotated[str, Query(pattern="^(overview|runs|coverage|all)$")] = "all",
+) -> dict[str, Any]:
+    """Drop the derived caches one screen depends on and report what was dropped.
+
+    Everything behind this endpoint is derived and rebuildable, so this only
+    forces the next read to go back to disk. It is a POST because it changes
+    server state (the caches), and it carries CSRF like every other mutation.
+    """
+    current = require_super_admin_session(request)
+    _require_csrf(request, current)
+    names = None if screen == "all" else collection_status.CACHE_GROUPS[screen]
+    dropped = collection_status.clear_caches(names)
+    return {"screen": screen, "caches_cleared": sorted(dropped)}
 
 
 @router.get("/coverage")

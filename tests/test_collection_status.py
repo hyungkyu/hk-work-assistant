@@ -910,7 +910,10 @@ def _one_day(paths: status.CollectionPaths, day: str = "2026-09-01") -> dict[str
 
 
 def test_a_run_that_only_succeeded_is_collected(paths: status.CollectionPaths) -> None:
-    write_manifest(paths, run_id="20260901T010000Z-c0f001", status="success")
+    # finished_at is past 2026-09-01 24:00 KST (15:00Z) so the time axis is
+    # complete and this test measures observation quality alone.
+    write_manifest(paths, run_id="20260901T010000Z-c0f001", status="success",
+                   finished_at="2026-09-01T16:00:00+00:00")
     cell = _one_day(paths)
     assert cell["coverage"] == "collected"
     assert cell["completeness"] == "complete"
@@ -925,6 +928,8 @@ def test_a_run_with_named_skips_is_collected_with_skips_not_partial(
         paths, run_id="20260901T010100Z-c0f002", status="success_with_skips",
         skips=[{"kind": "channel_not_found"}, {"kind": "channel_not_found"},
                {"kind": "is_archived"}],
+        # Past 24:00 KST, so the time axis is complete and only quality is under test.
+        finished_at="2026-09-01T16:00:00+00:00",
     )
     cell = _one_day(paths)
     assert cell["coverage"] == "collected_with_skips"
@@ -1063,3 +1068,124 @@ def test_the_skip_breakdown_survives_hostile_manifest_entries(
     cell = _one_day(paths)
     assert cell["coverage"] == "collected_with_skips"
     assert "5건" in " ".join(cell["notes"])
+
+
+# ------------------------------------- time coverage: a date is not a window
+
+def _cell(paths: status.CollectionPaths, day: str, *, now: datetime = NOW) -> dict[str, Any]:
+    grid = status.coverage(
+        paths, start=status.parse_iso_date(day), end=status.parse_iso_date(day),
+        sources=["slack"], now=now,
+    )
+    return grid["rows"][0]["cells"]["slack"]
+
+
+def test_today_can_never_be_complete_however_clean_the_run(
+    paths: status.CollectionPaths,
+) -> None:
+    """The hours that have not happened yet cannot have been collected."""
+    write_manifest(
+        paths, run_id="20260902T020000Z-t1m001", status="success",
+        started_at="2026-09-02T02:00:00+00:00", finished_at="2026-09-02T02:30:00+00:00",
+        requested_window={"since": "2026-09-01T00:00:00+00:00"},
+    )
+    cell = _cell(paths, "2026-09-02")
+    assert cell["time_coverage"] == "in_progress"
+    assert cell["completeness"] == "in_progress"
+    assert cell["completeness"] != "complete"
+    assert cell["observed_through"].startswith("2026-09-02T02:30")
+    assert any("아직 끝나지 않았" in note for note in cell["notes"])
+
+
+def test_a_finished_date_observed_past_its_end_is_complete(
+    paths: status.CollectionPaths,
+) -> None:
+    # 2026-09-01 24:00 KST == 2026-09-01T15:00Z; this run ends after it.
+    write_manifest(
+        paths, run_id="20260901T160000Z-t1m002", status="success",
+        started_at="2026-09-01T16:00:00+00:00", finished_at="2026-09-01T16:10:00+00:00",
+        requested_window={"since": "2026-08-31T00:00:00+00:00"},
+    )
+    cell = _cell(paths, "2026-09-01")
+    assert cell["time_coverage"] == "complete"
+    assert cell["coverage"] == "collected"
+    assert cell["completeness"] == "complete"
+
+
+def test_a_finished_date_whose_tail_nobody_watched_is_partial_and_says_when(
+    paths: status.CollectionPaths,
+) -> None:
+    # Ends 2026-09-01T13:00Z == 22:00 KST, before that date's 24:00 KST.
+    write_manifest(
+        paths, run_id="20260901T130000Z-t1m003", status="success",
+        started_at="2026-09-01T12:00:00+00:00", finished_at="2026-09-01T13:00:00+00:00",
+        requested_window={"since": "2026-08-31T00:00:00+00:00"},
+    )
+    cell = _cell(paths, "2026-09-01")
+    assert cell["time_coverage"] == "partial"
+    assert cell["completeness"] == "incomplete"
+    assert "22:00" in " ".join(cell["notes"])
+
+
+def test_skips_and_an_unfinished_day_combine(paths: status.CollectionPaths) -> None:
+    write_manifest(
+        paths, run_id="20260902T020100Z-t1m004", status="success_with_skips",
+        skips=[{"kind": "channel_not_found"}],
+        started_at="2026-09-02T02:00:00+00:00", finished_at="2026-09-02T02:01:00+00:00",
+        requested_window={"since": "2026-09-01T00:00:00+00:00"},
+    )
+    cell = _cell(paths, "2026-09-02")
+    assert cell["coverage"] == "collected_with_skips"
+    assert cell["time_coverage"] == "in_progress"
+    assert cell["completeness"] == "in_progress"
+
+
+def test_a_legacy_only_date_has_no_time_axis(paths: status.CollectionPaths) -> None:
+    """V0 has no observation window; inventing one would be a false claim."""
+    write_legacy_day(paths, day="2026-06-20", sources=("slack",))
+    cell = _cell(paths, "2026-06-20")
+    assert cell["coverage"] == "unverified"
+    assert cell["time_coverage"] is None
+    assert cell["observed_through"] is None
+
+
+def test_a_date_with_no_evidence_reports_no_time_axis(
+    paths: status.CollectionPaths,
+) -> None:
+    cell = _cell(paths, "2026-07-21")
+    assert cell["coverage"] == "not_collected"
+    assert cell["time_coverage"] is None
+
+
+def test_the_utc_to_kst_boundary_is_respected_for_the_day_end(
+    paths: status.CollectionPaths,
+) -> None:
+    """2026-09-01 24:00 KST is 2026-09-01T15:00Z, not midnight UTC."""
+    write_manifest(
+        paths, run_id="20260901T145900Z-t1m005", status="success",
+        started_at="2026-09-01T14:00:00+00:00", finished_at="2026-09-01T14:59:00+00:00",
+        requested_window={"since": "2026-08-31T00:00:00+00:00"},
+    )
+    # 14:59Z is 23:59 KST — one minute short of the day's end.
+    assert _cell(paths, "2026-09-01")["time_coverage"] == "partial"
+
+    write_manifest(
+        paths, run_id="20260901T150100Z-t1m006", status="success",
+        started_at="2026-09-01T15:00:00+00:00", finished_at="2026-09-01T15:01:00+00:00",
+        requested_window={"since": "2026-08-31T00:00:00+00:00"},
+    )
+    assert _cell(paths, "2026-09-01")["time_coverage"] == "complete"
+
+
+def test_quality_verdicts_are_not_disturbed_by_the_time_axis(
+    paths: status.CollectionPaths,
+) -> None:
+    """Regression: a degraded run stays partial regardless of the clock."""
+    write_manifest(
+        paths, run_id="20260901T160100Z-t1m007", status="degraded",
+        started_at="2026-09-01T16:00:00+00:00", finished_at="2026-09-01T16:10:00+00:00",
+    )
+    cell = _cell(paths, "2026-09-01")
+    assert cell["coverage"] == "partial"
+    assert cell["completeness"] == "incomplete"
+    assert cell["time_coverage"] == "complete"

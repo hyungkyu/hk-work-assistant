@@ -178,7 +178,12 @@ def test_a_malformed_date_is_refused(owner: FakeRequest, value: str) -> None:
     assert error.value.status_code == 400
 
 
-def test_every_collection_route_is_a_read_only_get() -> None:
+def test_every_reporting_route_is_a_read_only_get() -> None:
+    """Reads never mutate. `refresh` is the one exception and it is a POST.
+
+    It drops derived caches, which is server state, so it may not masquerade
+    as a GET -- and it carries CSRF like every other mutation.
+    """
     from rlwrld_worklog.web import app
 
     schema = app.openapi()["paths"]
@@ -186,11 +191,45 @@ def test_every_collection_route_is_a_read_only_get() -> None:
     assert sorted(collection_paths) == [
         "/api/v1/admin/collection/coverage",
         "/api/v1/admin/collection/overview",
+        "/api/v1/admin/collection/refresh",
         "/api/v1/admin/collection/rules",
         "/api/v1/admin/collection/runs",
     ]
     for path in collection_paths:
-        assert set(schema[path]) == {"get"}, f"{path} must be read-only"
+        expected = {"post"} if path.endswith("/refresh") else {"get"}
+        assert set(schema[path]) == expected, f"{path} must be {expected}"
+
+
+def test_refresh_requires_a_super_administrator_and_a_csrf_token(
+    archive: Path, owner: FakeRequest
+) -> None:
+    with pytest.raises(HTTPException) as anonymous:
+        collection_web.collection_refresh(FakeRequest())
+    assert anonymous.value.status_code == 401
+
+    # The owner fixture carries no CSRF header.
+    with pytest.raises(HTTPException) as missing_csrf:
+        collection_web.collection_refresh(owner)
+    assert missing_csrf.value.status_code == 403
+
+
+def test_refresh_drops_only_the_caches_the_screen_uses(
+    archive: Path, owner: FakeRequest
+) -> None:
+    token, csrf = admin_web.store().create_session(
+        subject="owner", email="hyungkyu.ryu@rlwrld.ai", role="super_admin", auth_method="google"
+    )
+    request = FakeRequest(cookies={SESSION_COOKIE: token})
+    request.headers = {"x-csrf-token": csrf}
+    payload = collection_web.collection_refresh(request, screen="coverage")
+    assert payload["screen"] == "coverage"
+    assert set(payload["caches_cleared"]) == set(
+        collection_status.CACHE_GROUPS["coverage"]
+    )
+    everything = collection_web.collection_refresh(request, screen="all")
+    assert set(everything["caches_cleared"]) >= set(
+        collection_status.CACHE_GROUPS["coverage"]
+    )
 
 
 def test_the_query_patterns_reject_a_path_before_the_handler_runs() -> None:
@@ -208,3 +247,27 @@ def test_the_query_patterns_reject_a_path_before_the_handler_runs() -> None:
     assert parameters["source"]["schema"]["anyOf"][0]["pattern"] == (
         "^(slack|notion|google-calendar)$"
     )
+
+
+def test_an_unqualified_request_reports_production_not_every_environment(
+    archive: Path, owner: FakeRequest
+) -> None:
+    """A smoke run must never fill in a gap in the production picture."""
+    assert collection_web.DEFAULT_ENVIRONMENT == "production"
+    assert collection_web._environment(None) == "production"
+    assert collection_web._environment("") == "production"
+    payload = collection_web.collection_overview(owner)
+    assert payload["environment"] == "production"
+    assert payload["environment_scope"] == "production"
+
+
+def test_the_test_view_stays_reachable_but_only_when_asked_for(
+    archive: Path, owner: FakeRequest
+) -> None:
+    assert collection_web._environment("all") is None
+    assert collection_web._environment("test") == "test"
+    widened = collection_web.collection_coverage(owner, environment="all")
+    assert widened["environment"] is None
+    assert widened["environment_scope"] == "all"
+    scoped = collection_web.collection_coverage(owner, environment="test")
+    assert scoped["environment_scope"] == "test"
