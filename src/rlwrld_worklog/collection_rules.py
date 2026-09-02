@@ -38,15 +38,23 @@ from typing import Any, Mapping
 RULE_REGISTRY_SCHEMA_VERSION = 2
 
 # Canonical ledger source names, as used by the ledger and the service DB.
-SOURCES = ("slack", "notion", "google_calendar")
+#
+# This list and the active rule move together, always in one commit. The
+# invariant in `_validate_registry` is two-sided -- a rule may only name a
+# source in this list, and the active rule must cover every source in it -- so
+# widening one without the other leaves the registry invalid in between. That
+# is deliberate: a source this list claims but no live rule describes would be
+# a source the dashboard reports with no statement of what was collected.
+SOURCES = ("slack", "notion", "google_calendar", "github")
 
 # Collector directory names, as used under raw/ and manifests/.
-COLLECTOR_SOURCES = ("slack", "notion", "google-calendar")
+COLLECTOR_SOURCES = ("slack", "notion", "google-calendar", "github")
 
 SOURCE_TO_COLLECTOR = {
     "slack": "slack",
     "notion": "notion",
     "google_calendar": "google-calendar",
+    "github": "github",
 }
 COLLECTOR_TO_SOURCE = {value: key for key, value in SOURCE_TO_COLLECTOR.items()}
 
@@ -54,6 +62,7 @@ SOURCE_LABELS = {
     "slack": "Slack",
     "notion": "Notion",
     "google_calendar": "Google Calendar",
+    "github": "GitHub",
 }
 
 
@@ -658,7 +667,7 @@ V2 = CollectionRule(
 V3 = CollectionRule(
     version="V3",
     title="공식 API 원본 원장 + 스레드 답글 전수 (thread replies swept)",
-    status="active",
+    status="superseded",
     effective=EffectivePeriod(
         start="2026-09-02",
         end=None,
@@ -722,11 +731,123 @@ V3 = CollectionRule(
 )
 
 
+GITHUB_V4 = SourceRule(
+    source="github",
+    scope=(
+        "조직의 저장소 전체 (every repository the token can list for the org). "
+        "커밋은 로컬 베어 미러에서, PR·리뷰·댓글·이슈는 REST 로 받는다. 경로가 둘이다."
+    ),
+    density=(
+        "전밀도 (full). 창 안의 모든 저장소를 시도하며, 받지 못한 저장소는 "
+        "'커밋 없는 날'이 아니라 skip 으로 기록한다."
+    ),
+    density_kind="full",
+    includes=(
+        "Commits from bare mirrors via `git log --all`, so the window is not bounded by "
+        "API retention and no request budget is spent on them",
+        "Merge commits, with parent_count",
+        "Archived repositories, for the activity they held during the window",
+        "Pull requests, reviews, review comments and issues, over the REST API",
+        "Commit file statistics, computed from the mirror's own diff",
+    ),
+    excludes=(
+        "Blobs, file bodies and source trees. Private repository content is metadata only",
+        "Slurm. It has no collector yet and gets its own rule version when it does",
+    ),
+    known_limitations=(
+        "github.commits_come_from_local_mirrors: commits are read from bare mirrors, not "
+        "the commits API. A repository with no mirror is a skip, never a day with no commits.",
+        "github.commit_coverage_is_bounded_by_mirror_freshness: a mirror last fetched before "
+        "the window closed cannot hold every commit pushed inside it. Each repository's last "
+        "fetch time is recorded and a stale mirror is reported as a skip rather than as a "
+        "repository with fewer commits.",
+        "github.merge_commits_are_kept: merge commits are captured with parent_count, unlike "
+        "the legacy collector's --no-merges, so a merged pull request is visible on the "
+        "commit side too.",
+        "github.archived_repositories_are_captured: archived state is a field, not a filter.",
+        "github.pull_requests_have_no_since_parameter: the pulls endpoint cannot be filtered "
+        "by time, so it is paginated newest-updated-first and stopped at the window edge. A "
+        "pull request whose last update predates the window is not re-observed even if it "
+        "was open.",
+        "github.review_bodies_follow_their_pull_request: reviews are fetched per pull request "
+        "found in the window. Submitting a review updates the pull request, so a review on an "
+        "untouched pull request cannot occur.",
+        "github.private_repository_content_is_metadata_only: no blob, no file body and no "
+        "source tree is fetched.",
+        "github.checkpoint_held_back_on_truncation: a truncated run leaves the watermark "
+        "where it was, so the next run repeats the window rather than stepping over it.",
+        "github.reviews_require_pull_requests: a run that asks for reviews without pull "
+        "requests knows of no pull request to fetch reviews for, and collects none.",
+        # The two below are not collector notes but observed facts about the
+        # mirror set, which is the only evidence for part of this source.
+        "17 repositories exist only as a mirror: the API does not list them, so a deletion, "
+        "a rename or a transfer cannot be told apart, and the mirror is the sole evidence "
+        "that their history existed (observed 2026-09-02, boa).",
+        "The mirror set and the org listing disagree in both directions: 6 repositories the "
+        "API lists have no mirror, and 14 August commits were missing from the backfill for "
+        "that reason (observed 2026-09-02, boa).",
+    ),
+    evidence=(
+        "src/rlwrld_worklog/github_client.py, src/rlwrld_worklog/github_collector.py",
+        "manifests/github/production/20260902T140337Z-0aa0aa98d8ce.json "
+        "(capture_profile live-github-api/v1, capture_density full)",
+        "manifest counters: repositories_listed, repositories_attempted, "
+        "repositories_skipped, repositories_with_stale_mirror, stale_mirrors, per_repository",
+        "boa's survey of the mirror set, reported 2026-09-02 in msg_d54a8aca03d0d996a4",
+    ),
+    unknowns=(
+        "Whether a repository present only as a mirror was deleted, renamed or transferred. "
+        "The API answers none of the three.",
+        "What a stale mirror missed. The skip says the window is not covered; it cannot say "
+        "how many commits are behind it.",
+    ),
+)
+
+
+V4 = CollectionRule(
+    version="V4",
+    title="공식 API 원본 원장 + 깃헙 (GitHub added)",
+    status="active",
+    effective=EffectivePeriod(
+        start="2026-09-02",
+        end=None,
+        basis=(
+            "observed: the first GitHub run "
+            "(manifests/github/production/20260902T140337Z-0aa0aa98d8ce.json, capture_profile "
+            "live-github-api/v1)."
+        ),
+    ),
+    summary=(
+        "V3 with GitHub added as a collected source. Slack, Notion and Google Calendar are "
+        "unchanged from V3. GitHub is captured over two paths: commits from local bare "
+        "mirrors and everything else over the REST API, which is why the mirror set's "
+        "agreement with the org listing is itself a coverage question."
+    ),
+    manifest_schema_version=2,
+    ledger_schema_version="1.0",
+    source_schema_version=None,
+    capture_profiles=V3.capture_profiles + ("live-github-api/v1",),
+    storage_layout=V3.storage_layout,
+    unknowns=V3.unknowns
+    + (
+        "Whether the GitHub mirror set is complete. It is the sole evidence for 17 "
+        "repositories the API no longer lists, and it is missing 6 the API does list.",
+    ),
+    sources=(
+        V3.source_rule("slack"),
+        V3.source_rule("notion"),
+        V3.source_rule("google_calendar"),
+        GITHUB_V4,
+    ),
+    supersedes="V3",
+)
+
+
 # --------------------------------------------------------------- registry
 
-RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3)
+RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3, V4)
 
-ACTIVE_RULE_VERSION = "V3"
+ACTIVE_RULE_VERSION = "V4"
 
 # Content digests of every published version. A published rule is frozen: if
 # editing one changes its meaning, the digest moves and import fails here,
@@ -787,6 +908,7 @@ PUBLISHED_DIGESTS: dict[str, str] = {
     "V1": "sha256:75c1314212d733305fb2acfaf337b033a9489e4eb81b1b6005bd564f486cb7d8",
     "V2": "sha256:831aec5edb7e4a349798ec1ec8d9e5bd23f75b052d09c7b157ab5d1dafbfe939",
     "V3": "sha256:52a5f9e46a1a1af21fa391f43be294ea87f1505a43b4eb94b3f76492205dadd8",
+    "V4": "sha256:da7f50ccadb136c979097e6929af10c41b11855203bfa0eaaae6ca1355875e20",
 }
 
 

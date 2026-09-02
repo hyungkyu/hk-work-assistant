@@ -940,10 +940,18 @@ def test_a_symlinked_environment_directory_is_not_followed(
     assert index.environments.get("slack", set()) == set()
 
 
-def test_the_reader_only_looks_at_the_three_known_sources(
+def test_the_reader_only_looks_at_sources_the_registry_declares(
     paths: status.CollectionPaths,
 ) -> None:
-    directory = paths.manifest_root / "github" / "production"
+    """A directory for a source with no rule is not a run the dashboard reports.
+
+    `slurm` rather than a literal count: the point is that the reader follows
+    the registry, so this test must keep meaning the same thing as sources are
+    added. It was written against `github`, which stopped being unknown the
+    moment V4 declared it.
+    """
+    assert "slurm" not in status.COLLECTOR_SOURCES, "pick a source the registry has no rule for"
+    directory = paths.manifest_root / "slurm" / "production"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "20260901T150000Z-aaaa66.json").write_text("{}", encoding="utf-8")
     index = status.build_run_index(paths, now=NOW)

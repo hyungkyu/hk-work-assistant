@@ -275,6 +275,10 @@ def test_the_registry_names_every_limitation_the_collectors_actually_record() ->
         ("slack_collector", "slack"),
         ("notion_collector", "notion"),
         ("calendar_collector", "google_calendar"),
+        # Added with V4. A collector outside this list can grow a coverage note
+        # no rule names, which is exactly the drift the test exists to catch --
+        # github collected a whole month before the registry knew the source.
+        ("github_collector", "github"),
     ):
         text = (SOURCE_ROOT / f"{module}.py").read_text(encoding="utf-8")
         keys = set(_NOTE_KEY.findall(text))
@@ -296,9 +300,14 @@ def test_the_active_rule_pins_the_schema_versions_its_runs_actually_write() -> N
         "live-slack-web-api/v1",
         "live-notion-api/v1",
         "live-google-calendar-api/v1",
+        "live-github-api/v1",
     }
     for source in rule.sources:
-        assert source.density_kind in {"incremental_continuous", "incremental_or_date_slice"}
+        assert source.density_kind in {
+            "incremental_continuous",
+            "incremental_or_date_slice",
+            "full",
+        }
 
 
 def test_the_registry_serializes_with_a_digest_per_rule() -> None:

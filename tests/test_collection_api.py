@@ -14,7 +14,13 @@ from typing import Any, Iterator
 import pytest
 from fastapi import HTTPException
 
-from rlwrld_worklog import admin_web, collection_status, collection_web, work_web
+from rlwrld_worklog import (
+    admin_web,
+    collection_rules,
+    collection_status,
+    collection_web,
+    work_web,
+)
 from rlwrld_worklog.admin_web import SESSION_COOKIE
 from rlwrld_worklog.collection_rules import ACTIVE_RULE_VERSION
 
@@ -119,11 +125,11 @@ def test_the_super_administrator_sees_the_rule_registry(owner: FakeRequest) -> N
 def test_the_overview_reports_the_archive_it_read(owner: FakeRequest, archive: Path) -> None:
     payload = collection_web.collection_overview(owner)
     assert payload["roots"]["archive_root"] == str(archive)
-    assert [card["source"] for card in payload["cards"]] == [
-        "slack",
-        "notion",
-        "google-calendar",
-    ]
+    # Follows the registry rather than a fixed list, so adding a source does
+    # not turn this into a test about how many sources exist today.
+    assert [card["source"] for card in payload["cards"]] == list(
+        collection_rules.COLLECTOR_SOURCES
+    )
     assert payload["recent_runs"][0]["run_id"] == "20260901T000000Z-abcdef"
     assert payload["recent_runs"][0]["rule"]["attribution"] == "declared"
 
@@ -138,7 +144,7 @@ def test_coverage_defaults_to_the_last_thirty_kst_days(owner: FakeRequest) -> No
     payload = collection_web.collection_coverage(owner)
     assert len(payload["rows"]) == collection_web.DEFAULT_COVERAGE_DAYS
     assert payload["timezone"].startswith("Asia/Seoul")
-    assert set(payload["sources"]) == {"slack", "notion", "google_calendar"}
+    assert set(payload["sources"]) == set(collection_rules.SOURCES)
 
 
 def test_coverage_accepts_an_explicit_range_and_grouping(owner: FakeRequest) -> None:
