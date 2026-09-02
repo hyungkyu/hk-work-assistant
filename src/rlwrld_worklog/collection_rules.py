@@ -45,16 +45,17 @@ RULE_REGISTRY_SCHEMA_VERSION = 2
 # widening one without the other leaves the registry invalid in between. That
 # is deliberate: a source this list claims but no live rule describes would be
 # a source the dashboard reports with no statement of what was collected.
-SOURCES = ("slack", "notion", "google_calendar", "github")
+SOURCES = ("slack", "notion", "google_calendar", "github", "slurm")
 
 # Collector directory names, as used under raw/ and manifests/.
-COLLECTOR_SOURCES = ("slack", "notion", "google-calendar", "github")
+COLLECTOR_SOURCES = ("slack", "notion", "google-calendar", "github", "slurm")
 
 SOURCE_TO_COLLECTOR = {
     "slack": "slack",
     "notion": "notion",
     "google_calendar": "google-calendar",
     "github": "github",
+    "slurm": "slurm",
 }
 COLLECTOR_TO_SOURCE = {value: key for key, value in SOURCE_TO_COLLECTOR.items()}
 
@@ -63,6 +64,7 @@ SOURCE_LABELS = {
     "notion": "Notion",
     "google_calendar": "Google Calendar",
     "github": "GitHub",
+    "slurm": "Slurm",
 }
 
 
@@ -807,7 +809,7 @@ GITHUB_V4 = SourceRule(
 V4 = CollectionRule(
     version="V4",
     title="공식 API 원본 원장 + 깃헙 (GitHub added)",
-    status="active",
+    status="superseded",
     effective=EffectivePeriod(
         start="2026-09-02",
         end=None,
@@ -843,11 +845,180 @@ V4 = CollectionRule(
 )
 
 
+SLURM_V5 = SourceRule(
+    source="slurm",
+    scope=(
+        "세 클러스터의 종료된 잡 전체 (every finished job on kakao, aws and naver). "
+        "sacct 117컬럼 원본을 그대로 보관하며, 파생 뷰는 쓰지 않는다."
+    ),
+    density=(
+        "전밀도, 종료일 기준 (full, keyed on the KST day a job ended). "
+        "실행 중인 잡은 담지 않고 종료된 뒤의 실행에서 한 번 담는다."
+    ),
+    density_kind="full",
+    includes=(
+        "All 117 sacct columns as a header plus rows, with no field dropped and no "
+        "derived value computed",
+        "`.batch` and `.extern` step rows, under their parent job's end date, because "
+        "they carry the only real resource usage",
+        "Any finished state, including one never seen before: the finished test is a "
+        "blacklist of not-finished states, not a whitelist",
+    ),
+    excludes=(
+        "Jobs still running at capture time. They are archived in a later run, once ended",
+        "The derived `data/jobs_v2/` view. It is cheaper to fetch and it loses jobs -- see "
+        "the limitation below",
+        "Any efficiency figure or job classification. Those are the consumer's to compute",
+    ),
+    known_limitations=(
+        "slurm.api_retention_floor: the dump begins 2025-07-08. Days in a requested window "
+        "before that are outside what the API can answer, not days without work, and the "
+        "legacy hk_private/slurm_archive is their only evidence. Roughly 18 months sit "
+        "below the floor.",
+        "slurm.day_key_is_end_not_submit: a job is filed under the KST day it ended. The "
+        "naver cluster (mlxp) reports an empty Submit on all 17,220 of its jobs, so keying "
+        "on Submit would drop that cluster entirely.",
+        "slurm.finished_without_end_timestamp: some jobs report a finished state with no End "
+        "value, so there is no day to file them under. They are counted rather than dropped "
+        "silently, which is what the legacy collector did.",
+        "slurm.finished_state_is_a_blacklist: any state outside the not-finished list counts "
+        "as finished, including one never seen before. A whitelist previously discarded "
+        "6,836 SUCCEEDED jobs without saying so.",
+        "slurm.unrecognised_finished_states_were_kept: a state outside the reference list "
+        "was treated as finished and archived, rather than repeating the whitelist mistake.",
+        "slurm.running_jobs_are_not_captured: only finished jobs are archived, once, on the "
+        "day they ended.",
+        "slurm.step_rows_follow_their_parent: `.batch` and `.extern` rows have no ledger "
+        "entity type yet, so they are raw-only.",
+        "slurm.all_117_columns_preserved: the export is archived whole. Nothing is projected "
+        "away at capture time, because a projection cannot be undone later.",
+        "slurm.checkpoint_held_back_on_partial_run: if at least one cloud did not answer, the "
+        "watermark stays where it was and the next run repeats the window.",
+        # Observed facts about the API, not collector notes. They are the reason
+        # the expensive path is the only correct one.
+        "The derived view loses jobs. Measured on naver for KST 2026-08-16: the 117-column "
+        "raw held 232 jobs and `jobs_v2` held 180, so 52 were raw-only -- 43 with an empty "
+        "state, 7 SUCCEEDED, 2 FAILED, and 51 of the 52 were GPU jobs (observed 2026-09-02, "
+        "boa).",
+        "The derived view's `date=` partition is not an end date either: `date=2026-08-16` "
+        "contained 11 jobs that ended on 8-17 and one that ended on 8-31, so it cannot serve "
+        "as a day key (observed 2026-09-02, boa).",
+        "The API offers neither a time window nor pagination. A 191MB dump (3.4GB "
+        "uncompressed) is fetched whole and sliced on the client.",
+        "The download is a 302 to a presigned S3 URL whose signature lasts 900 seconds. The "
+        "URL is never cached and never written to a log or a manifest, because it is a "
+        "credential.",
+    ),
+    evidence=(
+        "src/rlwrld_worklog/slurm_collector.py, src/rlwrld_worklog/slurm_client.py",
+        "capture_profile live-slurm-sacct-dump/v1, clouds kakao / aws / naver",
+        "tests/test_slurm_collector.py (26), tests/test_slurm_client.py (8)",
+        "boa's infra-node dry run, naver 2026-08-16: 232 jobs, 0 duplicate JobIDs "
+        "(reported 2026-09-02 in msg_7148cd5be0d5d63e44)",
+    ),
+    unknowns=(
+        "What sits below the retention floor. The API cannot answer for it and the legacy "
+        "archive has not been reconciled against this collector yet.",
+        "How many jobs across all three clouds finish with no End value. It is counted per "
+        "run, not known in advance.",
+    ),
+)
+
+
+# V4 recorded the mirror/API divergence as observed facts, because that is all
+# it was. The collector now acts on it: it identifies the two disagreeing sets,
+# names them per repository, and falls back to the commits API where a mirror is
+# missing. That is a change in what is collected, so V5 restates github rather
+# than reusing V4's rule.
+GITHUB_V5 = replace(
+    GITHUB_V4,
+    includes=GITHUB_V4.includes
+    + (
+        "Commits over the REST commits API for a repository with no mirror, carrying the "
+        "REST capture profile and no local diff statistics",
+        "Per-repository lists of the two disagreeing sets, in "
+        "counters.repositories_mirror_only and counters.repositories_api_only",
+    ),
+    known_limitations=tuple(
+        limitation
+        for limitation in GITHUB_V4.known_limitations
+        # The two observed-fact entries are superseded by the collector notes
+        # below, which say the same thing and are emitted per run.
+        if not limitation.startswith(("17 repositories exist only", "The mirror set and the org"))
+    )
+    + (
+        "github.repos_absent_from_api_mirror_is_sole_evidence: a repository that has a mirror "
+        "but is no longer listed by the API was deleted, renamed or transferred, and the three "
+        "cannot be told apart. Its mirror is the only remaining evidence of its history and "
+        "must not be tidied away. Named in counters.repositories_mirror_only; 17 were observed "
+        "on 2026-09-02.",
+        "github.repos_absent_from_mirror_lose_commits: a repository the API lists with no "
+        "mirror has no local history, so its commits are read over REST instead. If neither "
+        "is available the run reports it rather than showing a repository with no commits. "
+        "Named in counters.repositories_api_only; 6 were observed on 2026-09-02, and 14 "
+        "August commits were missing from the first backfill for that reason.",
+        "github.commits_read_over_rest_for_unmirrored_repository: those records carry the REST "
+        "capture profile and no local diff statistics, so commit file statistics are absent "
+        "for them rather than zero.",
+        "github.mirror_api_divergence_not_computed: a run that saw only one of the two "
+        "listings cannot identify either disagreeing set. An empty divergence there means "
+        "unknown, not none.",
+    ),
+    evidence=GITHUB_V4.evidence
+    + (
+        "manifest counters: repositories_mirror_only, repositories_api_only, "
+        "divergence_computed",
+    ),
+)
+
+
+V5 = CollectionRule(
+    version="V5",
+    title="공식 API 원본 원장 + 슬럼 (Slurm added)",
+    status="active",
+    effective=EffectivePeriod(
+        start="2026-09-02",
+        end=None,
+        basis=(
+            "observed: src/rlwrld_worklog/slurm_collector.py and slurm_client.py exist and "
+            "were exercised against infra-node (naver 2026-08-16, 232 jobs). Published from "
+            "the collector code rather than from a manifest, because the rule has to be "
+            "right before the first run stamps it."
+        ),
+    ),
+    summary=(
+        "V4 with Slurm added as a collected source. Slack, Notion, Google Calendar and "
+        "GitHub are unchanged from V4. Slurm is archived as the whole 117-column sacct "
+        "export, keyed on the KST day a job ended, because the cheap derived view loses "
+        "jobs and its date partition is not an end date. The API has a retention floor at "
+        "2025-07-08, below which the legacy archive is the only evidence."
+    ),
+    manifest_schema_version=2,
+    ledger_schema_version="1.0",
+    source_schema_version=None,
+    capture_profiles=V4.capture_profiles + ("live-slurm-sacct-dump/v1",),
+    storage_layout=V4.storage_layout,
+    unknowns=V4.unknowns
+    + (
+        "Slurm before 2025-07-08. The API's dump does not reach it, so for roughly 18 "
+        "months the legacy archive is the only record and this rule cannot speak for it.",
+    ),
+    sources=(
+        V4.source_rule("slack"),
+        V4.source_rule("notion"),
+        V4.source_rule("google_calendar"),
+        GITHUB_V5,
+        SLURM_V5,
+    ),
+    supersedes="V4",
+)
+
+
 # --------------------------------------------------------------- registry
 
-RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3, V4)
+RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3, V4, V5)
 
-ACTIVE_RULE_VERSION = "V4"
+ACTIVE_RULE_VERSION = "V5"
 
 # Content digests of every published version. A published rule is frozen: if
 # editing one changes its meaning, the digest moves and import fails here,
@@ -909,6 +1080,7 @@ PUBLISHED_DIGESTS: dict[str, str] = {
     "V2": "sha256:831aec5edb7e4a349798ec1ec8d9e5bd23f75b052d09c7b157ab5d1dafbfe939",
     "V3": "sha256:52a5f9e46a1a1af21fa391f43be294ea87f1505a43b4eb94b3f76492205dadd8",
     "V4": "sha256:da7f50ccadb136c979097e6929af10c41b11855203bfa0eaaae6ca1355875e20",
+    "V5": "sha256:ba77758f618dc29f60d48adc3a47f8b17867aa6b9683ada5e3d63a15ae213941",
 }
 
 

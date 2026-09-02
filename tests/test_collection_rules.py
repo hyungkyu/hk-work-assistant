@@ -279,6 +279,10 @@ def test_the_registry_names_every_limitation_the_collectors_actually_record() ->
         # no rule names, which is exactly the drift the test exists to catch --
         # github collected a whole month before the registry knew the source.
         ("github_collector", "github"),
+        # Added with V5, before slurm's first run. A manifest only reports the
+        # notes that fired in that run, so the code is the only place a rule
+        # can be checked against when there is no manifest yet.
+        ("slurm_collector", "slurm"),
     ):
         text = (SOURCE_ROOT / f"{module}.py").read_text(encoding="utf-8")
         keys = set(_NOTE_KEY.findall(text))
@@ -296,11 +300,15 @@ def test_the_active_rule_pins_the_schema_versions_its_runs_actually_write() -> N
     rule = active_rule()
     assert rule.manifest_schema_version == archive.MANIFEST_SCHEMA_VERSION
     assert rule.ledger_schema_version == LEDGER_SCHEMA_VERSION
+    # One profile per source the active rule declares, which is the property
+    # that matters; the literal set changed three times in one evening.
+    assert len(set(rule.capture_profiles)) == len(rule.sources)
     assert set(rule.capture_profiles) == {
         "live-slack-web-api/v1",
         "live-notion-api/v1",
         "live-google-calendar-api/v1",
         "live-github-api/v1",
+        "live-slurm-sacct-dump/v1",
     }
     for source in rule.sources:
         assert source.density_kind in {

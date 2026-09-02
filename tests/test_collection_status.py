@@ -950,8 +950,12 @@ def test_the_reader_only_looks_at_sources_the_registry_declares(
     added. It was written against `github`, which stopped being unknown the
     moment V4 declared it.
     """
-    assert "slurm" not in status.COLLECTOR_SOURCES, "pick a source the registry has no rule for"
-    directory = paths.manifest_root / "slurm" / "production"
+    # A name that cannot become a source, rather than one that has not yet.
+    # This test was written against `github`, then `slurm`, and both were
+    # declared within the hour -- each time it quietly stopped testing anything.
+    unknown = "not-a-collected-source"
+    assert unknown not in status.COLLECTOR_SOURCES
+    directory = paths.manifest_root / unknown / "production"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "20260901T150000Z-aaaa66.json").write_text("{}", encoding="utf-8")
     index = status.build_run_index(paths, now=NOW)
