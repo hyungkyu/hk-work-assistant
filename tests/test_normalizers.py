@@ -66,6 +66,15 @@ class NormalizerTests(unittest.TestCase):
         second = normalize_slack(record, self_user_id="U0SELF")
         self.assertEqual(first.event_id, second.event_id)
 
+    def test_live_slack_identity_matches_ledger_workspace_channel_ts(self):
+        record = json.loads((FIXTURES / "slack.json").read_text())[0]
+        record["team_id"] = "T0TESTWS01"
+        event = normalize_slack(record, self_user_id="U0SELF")
+        self.assertEqual(
+            event.external_id,
+            f"T0TESTWS01:{record['channel']}:{record['ts']}",
+        )
+
     def test_event_json_round_trip(self):
         record = json.loads((FIXTURES / "slack.json").read_text())[0]
         original = normalize_slack(record, self_user_id="U0SELF")

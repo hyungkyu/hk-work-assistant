@@ -1,0 +1,429 @@
+"""Slack daily incremental capture.
+
+A scripted fake Web API stands in for Slack: no network call is made anywhere
+in this file. Every identifier and every piece of text is invented.
+"""
+
+from __future__ import annotations
+
+import gzip
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from rlwrld_worklog.archive import RawArchive
+from rlwrld_worklog.slack_client import SlackApiError
+from rlwrld_worklog.slack_collector import SlackCollector, _is_expected_search_match
+
+TEAM = "T0TESTWS01"
+SELF = "U0TESTSELF"
+OTHER = "U0TESTMATE"
+CHANNEL = "C0TESTCH01"
+DM = "D0TESTDM01"
+GROUP = "S0TESTGRP1"
+
+NOW = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+SINCE = NOW - timedelta(days=1)
+
+
+def ts(offset_seconds: float) -> str:
+    return f"{(NOW + timedelta(seconds=offset_seconds)).timestamp():.6f}"
+
+
+def message(timestamp: str, **overrides: Any) -> dict[str, Any]:
+    body = {"type": "message", "user": OTHER, "ts": timestamp, "text": "synthetic message"}
+    body.update(overrides)
+    return body
+
+
+class FakeSlack:
+    """Scripted Slack Web API. Records every call for assertions."""
+
+    def __init__(
+        self,
+        *,
+        history: dict[str, list[list[dict[str, Any]]]] | None = None,
+        replies: dict[tuple[str, str], list[dict[str, Any]]] | None = None,
+        searches: dict[str, list[dict[str, Any]]] | None = None,
+        channels: list[dict[str, Any]] | None = None,
+        failing_channels: dict[str, str] | None = None,
+        usergroups: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self.history = history or {}
+        self.replies = replies or {}
+        self.searches = searches or {}
+        self.channels = channels if channels is not None else [
+            {"id": CHANNEL, "name": "team-channel", "is_private": False},
+            {"id": DM, "is_im": True, "user": OTHER},
+        ]
+        self.failing_channels = failing_channels or {}
+        self.usergroups = usergroups if usergroups is not None else [
+            {"id": GROUP, "handle": "team", "users": [SELF, OTHER]}
+        ]
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.rate_limit_hits = 0
+        self.call_counts: dict[str, int] = {}
+
+    def _record(self, method: str, params: dict[str, Any]) -> None:
+        self.calls.append((method, dict(params)))
+        self.call_counts[method] = self.call_counts.get(method, 0) + 1
+
+    def call(self, method: str, **params: Any) -> dict[str, Any]:
+        self._record(method, params)
+        if method == "auth.test":
+            return {"ok": True, "team_id": TEAM, "user_id": SELF, "url": "https://example.slack.com/"}
+        if method == "usergroups.list":
+            return {"ok": True, "usergroups": self.usergroups}
+        raise AssertionError(method)
+
+    def iter_pages(self, method: str, *, result_key: str, limit: int = 200, **params: Any):
+        self._record(method, params)
+        if method == "users.list":
+            yield {"ok": True, "members": [{"id": SELF, "name": "self"}], "response_metadata": {"next_cursor": "u2"}}
+            yield {"ok": True, "members": [{"id": OTHER, "name": "mate"}], "response_metadata": {"next_cursor": ""}}
+            return
+        if method == "conversations.list":
+            yield {"ok": True, "channels": self.channels, "response_metadata": {"next_cursor": ""}}
+            return
+        if method == "conversations.history":
+            channel = str(params["channel"])
+            if channel in self.failing_channels:
+                raise SlackApiError(
+                    f"Slack method conversations.history failed: {self.failing_channels[channel]}",
+                    method="conversations.history",
+                    code=self.failing_channels[channel],
+                )
+            oldest = float(params.get("oldest") or 0)
+            for page in self.history.get(channel, []):
+                visible = [item for item in page if float(item["ts"]) >= oldest]
+                yield {"ok": True, "messages": visible, "response_metadata": {"next_cursor": ""}}
+            return
+        if method == "conversations.replies":
+            key = (str(params["channel"]), str(params["ts"]))
+            oldest = float(params.get("oldest") or 0)
+            found = [item for item in self.replies.get(key, []) if float(item["ts"]) >= oldest]
+            yield {"ok": True, "messages": found, "response_metadata": {"next_cursor": ""}}
+            return
+        raise AssertionError(method)
+
+    def iter_search_messages(self, query: str):
+        self._record("search.messages", {"query": query})
+        for name, matches in self.searches.items():
+            if name in query or query.startswith(name):
+                yield {"ok": True, "messages": {"matches": matches}, "response_metadata": {"next_cursor": ""}}
+                return
+        yield {"ok": True, "messages": {"matches": []}, "response_metadata": {"next_cursor": ""}}
+
+
+def collect(
+    tmp_path: Path,
+    client: FakeSlack,
+    *,
+    run_id: str = "run-1",
+    dry_run: bool = False,
+    **kwargs: Any,
+):
+    archive = RawArchive(tmp_path, "slack", run_id, "test", dry_run=dry_run)
+    result = SlackCollector(client, archive).collect(
+        since=kwargs.pop("since", SINCE), expected_team_id=TEAM, **kwargs
+    )
+    return archive, result
+
+
+def archived(archive: RawArchive, root: Path, kind: str) -> list[dict[str, Any]]:
+    return [
+        json.loads(gzip.decompress((root / item["path"]).read_bytes()))
+        for item in archive.files
+        if item["kind"] == kind
+    ]
+
+
+# ------------------------------------------------------------- enumeration
+
+
+def test_users_usergroups_and_all_conversation_types_are_captured(tmp_path: Path) -> None:
+    client = FakeSlack(history={CHANNEL: [[message(ts(-100))]], DM: [[message(ts(-90))]]})
+    archive, result = collect(tmp_path, client)
+
+    assert result.channels_seen == 2
+    assert result.channels_collected == 2
+    assert result.counters["users_seen"] == 2, "users.list pagination must be followed"
+    assert result.counters["usergroups_seen"] == 1
+    listed = next(call for call in client.calls if call[0] == "conversations.list")[1]
+    assert listed["types"] == "public_channel,private_channel,mpim,im"
+    assert listed["exclude_archived"] is False
+    manifest = json.loads(result.manifest_path.read_text())
+    assert manifest["api_coverage"]["users.list"]["pages"] == 2
+    assert manifest["api_coverage"]["conversations.history"]["pages"] == 2
+
+
+def test_reactions_edits_threads_and_file_links_survive_into_the_archive(tmp_path: Path) -> None:
+    parent = ts(-500)
+    reply = ts(-100)
+    client = FakeSlack(
+        history={
+            CHANNEL: [
+                [
+                    message(
+                        parent,
+                        reply_count=1,
+                        latest_reply=reply,
+                        reactions=[{"name": "eyes", "users": [SELF], "count": 1}],
+                        edited={"user": OTHER, "ts": ts(-400)},
+                        files=[
+                            {
+                                "id": "F0TEST",
+                                "name": "notes.pdf",
+                                "size": 1024,
+                                "permalink": "https://example.slack.com/files/F0TEST",
+                                "preview": "must-not-be-archived",
+                            }
+                        ],
+                    )
+                ]
+            ]
+        },
+        replies={(CHANNEL, parent): [message(reply, thread_ts=parent, text="synthetic reply")]},
+    )
+    archive, result = collect(tmp_path, client)
+
+    stored = archived(archive, tmp_path, f"history-{CHANNEL}")[0]["messages"][0]
+    assert stored["reactions"][0]["name"] == "eyes"
+    assert stored["edited"]["ts"] == ts(-400)
+    assert stored["files"][0]["permalink"].endswith("/F0TEST")
+    assert "preview" not in stored["files"][0], "file bodies and previews are never archived"
+    assert archived(archive, tmp_path, f"replies-{CHANNEL}-{parent}")[0]["messages"][0]["thread_ts"] == parent
+    assert result.messages_seen == 2
+
+
+# -------------------------------------------------------------- checkpoint
+
+
+def test_history_resumes_from_the_per_channel_watermark(tmp_path: Path) -> None:
+    seed = RawArchive(tmp_path, "slack", "run-0", "test")
+    seed.write_checkpoint(
+        {"schema_version": 2, "source": "slack", "run_id": "run-0", "high_watermarks": {CHANNEL: ts(-300)}}
+    )
+    client = FakeSlack(history={CHANNEL: [[message(ts(-400)), message(ts(-200))]], DM: [[]]})
+
+    archive, result = collect(tmp_path, client, run_id="run-1")
+
+    history_calls = [
+        params for method, params in client.calls
+        if method == "conversations.history" and params["channel"] == CHANNEL
+    ]
+    assert history_calls[0]["oldest"] == ts(-300), "the channel resumes from its own watermark"
+    dm_calls = [
+        params for method, params in client.calls
+        if method == "conversations.history" and params["channel"] == DM
+    ]
+    assert float(dm_calls[0]["oldest"]) == pytest.approx(SINCE.timestamp()), (
+        "a channel with no watermark falls back to --since"
+    )
+    assert result.messages_seen == 1
+    checkpoint = json.loads((tmp_path / "manifests/slack/test/checkpoint.json").read_text())
+    assert checkpoint["high_watermarks"][CHANNEL] == ts(-200)
+    assert result.checkpoint_advanced is True
+
+
+def test_a_truncated_run_leaves_the_checkpoint_where_it_was(tmp_path: Path) -> None:
+    seed = RawArchive(tmp_path, "slack", "run-0", "test")
+    seed.write_checkpoint({"schema_version": 2, "source": "slack", "run_id": "run-0", "high_watermarks": {}})
+    client = FakeSlack(history={CHANNEL: [[message(ts(-100)), message(ts(-90))]], DM: [[message(ts(-80))]]})
+
+    _, result = collect(tmp_path, client, run_id="run-1", max_messages=1)
+
+    assert result.truncated is True
+    assert result.checkpoint_advanced is False
+    checkpoint = json.loads((tmp_path / "manifests/slack/test/checkpoint.json").read_text())
+    assert checkpoint["run_id"] == "run-0", "a bounded run must not move the production checkpoint"
+    manifest = json.loads(result.manifest_path.read_text())
+    assert manifest["truncation"][0]["reason"] == "max_messages"
+
+
+def test_dry_run_captures_raw_but_never_advances_the_checkpoint(tmp_path: Path) -> None:
+    client = FakeSlack(history={CHANNEL: [[message(ts(-100))]], DM: [[]]})
+    archive, result = collect(tmp_path, client, dry_run=True)
+
+    assert result.checkpoint_advanced is False
+    assert not (tmp_path / "manifests/slack/test/checkpoint.json").exists()
+    assert archive.files, "a dry run still preserves what it fetched"
+    assert json.loads(result.manifest_path.read_text())["dry_run"] is True
+
+
+# ------------------------------------------------------------------ threads
+
+
+def test_replies_to_an_older_thread_are_re_polled_from_the_checkpoint(tmp_path: Path) -> None:
+    old_parent = ts(-86_400 * 3)
+    new_reply = ts(-60)
+    seed = RawArchive(tmp_path, "slack", "run-0", "test")
+    seed.write_checkpoint(
+        {
+            "schema_version": 2,
+            "source": "slack",
+            "run_id": "run-0",
+            "high_watermarks": {CHANNEL: ts(-3600)},
+            "thread_watch": {CHANNEL: {old_parent: ts(-7200)}},
+        }
+    )
+    client = FakeSlack(
+        history={CHANNEL: [[]], DM: [[]]},
+        replies={(CHANNEL, old_parent): [message(new_reply, thread_ts=old_parent, text="late reply")]},
+    )
+
+    archive, result = collect(tmp_path, client, run_id="run-1")
+
+    assert result.threads_repolled == 1
+    assert result.messages_seen == 1, "the reply is captured even though history never returned it"
+    stored = archived(archive, tmp_path, f"replies-{CHANNEL}-{old_parent}")[0]
+    assert stored["messages"][0]["ts"] == new_reply
+    checkpoint = json.loads((tmp_path / "manifests/slack/test/checkpoint.json").read_text())
+    assert checkpoint["thread_watch"][CHANNEL][old_parent] == new_reply
+
+
+def test_threads_older_than_the_lookback_are_dropped_from_the_watch_list(tmp_path: Path) -> None:
+    ancient = f"{(NOW - timedelta(days=400)).timestamp():.6f}"
+    seed = RawArchive(tmp_path, "slack", "run-0", "test")
+    seed.write_checkpoint(
+        {"schema_version": 2, "source": "slack", "run_id": "run-0", "thread_watch": {CHANNEL: {ancient: ancient}}}
+    )
+    client = FakeSlack(history={CHANNEL: [[]], DM: [[]]})
+
+    _, result = collect(tmp_path, client, run_id="run-1")
+
+    assert result.threads_repolled == 0
+    checkpoint = json.loads((tmp_path / "manifests/slack/test/checkpoint.json").read_text())
+    assert checkpoint["thread_watch"] == {}
+
+
+# ------------------------------------------------------------------ search
+
+
+def test_every_critical_search_runs_including_each_self_usergroup(tmp_path: Path) -> None:
+    client = FakeSlack(history={CHANNEL: [[]], DM: [[]]})
+    _, result = collect(tmp_path, client)
+
+    assert result.counters["searches_run"] == [
+        "direct-mentions",
+        "direct-messages-to-self",
+        "messages-from-self",
+        "broadcast-channel",
+        "broadcast-here",
+        "broadcast-everyone",
+        f"usergroup-{GROUP}",
+    ]
+    assert result.counters["self_usergroups"] == [GROUP]
+
+
+def test_a_mention_only_search_can_reach_is_captured_and_counted(tmp_path: Path) -> None:
+    mention_ts = ts(-120)
+    client = FakeSlack(
+        history={CHANNEL: [[]], DM: [[]]},
+        searches={
+            f"<@{SELF}>": [
+                {
+                    "ts": mention_ts,
+                    "user": OTHER,
+                    "text": f"<@{SELF}|self> please review",
+                    "channel": {"id": "C0OTHERCH", "name": "other"},
+                }
+            ]
+        },
+    )
+    archive, result = collect(tmp_path, client)
+
+    assert result.search_matches_kept == 1
+    assert result.messages_seen == 1
+    assert [event.container_id for event in result.events] == ["C0OTHERCH"], (
+        "a mention in a channel history never reached must still be collected"
+    )
+    stored = archived(archive, tmp_path, "direct-mentions")[0]
+    assert stored["messages"]["matches"][0]["ts"] == mention_ts
+
+
+def test_pipe_encoded_mentions_are_not_filtered_out() -> None:
+    assert _is_expected_search_match("direct-mentions", {"text": f"<@{SELF}>"}, self_user_id=SELF)
+    assert _is_expected_search_match(
+        "direct-mentions", {"text": f"hi <@{SELF}|display-name> there"}, self_user_id=SELF
+    )
+    assert not _is_expected_search_match(
+        "direct-mentions", {"text": f"<@{SELF}EXTRA> not me"}, self_user_id=SELF
+    )
+
+
+def test_dropped_search_matches_are_counted_never_silent(tmp_path: Path) -> None:
+    client = FakeSlack(
+        history={CHANNEL: [[]], DM: [[]]},
+        searches={
+            f"<@{SELF}>": [
+                {"ts": ts(-60), "user": OTHER, "text": "no mention here", "channel": {"id": CHANNEL}},
+                {"ts": ts(-86_400 * 5), "user": OTHER, "text": f"<@{SELF}> old", "channel": {"id": CHANNEL}},
+            ]
+        },
+    )
+    _, result = collect(tmp_path, client)
+
+    assert result.search_matches_context_filtered == 1
+    assert result.search_matches_before_window == 1
+    manifest = json.loads(result.manifest_path.read_text())
+    assert manifest["counters"]["search_matches_context_filtered"] == 1
+    assert manifest["counters"]["search_matches_before_window"] == 1
+
+
+def test_a_bounded_capture_skips_the_workspace_wide_searches(tmp_path: Path) -> None:
+    client = FakeSlack(history={CHANNEL: [[message(ts(-100))]], DM: [[]]})
+    _, result = collect(tmp_path, client, max_channels=1)
+
+    assert "search.messages" not in client.call_counts
+    assert result.counters["searches_run"] == []
+
+
+# --------------------------------------------------------- partial coverage
+
+
+def test_an_inaccessible_channel_is_recorded_and_the_run_continues(tmp_path: Path) -> None:
+    client = FakeSlack(
+        history={CHANNEL: [[message(ts(-100))]]},
+        failing_channels={DM: "not_in_channel"},
+    )
+    _, result = collect(tmp_path, client)
+
+    assert result.channels_skipped == 1
+    assert result.channels_collected == 1
+    manifest = json.loads(result.manifest_path.read_text())
+    assert manifest["status"] == "success_with_skips"
+    assert manifest["skips"][0]["channel_id"] == DM
+    assert manifest["skips"][0]["error"] == "not_in_channel"
+
+
+def test_an_unexpected_slack_error_fails_the_run_rather_than_hiding_it(tmp_path: Path) -> None:
+    client = FakeSlack(history={CHANNEL: [[]]}, failing_channels={DM: "internal_error"})
+    with pytest.raises(SlackApiError):
+        collect(tmp_path, client)
+
+
+def test_rate_limit_hits_reach_the_manifest(tmp_path: Path) -> None:
+    client = FakeSlack(history={CHANNEL: [[]], DM: [[]]})
+    client.rate_limit_hits = 4
+    _, result = collect(tmp_path, client)
+    assert json.loads(result.manifest_path.read_text())["rate_limit_hits"] == 4
+
+
+def test_coverage_notes_declare_the_web_api_gaps(tmp_path: Path) -> None:
+    client = FakeSlack(history={CHANNEL: [[]], DM: [[]]})
+    _, result = collect(tmp_path, client)
+    notes = " ".join(json.loads(result.manifest_path.read_text())["coverage_notes"])
+    assert "slack.message_deletion_not_exposed" in notes
+    assert "slack.thread_replies_need_supplements" in notes
+
+
+def test_rerunning_the_same_window_is_idempotent(tmp_path: Path) -> None:
+    payload = {CHANNEL: [[message(ts(-100))]], DM: [[]]}
+    _, first = collect(tmp_path, FakeSlack(history=payload), run_id="run-1")
+    _, second = collect(tmp_path, FakeSlack(history=payload), run_id="run-2")
+
+    assert [event.event_id for event in first.events] == [event.event_id for event in second.events]

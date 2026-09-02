@@ -11,6 +11,7 @@ class Source(StrEnum):
     SLACK = "slack"
     GOOGLE_CALENDAR = "google_calendar"
     GITHUB = "github"
+    NOTION = "notion"
 
 
 class Classification(StrEnum):

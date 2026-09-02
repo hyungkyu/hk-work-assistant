@@ -42,6 +42,7 @@ services:
 
   app:
     build: .
+    image: hk-work-assistant-app:local
     restart: unless-stopped
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     environment:
@@ -49,10 +50,71 @@ services:
       OPENSEARCH_URL: ${OPENSEARCH_URL:-http://opensearch:9200}
       RAW_ARCHIVE_ROOT: ${RAW_ARCHIVE_ROOT:-/data/rlwrld-worklog}
       ALLOWED_GOOGLE_EMAIL: ${ALLOWED_GOOGLE_EMAIL:?set ALLOWED_GOOGLE_EMAIL in .env}
+      APP_CONFIG_ROOT: ${APP_CONFIG_ROOT:-/config/hk-work-assistant}
+      ADMIN_SESSION_SECURE: ${ADMIN_SESSION_SECURE:-false}
+      EMERGENCY_LOGIN_ENABLED: "false"
     ports:
       - "127.0.0.1:${APP_PORT:-8080}:8080"
+      - "${VPN_BIND_ADDRESS:?set VPN_BIND_ADDRESS to this host's Tailscale IPv4}:${APP_PORT:-8080}:8080"
+      - "${LAN_BIND_ADDRESS:?set LAN_BIND_ADDRESS to this host's LAN IPv4}:${APP_PORT:-8080}:8080"
     volumes:
       - ${RAW_ARCHIVE_HOST_ROOT:-/data/rlwrld-worklog}:/data/rlwrld-worklog:ro
+      - ${APP_CONFIG_HOST_ROOT:?set APP_CONFIG_HOST_ROOT in .env}:${APP_CONFIG_ROOT:-/config/hk-work-assistant}:rw
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    networks: [frontend, backend]
+
+  backoffice-local:
+    image: hk-work-assistant-app:local
+    restart: unless-stopped
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    command: ["uvicorn", "rlwrld_worklog.web:app", "--host", "0.0.0.0", "--port", "8081"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+      OPENSEARCH_URL: ${OPENSEARCH_URL:-http://opensearch:9200}
+      RAW_ARCHIVE_ROOT: ${RAW_ARCHIVE_ROOT:-/data/rlwrld-worklog}
+      ALLOWED_GOOGLE_EMAIL: ${ALLOWED_GOOGLE_EMAIL:?set ALLOWED_GOOGLE_EMAIL in .env}
+      APP_CONFIG_ROOT: ${APP_CONFIG_ROOT:-/config/hk-work-assistant}
+      ADMIN_SESSION_SECURE: "false"
+      EMERGENCY_LOGIN_ENABLED: "true"
+    ports:
+      # Keep the emergency backoffice off the LAN.  Set this to the host's
+      # Tailscale IPv4 when VPN access is desired; loopback remains the safe
+      # default for a fresh install.
+      - "${BACKOFFICE_BIND_ADDRESS:-127.0.0.1}:8081:8081"
+    volumes:
+      - ${RAW_ARCHIVE_HOST_ROOT:-/data/rlwrld-worklog}:/data/rlwrld-worklog:ro
+      - ${APP_CONFIG_HOST_ROOT:?set APP_CONFIG_HOST_ROOT in .env}:${APP_CONFIG_ROOT:-/config/hk-work-assistant}:rw
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    networks: [frontend, backend]
+
+  # Same backoffice UI on the trusted LAN, but without the emergency password
+  # endpoint. The local-only instance above remains the break-glass path.
+  backoffice-lan:
+    image: hk-work-assistant-app:local
+    restart: unless-stopped
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    command: ["uvicorn", "rlwrld_worklog.web:app", "--host", "0.0.0.0", "--port", "8081"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+      OPENSEARCH_URL: ${OPENSEARCH_URL:-http://opensearch:9200}
+      RAW_ARCHIVE_ROOT: ${RAW_ARCHIVE_ROOT:-/data/rlwrld-worklog}
+      ALLOWED_GOOGLE_EMAIL: ${ALLOWED_GOOGLE_EMAIL:?set ALLOWED_GOOGLE_EMAIL in .env}
+      APP_CONFIG_ROOT: ${APP_CONFIG_ROOT:-/config/hk-work-assistant}
+      ADMIN_SESSION_SECURE: ${ADMIN_SESSION_SECURE:-false}
+      EMERGENCY_LOGIN_ENABLED: "false"
+    ports:
+      - "${LAN_BIND_ADDRESS:?set LAN_BIND_ADDRESS to this host's LAN IPv4}:8081:8081"
+    volumes:
+      - ${RAW_ARCHIVE_HOST_ROOT:-/data/rlwrld-worklog}:/data/rlwrld-worklog:ro
+      - ${APP_CONFIG_HOST_ROOT:?set APP_CONFIG_HOST_ROOT in .env}:${APP_CONFIG_ROOT:-/config/hk-work-assistant}:rw
     depends_on:
       postgres:
         condition: service_healthy

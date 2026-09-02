@@ -1,0 +1,1671 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>HK Work Assistant Backoffice</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f14;
+      --panel: #121821;
+      --panel-2: #171f2b;
+      --line: #293341;
+      --text: #e8edf4;
+      --muted: #91a0b4;
+      --accent: #65d6a6;
+      --accent-2: #68a8ff;
+      --danger: #ff7b7b;
+      --warning: #f1c56b;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
+    button, input, textarea, select { font: inherit; }
+    button { cursor: pointer; }
+    .shell { display: grid; grid-template-columns: 250px 1fr; min-height: 100vh; }
+    .sidebar { border-right: 1px solid var(--line); padding: 24px 16px; background: #0e131a; }
+    .brand { padding: 0 10px 22px; }
+    .brand strong { display: block; font-size: 18px; letter-spacing: -.02em; }
+    .brand span { display: block; color: var(--muted); font-size: 12px; margin-top: 5px; }
+    nav { display: grid; gap: 5px; }
+    .nav-group { display: grid; gap: 3px; margin-bottom: 10px; }
+    .nav-label { color: #6d7b8e; font-size: 11px; letter-spacing: .09em; text-transform: uppercase; padding: 6px 12px 2px; }
+    nav button[disabled] { color: #55637a; cursor: not-allowed; }
+    nav button[disabled]:hover { background: transparent; color: #55637a; }
+    nav button { width: 100%; border: 0; background: transparent; color: var(--muted); text-align: left; padding: 11px 12px; border-radius: 9px; }
+    nav button:hover, nav button.active { background: var(--panel-2); color: var(--text); }
+    .sidebar-footer { position: fixed; bottom: 20px; width: 215px; padding: 0 10px; }
+    .sidebar-footer button { width: 100%; }
+    main { padding: 38px clamp(24px, 4vw, 64px) 80px; max-width: 1440px; width: 100%; }
+    .page { display: none; }
+    .page.active { display: block; }
+    h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -.03em; }
+    h2 { font-size: 18px; margin: 0; }
+    p.lead { color: var(--muted); margin: 0 0 28px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card { border: 1px solid var(--line); background: var(--panel); border-radius: 14px; padding: 20px; }
+    .card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+    .card p { color: var(--muted); line-height: 1.55; }
+    .metric { font-size: 26px; font-weight: 700; margin-top: 8px; }
+    .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+    .badge { border: 1px solid var(--line); padding: 4px 8px; border-radius: 999px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .badge.ok { color: var(--accent); border-color: #286b52; background: #102b22; }
+    .badge.wait { color: var(--warning); border-color: #705a2c; background: #2b2415; }
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .field { display: grid; gap: 7px; }
+    .field.full { grid-column: 1 / -1; }
+    label { color: #c8d2df; font-size: 13px; }
+    input, textarea, select { width: 100%; border: 1px solid var(--line); border-radius: 9px; padding: 11px 12px; background: #0c1118; color: var(--text); outline: none; }
+    input:focus, textarea:focus, select:focus { border-color: var(--accent-2); box-shadow: 0 0 0 3px #68a8ff1f; }
+    input[readonly] { color: var(--muted); }
+    textarea { min-height: 130px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    .help { color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
+    .button { border: 1px solid var(--line); color: var(--text); background: var(--panel-2); border-radius: 9px; padding: 10px 15px; }
+    .button.primary { border-color: #3b8a6c; background: #1e7658; color: white; }
+    .button.danger { color: var(--danger); }
+    .button:disabled { opacity: .45; cursor: not-allowed; }
+    .stack { display: grid; gap: 16px; }
+    .connection { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: start; padding: 14px 0; border-bottom: 1px solid var(--line); }
+    .connection:last-child { border-bottom: 0; }
+    .connection strong { display: block; }
+    .connection small { display: block; color: var(--muted); margin-top: 4px; }
+    .result { margin-top: 14px; min-height: 44px; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--line); background: #0c1118; border-radius: 9px; padding: 11px 12px; color: var(--muted); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .result.ok { color: var(--accent); border-color: #286b52; }
+    .result.error { color: var(--danger); border-color: #7b3838; }
+    .audit { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .audit th, .audit td { padding: 11px 9px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .audit th { color: var(--muted); font-weight: 500; }
+    .overlay { position: fixed; inset: 0; z-index: 20; background: #070a0edb; display: grid; place-items: center; padding: 24px; backdrop-filter: blur(10px); }
+    .hidden { display: none !important; }
+    .overlay.hidden { display: none; }
+    .login { width: min(460px, 100%); border: 1px solid var(--line); background: var(--panel); padding: 28px; border-radius: 16px; box-shadow: 0 28px 80px #0009; }
+    .login h1 { margin-bottom: 10px; }
+    .login p { color: var(--muted); line-height: 1.5; }
+    .login .field { margin: 20px 0; }
+    .notice { min-height: 20px; color: var(--danger); font-size: 13px; margin-top: 12px; }
+    .toast { position: fixed; right: 24px; bottom: 24px; z-index: 30; background: #1c6b51; color: white; padding: 12px 16px; border-radius: 10px; box-shadow: 0 12px 40px #0008; opacity: 0; transform: translateY(10px); pointer-events: none; transition: .2s; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.error { background: #8a3535; }
+    .check { display: flex; gap: 9px; align-items: center; }
+    .check input { width: auto; }
+    code { color: #b9d5ff; }
+    .work-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .work-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .work-filters select { width: auto; min-width: 160px; padding: 8px 10px; }
+    .work-state { color: var(--muted); font-size: 12px; min-height: 18px; margin: 0 0 14px; }
+    .work-state.error { color: var(--danger); }
+    .work-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 232px), 1fr)); gap: 14px; align-items: start; }
+    .work-column.residue { border-color: #7b3838; }
+    .work-column.residue h2 { color: var(--danger); }
+    .work-hint { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
+    .work-hint b { color: var(--warning); font-weight: 600; }
+    .work-column { border: 1px solid var(--line); background: var(--panel); border-radius: 14px; padding: 14px; }
+    .work-column > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .work-column h2 { font-size: 14px; }
+    .work-list { display: grid; gap: 10px; }
+    .work-empty { color: var(--muted); font-size: 12px; padding: 6px 0; }
+    .work-card { border: 1px solid var(--line); background: var(--panel-2); border-radius: 11px; padding: 11px 12px; display: grid; gap: 7px; }
+    .work-card-title { font-size: 13px; font-weight: 600; line-height: 1.45; word-break: break-word; }
+    .work-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .work-chip { font-size: 11px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--muted); white-space: nowrap; }
+    .work-chip.priority-urgent { color: var(--danger); border-color: #7b3838; }
+    .work-chip.priority-high { color: var(--warning); border-color: #705a2c; }
+    .work-chip.assignee { color: var(--accent-2); border-color: #2f5a8f; }
+    .work-chip.alert { color: var(--danger); border-color: #7b3838; }
+    .work-line { font-size: 12px; color: var(--muted); line-height: 1.5; word-break: break-word; }
+    .work-line b { color: #c8d2df; font-weight: 500; }
+    .work-card-actions { display: flex; gap: 6px; align-items: center; }
+    .work-card-actions select { width: auto; flex: 1; padding: 6px 8px; font-size: 12px; }
+    .work-card-actions .button { padding: 6px 10px; font-size: 12px; }
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .table-scroll table { min-width: 760px; }
+    .collection-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .collection-toolbar select, .collection-toolbar input { width: auto; min-width: 150px; padding: 8px 10px; }
+    .coverage-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+    .coverage-controls select, .coverage-controls input { width: auto; min-width: 140px; padding: 8px 10px; }
+    .cov { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+    .cov.collected, .cov.success { color: var(--accent); border-color: #286b52; background: #102b22; }
+    .cov.partial, .cov.success_with_skips, .cov.degraded { color: var(--warning); border-color: #705a2c; background: #2b2415; }
+    .cov.running { color: var(--accent-2); border-color: #2f5a8f; background: #101c2b; }
+    .cov.failed { color: var(--danger); border-color: #7b3838; background: #2b1616; }
+    .cov.stale, .cov.malformed { color: #e0a3d6; border-color: #6f3a66; background: #2a1a27; }
+    .cov.unknown { color: #c0a2e0; border-color: #584070; background: #1e1729; }
+    .collection-cell { display: grid; gap: 4px; }
+    .collection-cell small { color: var(--muted); font-size: 11px; line-height: 1.5; word-break: break-word; }
+    .mono { font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); word-break: break-all; }
+    .rule-block { border: 1px solid var(--line); border-radius: 11px; padding: 15px; margin-top: 12px; background: var(--panel-2); }
+    .rule-block header { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+    .rule-block h3 { margin: 0; font-size: 15px; }
+    .rule-source { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
+    .rule-source h4 { margin: 0 0 6px; font-size: 13px; color: #c8d2df; }
+    .rule-source ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .rule-source ul li { word-break: break-word; }
+    .work-dialog { width: min(660px, 100%); max-height: 88vh; overflow-y: auto; border: 1px solid var(--line); background: var(--panel); padding: 24px; border-radius: 16px; box-shadow: 0 28px 80px #0009; }
+    .work-dialog h1 { font-size: 20px; }
+    .work-dialog .form-grid { margin-top: 18px; }
+    .work-dialog textarea { min-height: 74px; font-family: inherit; font-size: 13px; }
+    @media (max-width: 880px) {
+      .shell { grid-template-columns: 1fr; }
+      .sidebar { position: static; border-right: 0; border-bottom: 1px solid var(--line); }
+      nav { grid-template-columns: 1fr; }
+      .nav-group { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 6px; }
+      .nav-label { grid-column: 1 / -1; padding: 4px 4px 0; }
+      nav button { text-align: center; font-size: 12px; }
+      .sidebar-footer { position: static; width: auto; margin-top: 12px; }
+      .grid, .grid.three, .form-grid { grid-template-columns: 1fr; }
+      .work-board { grid-template-columns: 1fr; }
+      .field.full { grid-column: auto; }
+      .collection-toolbar select, .collection-toolbar input, .coverage-controls select, .coverage-controls input { min-width: 0; flex: 1 1 130px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><strong>HK Work Assistant</strong><span>Super-admin backoffice</span></div>
+      <nav id="nav">
+        <div class="nav-group">
+          <span class="nav-label">업무</span>
+          <button data-page="work" class="active">업무 현황</button>
+          <button data-page="roadmap" disabled title="원본 시스템과 필드가 정해지면 활성화됩니다">로드맵</button>
+        </div>
+        <div class="nav-group">
+          <span class="nav-label">운영</span>
+          <button data-page="collection">수집 현황</button>
+          <button data-page="server">서버 상태</button>
+          <button data-page="schedules">스케줄</button>
+        </div>
+        <div class="nav-group">
+          <span class="nav-label">설정</span>
+          <button data-page="connections">연결</button>
+          <button data-page="storage">저장소 · 백업</button>
+          <button data-page="models">로컬 모델</button>
+          <button data-page="security">보안</button>
+        </div>
+        <div class="nav-group">
+          <button data-page="audit">감사 기록</button>
+        </div>
+      </nav>
+      <div class="sidebar-footer"><button class="button" id="logout">로그아웃</button></div>
+    </aside>
+
+    <main>
+      <section class="page" id="page-server">
+        <h1>서버 상태</h1>
+        <p class="lead">이 호스트에서 실제로 읽을 수 있는 값만 표시합니다. 읽을 수 없으면 불명이라고 적습니다.</p>
+        <div class="grid three">
+          <article class="card"><div class="label">외부 원본 루트</div><div class="metric" style="font-size:16px"><code id="metric-data-root">-</code></div></article>
+          <article class="card"><div class="label">Google Drive 백업</div><div class="metric" id="metric-drive">미설정</div></article>
+          <article class="card"><div class="label">Slack 연결 정보</div><div class="metric" id="metric-slack">미설정</div></article>
+        </div>
+        <article class="card" style="margin-top:16px">
+          <div class="card-header"><h2>런타임</h2><span class="badge" id="server-runtime-badge">확인 중</span></div>
+          <div class="table-scroll">
+            <table class="audit"><thead><tr><th>항목</th><th>값</th></tr></thead><tbody id="server-runtime-body"></tbody></table>
+          </div>
+          <p class="help">경로와 구성 여부만 보여주며 비밀값은 표시하지 않습니다.</p>
+        </article>
+        <div class="card" style="margin-top:16px">
+          <div class="card-header"><h2>운영 원칙</h2><span class="badge ok">로컬 우선</span></div>
+          <div class="grid">
+            <p><strong>외부 원본</strong><br>한 번 가져온 정보는 다시 수집하지 않아도 되도록 상세하고 불변하게 보존합니다.</p>
+            <p><strong>비밀정보</strong><br>Git과 일반 설정 DB에서 분리하며, 입력 후 원문을 다시 표시하지 않습니다.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="page active" id="page-work">
+        <h1>업무 현황</h1>
+        <p class="lead">HK가 위임한 작업이 지금 누구에게, 어디까지 진행되고 있는지 봅니다.</p>
+        <div class="work-toolbar">
+          <div class="work-filters">
+            <select id="work-filter-assignee"><option value="">담당 전체</option></select>
+            <button class="button" id="work-refresh">새로고침</button>
+          </div>
+          <button class="button primary" id="work-add">업무 추가</button>
+        </div>
+        <p class="work-state" id="work-state">불러오는 중…</p>
+        <p class="work-hint" id="work-hint"></p>
+        <div class="work-board" id="work-board"></div>
+      </section>
+
+      <section class="page" id="page-roadmap">
+        <h1>로드맵</h1>
+        <p class="lead">아직 준비 중입니다.</p>
+        <article class="card">
+          <div class="card-header"><h2>준비 중</h2><span class="badge wait">비활성</span></div>
+          <p>원본 시스템과 표시할 필드가 아직 정해지지 않아 기능을 만들지 않았습니다. 자리만 잡아 두었고,
+             원본과 필드가 확정되면 이 화면에 붙입니다.</p>
+          <p class="help">확정이 필요한 것: 로드맵의 원본 시스템(예: Notion 데이터베이스 또는 업무 저장소 자체),
+             항목 단위와 기간 필드, 팀·부서 구분, 업무 현황과의 연결 방식.</p>
+        </article>
+      </section>
+
+      <section class="page" id="page-collection">
+        <h1>수집 현황</h1>
+        <p class="lead">외부 원본 수집이 어디까지 왔는지, 어떤 규칙으로 모았는지 봅니다. 원본 내용은 표시하지 않고 개수·시각·경로만 보여줍니다.</p>
+        <div class="collection-toolbar">
+          <div class="work-filters">
+            <select id="collection-environment"><option value="">환경 전체</option></select>
+            <button class="button" id="collection-refresh">새로고침</button>
+          </div>
+          <span class="badge" id="collection-rule-badge">규칙 -</span>
+        </div>
+        <p class="work-state" id="collection-state">불러오는 중…</p>
+        <div class="grid three" id="collection-cards"></div>
+
+        <article class="card" style="margin-top:16px">
+          <div class="card-header"><h2>최근 실행</h2><span class="badge" id="collection-runs-badge">-</span></div>
+          <div class="table-scroll">
+            <table class="audit">
+              <thead><tr>
+                <th>소스 · 환경</th><th>run id</th><th>상태</th><th>시작 (KST)</th><th>종료</th><th>최종 활동</th>
+                <th>체크포인트</th><th>원본 파일 · 바이트</th><th>원장 레코드 · 스키마 오류</th><th>skip · failure</th>
+                <th>규칙</th><th>근거 경로</th>
+              </tr></thead>
+              <tbody id="collection-runs-body"></tbody>
+            </table>
+          </div>
+          <p class="help" id="collection-runs-note"></p>
+        </article>
+
+        <article class="card" style="margin-top:16px">
+          <div class="card-header"><h2>날짜 · 요일별 수집 커버리지</h2><span class="badge" id="collection-coverage-badge">-</span></div>
+          <div class="coverage-controls">
+            <input id="coverage-start" type="date" aria-label="시작일">
+            <input id="coverage-end" type="date" aria-label="종료일">
+            <select id="coverage-group"><option value="date">날짜별</option><option value="weekday">요일별</option></select>
+            <button class="button" id="coverage-load">조회</button>
+          </div>
+          <div class="table-scroll">
+            <table class="audit"><thead id="coverage-head"></thead><tbody id="coverage-body"></tbody></table>
+          </div>
+          <p class="help" id="coverage-note"></p>
+        </article>
+
+        <article class="card" style="margin-top:16px">
+          <div class="card-header"><h2>수집 규칙 레지스트리</h2><span class="badge" id="collection-registry-badge">-</span></div>
+          <p class="help">규칙은 append-only입니다. 기존 버전을 수정하는 대신 새 버전을 추가하며, 각 버전의 content digest가 의미 변경을 감지합니다. 새로 쓰이는 manifest에는 적용 규칙 버전과 digest가 함께 기록됩니다.</p>
+          <div id="collection-rules"></div>
+        </article>
+      </section>
+
+      <section class="page" id="page-connections">
+        <h1>연결</h1>
+        <p class="lead">비밀값은 이 PC에만 저장됩니다. 저장한 뒤 반드시 연결 시험을 실행하세요.</p>
+        <div class="grid">
+          <article class="card">
+            <div class="card-header"><h2>Google 로그인 · Calendar · Drive</h2><span id="google-data-badge" class="badge wait">Calendar·Drive 권한 미승인</span></div>
+            <div class="field">
+              <label for="google-client">1. Google 로그인 및 API용 OAuth Client JSON</label>
+              <textarea id="google-client" placeholder="RLWRLD Work Assistant용 Google Cloud OAuth Client JSON 전체를 붙여넣으세요."></textarea>
+              <div class="help"><span id="google-client-state">OAuth Client 미설정</span>. 이 설정은 회사 Google 로그인과 Calendar·Drive 권한 승인에 공통으로 사용됩니다. 승인된 리디렉션 URI는 아래 보안 메뉴의 Callback 주소와 정확히 같아야 합니다.</div>
+            </div>
+            <div class="actions">
+              <button class="button" id="save-google-secret" disabled>1. OAuth Client 저장</button>
+              <a class="button primary" id="authorize-google-data" href="/auth/google/data/login" style="text-decoration:none">2. Calendar·Drive 권한 승인</a>
+              <button class="button" id="test-google">3. Calendar·Drive 연결 시험</button>
+            </div>
+            <div class="result" id="result-google">OAuth Client를 저장하면 Google 로그인이 활성화됩니다. 로그인 후 Calendar·Drive 권한을 별도로 승인하세요.</div>
+          </article>
+          <article class="card">
+            <div class="card-header"><h2>Slack</h2><span id="slack-secret-badge" class="badge wait">토큰 미설정</span></div>
+            <div class="field">
+              <label for="slack-token">User OAuth Token</label>
+              <input id="slack-token" type="password" autocomplete="new-password" placeholder="xoxp-…">
+              <div class="help">읽기 전용 수집용 user token. 저장 후 다시 표시되지 않습니다.</div>
+            </div>
+            <div class="field" style="margin-top:14px"><label for="slack-team">예상 Workspace Team ID</label><input id="slack-team" placeholder="T…"></div>
+            <div class="actions"><button class="button primary" id="save-slack-secret" disabled>토큰 저장</button><button class="button" id="test-slack">연결 시험</button></div>
+            <div class="result" id="result-slack">아직 시험하지 않았습니다.</div>
+          </article>
+          <article class="card">
+            <div class="card-header"><h2>Notion</h2><span id="notion-secret-badge" class="badge wait">토큰 미설정</span></div>
+            <div class="field">
+              <label for="notion-token">Internal Integration Secret</label>
+              <input id="notion-token" type="password" autocomplete="new-password" placeholder="ntn_… 또는 secret_…">
+              <div class="help">Read content와 댓글 읽기 capability를 켜고, 수집할 상위 페이지를 Integration에 연결하세요.</div>
+            </div>
+            <div class="actions"><button class="button primary" id="save-notion-secret" disabled>토큰 저장</button><button class="button" id="test-notion">연결 시험</button></div>
+            <div class="result" id="result-notion">아직 시험하지 않았습니다.</div>
+          </article>
+          <article class="card">
+            <div class="card-header"><h2>GitHub</h2><span id="github-secret-badge" class="badge wait">토큰 미설정</span></div>
+            <div class="field">
+              <label for="github-token">Fine-grained Personal Access Token</label>
+              <input id="github-token" type="password" autocomplete="new-password" placeholder="github_pat_…">
+              <div class="help">Metadata, Contents, Pull requests, Issues와 조직 Members를 Read로 허용하세요.</div>
+            </div>
+            <div class="field" style="margin-top:14px"><label for="github-organization">조직</label><input id="github-organization" placeholder="RLWRLD"></div>
+            <div class="actions"><button class="button primary" id="save-github-secret" disabled>토큰 저장</button><button class="button" id="test-github">연결 시험</button></div>
+            <div class="result" id="result-github">아직 시험하지 않았습니다.</div>
+          </article>
+        </div>
+        <article class="card" style="margin-top:16px">
+          <div class="connection"><div><strong>이메일</strong><small>수신·발신·스레드와 응답 대기</small></div><span class="badge">구현 예정</span></div>
+          <div class="connection"><div><strong>Slurm</strong><small>GPU 클러스터 작업과 사용자 활동</small></div><span class="badge">구현 예정</span></div>
+        </article>
+      </section>
+
+      <section class="page" id="page-storage">
+        <h1>저장소 · 백업</h1>
+        <p class="lead">로컬 영구 아카이브와 암호화 원격 백업을 설정합니다.</p>
+        <article class="card">
+          <div class="form-grid">
+            <div class="field"><label for="data-root">영구 데이터 루트</label><input id="data-root"></div>
+            <div class="field"><label for="runtime-root">NVMe 실행 데이터 루트</label><input id="runtime-root"></div>
+            <div class="field full"><label for="drive-url">Google Drive 백업 폴더 URL</label><input id="drive-url" placeholder="https://drive.google.com/drive/folders/…"></div>
+            <div class="field"><label for="drive-id">Google Drive 백업 폴더 ID</label><input id="drive-id"></div>
+            <div class="field"><label>백업 활성화</label><div class="check"><input id="drive-enabled" type="checkbox"><span class="help">OAuth·암호화·복구시험이 준비된 뒤 활성화</span></div></div>
+          </div>
+          <div class="actions"><button class="button primary save-settings">설정 저장</button></div>
+        </article>
+      </section>
+
+      <section class="page" id="page-schedules">
+        <h1>스케줄</h1>
+        <p class="lead">정기 배치가 무엇을 언제 어떻게 실행하는지, 그리고 지금 실제로 어떤 상태인지 봅니다.</p>
+        <article class="card">
+          <div class="card-header"><h2>배치 목록</h2><span class="badge" id="schedule-badge">확인 중</span></div>
+          <p class="work-state" id="schedule-state">불러오는 중…</p>
+          <div id="schedule-list"></div>
+          <p class="help">설치 · 활성 · 다음 실행은 systemd에서 읽습니다. 읽을 수 없으면 불명이라고 표시하며 추측하지 않습니다.
+             이 화면은 읽기 전용이고 systemd를 설치하거나 바꾸지 않습니다.</p>
+        </article>
+        <article class="card" style="margin-top:16px">
+          <div class="card-header"><h2>실행 시각 설정</h2></div>
+          <div class="form-grid">
+            <div class="field"><label for="timezone">타임존</label><input id="timezone"></div>
+            <div class="field"><label for="daily-hour">일일 수집 시작 시각</label><select id="daily-hour"></select><div class="help">선택한 타임존 기준 정각입니다.</div></div>
+          </div>
+          <div class="actions"><button class="button primary save-settings">설정 저장</button></div>
+        </article>
+      </section>
+
+      <section class="page" id="page-models">
+        <h1>로컬 모델</h1>
+        <p class="lead">반복 분류·요약·추출·답변 초안에 사용할 로컬 추론 서버입니다.</p>
+        <article class="card">
+          <div class="form-grid">
+            <div class="field"><label for="model-provider">Provider</label><select id="model-provider"><option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="openai-compatible">OpenAI-compatible</option></select></div>
+            <div class="field"><label for="model-name">모델 이름</label><input id="model-name" placeholder="예: qwen3:30b"></div>
+            <div class="field full"><label for="model-endpoint">API Endpoint</label><input id="model-endpoint" placeholder="http://127.0.0.1:11434"></div>
+          </div>
+          <div class="actions"><button class="button primary save-settings">설정 저장</button></div>
+        </article>
+      </section>
+
+      <section class="page" id="page-security">
+        <h1>보안</h1>
+        <p class="lead">어드민 접근과 외부 모델 전송 범위를 관리합니다.</p>
+        <article class="card">
+          <div class="form-grid">
+            <div class="field"><label for="company-domain">회사 Google Workspace 도메인</label><input id="company-domain" placeholder="rlwrld.ai"></div>
+            <div class="field"><label for="super-admin-email">슈퍼 관리자 Google 계정</label><input id="super-admin-email" type="email" placeholder="name@rlwrld.ai"></div>
+            <div class="field full"><label for="oauth-base-url">Google OAuth 공개 기준 URL</label><input id="oauth-base-url" placeholder="http://127.0.0.1:8080 또는 Tailscale HTTPS URL"><div class="help">Callback: 기준 URL + <code>/auth/google/callback</code></div></div>
+            <div class="field full"><label>비상 로컬 접근</label><input readonly value="이 PC의 http://127.0.0.1:8081/backoffice 에서만 비밀번호 로그인"></div>
+          </div>
+          <p class="help">서비스는 검증된 회사 도메인 계정만, 백오피스는 위 슈퍼 관리자 계정과 로컬 비상 관리자만 접근합니다.</p>
+          <div class="actions"><button class="button primary save-settings">설정 저장</button></div>
+        </article>
+      </section>
+
+      <section class="page" id="page-audit">
+        <h1>감사 기록</h1>
+        <p class="lead">설정과 인증정보의 변경 사실만 기록하며 비밀값은 기록하지 않습니다.</p>
+        <article class="card"><table class="audit"><thead><tr><th>시각</th><th>작업</th><th>대상</th></tr></thead><tbody id="audit-body"></tbody></table></article>
+      </section>
+    </main>
+  </div>
+
+  <div class="overlay" id="auth-overlay">
+    <form class="login" id="auth-form">
+      <h1 id="auth-title">백오피스 로그인</h1>
+      <p id="auth-description">슈퍼 관리자 회사 계정으로 로그인하세요.</p>
+      <a class="button primary hidden" style="width:100%;text-align:center;text-decoration:none" id="google-login" href="/auth/google/login?next=/backoffice">회사 Google 계정으로 로그인</a>
+      <div id="emergency-area" class="hidden">
+        <p class="help" style="margin-top:22px">이 PC에서만 사용하는 비상 슈퍼 관리자 로그인</p>
+        <div class="field"><label for="admin-password">로컬 관리자 비밀번호</label><input id="admin-password" type="password" autocomplete="current-password" minlength="12"></div>
+        <div class="field hidden" id="confirm-field"><label for="admin-password-confirm">비밀번호 확인</label><input id="admin-password-confirm" type="password" autocomplete="new-password" minlength="12"></div>
+        <button class="button" style="width:100%" type="submit" id="auth-submit">비상 로그인</button>
+      </div>
+      <div class="notice" id="auth-notice"></div>
+    </form>
+  </div>
+  <div class="overlay hidden" id="work-overlay">
+    <form class="work-dialog" id="work-form">
+      <h1 id="work-dialog-title">업무 추가</h1>
+      <p class="help" id="work-dialog-hint">제목, 담당, 요청자는 필수입니다.</p>
+      <div class="form-grid">
+        <div class="field full"><label for="work-title">제목</label><input id="work-title" maxlength="200" required></div>
+        <div class="field"><label for="work-assigned">담당</label><input id="work-assigned" placeholder="codex, claude-code, user" required></div>
+        <div class="field"><label for="work-requested">요청자</label><input id="work-requested" placeholder="hk" required></div>
+        <div class="field"><label for="work-status">상태</label><select id="work-status"></select></div>
+        <div class="field"><label for="work-priority">우선순위</label><select id="work-priority"></select></div>
+        <div class="field"><label for="work-parent">상위 업무</label><select id="work-parent"><option value="">없음</option></select></div>
+        <div class="field"><label for="work-due">마감</label><input id="work-due" type="date"></div>
+        <div class="field full"><label for="work-progress">진행 요약</label><textarea id="work-progress" maxlength="2000"></textarea></div>
+        <div class="field full"><label for="work-next">다음 행동</label><input id="work-next" maxlength="500"></div>
+        <div class="field full"><label for="work-blocker">막힘 사유</label><input id="work-blocker" maxlength="500"></div>
+        <div class="field full"><label for="work-detail">상세</label><textarea id="work-detail" maxlength="8000"></textarea></div>
+      </div>
+      <div class="notice" id="work-dialog-notice"></div>
+      <div class="actions">
+        <button class="button" type="button" id="work-cancel">취소</button>
+        <button class="button primary" type="submit" id="work-save">저장</button>
+      </div>
+    </form>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const state = { csrf: null, setupRequired: false, settings: {}, secrets: {} };
+    const $ = (id) => document.getElementById(id);
+
+    function toast(message, error = false) {
+      const node = $('toast');
+      node.textContent = message;
+      node.className = `toast show${error ? ' error' : ''}`;
+      setTimeout(() => { node.className = 'toast'; }, 2600);
+    }
+
+    async function api(path, options = {}, csrfRetried = false) {
+      const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+      if (state.csrf && options.method && !['GET', 'HEAD'].includes(options.method)) headers['X-CSRF-Token'] = state.csrf;
+      const response = await fetch(path, { credentials: 'same-origin', ...options, headers });
+      let body = {};
+      try { body = await response.json(); } catch (_) {}
+      if (!csrfRetried && response.status === 403 && body.detail === 'invalid CSRF token') {
+        const sessionResponse = await fetch('/api/v1/admin/session', { credentials: 'same-origin' });
+        const session = await sessionResponse.json();
+        if (session.authorized && session.csrf_token) {
+          state.csrf = session.csrf_token;
+          return api(path, options, true);
+        }
+      }
+      if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
+      return body;
+    }
+
+    function showAuth(session) {
+      state.setupRequired = session.setup_required;
+      $('auth-overlay').classList.remove('hidden');
+      $('auth-title').textContent = session.setup_required ? '비상 슈퍼 관리자 만들기' : '백오피스 로그인';
+      $('auth-description').textContent = session.setup_required
+        ? '이 PC에서 처음 사용할 관리자 비밀번호를 만드세요. 12자 이상이어야 합니다.'
+        : (session.authenticated && !session.authorized ? '현재 회사 계정에는 백오피스 권한이 없습니다.' : '슈퍼 관리자 회사 계정으로 로그인하세요.');
+      $('google-login').classList.toggle('hidden', !session.google_login_available);
+      $('emergency-area').classList.toggle('hidden', !session.emergency_login_available);
+      $('confirm-field').classList.toggle('hidden', !session.setup_required);
+      $('auth-submit').textContent = session.setup_required ? '비상 관리자 생성' : '비상 로그인';
+      $('admin-password').autocomplete = session.setup_required ? 'new-password' : 'current-password';
+      if (!session.google_login_available && !session.emergency_login_available) {
+        $('auth-notice').textContent = 'Google OAuth 설정은 이 PC의 로컬 백오피스에서 먼저 구성해야 합니다.';
+      }
+    }
+
+    async function initialize() {
+      for (let hour = 0; hour < 24; hour++) {
+        const option = document.createElement('option');
+        option.value = String(hour); option.textContent = `${String(hour).padStart(2, '0')}:00`;
+        $('daily-hour').appendChild(option);
+      }
+      try {
+        const session = await api('/api/v1/admin/session');
+        if (!session.authorized) return showAuth(session);
+        state.csrf = session.csrf_token;
+        $('auth-overlay').classList.add('hidden');
+        await loadSettings();
+        await loadWork();
+        startWorkPolling();
+      } catch (error) { showAuth({setup_required:false,google_login_available:false,emergency_login_available:false}); $('auth-notice').textContent = error.message; }
+    }
+
+    $('auth-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const password = $('admin-password').value;
+      if (state.setupRequired && password !== $('admin-password-confirm').value) {
+        $('auth-notice').textContent = '비밀번호가 일치하지 않습니다.'; return;
+      }
+      try {
+        await api(state.setupRequired ? '/api/v1/admin/bootstrap' : '/api/v1/admin/login', { method: 'POST', body: JSON.stringify({ password }) });
+        const session = await api('/api/v1/admin/session');
+        if (!session.authorized) return showAuth(session);
+        state.csrf = session.csrf_token;
+        $('auth-overlay').classList.add('hidden');
+        $('admin-password').value = ''; $('admin-password-confirm').value = ''; $('auth-notice').textContent = '';
+        await loadSettings();
+        await loadWork();
+        startWorkPolling();
+      } catch (error) { $('auth-notice').textContent = error.message; }
+    });
+
+    async function loadSettings() {
+      const body = await api('/api/v1/admin/settings');
+      state.settings = body.settings; state.secrets = body.secrets;
+      renderSettings();
+      await loadAudit();
+    }
+
+    function renderSettings() {
+      const s = state.settings;
+      $('company-domain').value = s.company_google_domain || '';
+      $('super-admin-email').value = s.super_admin_google_email || '';
+      $('oauth-base-url').value = s.google_oauth_base_url || '';
+      $('timezone').value = s.timezone;
+      $('daily-hour').value = String(s.daily_collection_hour);
+      $('data-root').value = s.data_root;
+      $('runtime-root').value = s.runtime_root;
+      $('drive-id').value = s.google_drive_backup_folder_id || '';
+      $('drive-url').value = s.google_drive_backup_folder_url || '';
+      $('drive-enabled').checked = Boolean(s.google_drive_backup_enabled);
+      $('slack-team').value = s.slack_expected_team_id || '';
+      $('github-organization').value = s.github_organization || 'RLWRLD';
+      $('model-provider').value = s.local_model_provider;
+      $('model-name').value = s.local_model_name || '';
+      $('model-endpoint').value = s.local_model_endpoint || '';
+      $('metric-data-root').textContent = s.data_root;
+      $('metric-drive').textContent = s.google_drive_backup_enabled ? '활성' : (s.google_drive_backup_folder_id ? '준비 중' : '미설정');
+      $('metric-slack').textContent = state.secrets.slack_token ? '인증정보 저장됨' : '미설정';
+      $('google-client-state').textContent = state.secrets.google_oauth_client ? 'OAuth Client 저장됨' : 'OAuth Client 미설정';
+      $('authorize-google-data').classList.toggle('hidden', !state.secrets.google_oauth_client);
+      setBadge('google-data-badge', state.secrets.google_token, 'Calendar·Drive 권한 승인됨', 'Calendar·Drive 권한 미승인');
+      setBadge('slack-secret-badge', state.secrets.slack_token, '토큰 저장됨', '토큰 미설정');
+      setBadge('notion-secret-badge', state.secrets.notion_token, '토큰 저장됨', '토큰 미설정');
+      setBadge('github-secret-badge', state.secrets.github_token, '토큰 저장됨', '토큰 미설정');
+    }
+
+    function setBadge(id, configured, yes, no) {
+      const badge = $(id); badge.textContent = configured ? yes : no; badge.className = configured ? 'badge ok' : 'badge wait';
+    }
+
+    function collectSettings() {
+      return {
+        company_google_domain: $('company-domain').value.trim(),
+        super_admin_google_email: $('super-admin-email').value.trim(),
+        google_oauth_base_url: $('oauth-base-url').value.trim(),
+        timezone: $('timezone').value.trim(),
+        daily_collection_hour: Number($('daily-hour').value),
+        data_root: $('data-root').value.trim(),
+        runtime_root: $('runtime-root').value.trim(),
+        google_drive_backup_folder_id: $('drive-id').value.trim(),
+        google_drive_backup_folder_url: $('drive-url').value.trim(),
+        google_drive_backup_enabled: $('drive-enabled').checked,
+        slack_expected_team_id: $('slack-team').value.trim(),
+        github_organization: $('github-organization').value.trim(),
+        local_model_provider: $('model-provider').value,
+        local_model_name: $('model-name').value.trim(),
+        local_model_endpoint: $('model-endpoint').value.trim(),
+      };
+    }
+
+    async function saveSettings() {
+      try {
+        const body = await api('/api/v1/admin/settings', { method: 'PUT', body: JSON.stringify(collectSettings()) });
+        state.settings = body.settings; state.secrets = body.secrets; renderSettings(); await loadAudit(); toast('설정을 저장했습니다.');
+      } catch (error) { toast(error.message, true); }
+    }
+
+    document.querySelectorAll('.save-settings').forEach((button) => button.addEventListener('click', saveSettings));
+
+    const secretSaveControls = [
+      ['google-client', 'save-google-secret'],
+      ['slack-token', 'save-slack-secret'],
+      ['notion-token', 'save-notion-secret'],
+      ['github-token', 'save-github-secret'],
+    ];
+    function syncSecretSaveButton(inputId, buttonId) {
+      $(buttonId).disabled = !$(inputId).value.trim();
+    }
+    secretSaveControls.forEach(([inputId, buttonId]) => {
+      $(inputId).addEventListener('input', () => syncSecretSaveButton(inputId, buttonId));
+      syncSecretSaveButton(inputId, buttonId);
+    });
+
+    $('save-google-secret').addEventListener('click', async () => {
+      const value = $('google-client').value.trim();
+      if (!value) return toast('OAuth Client JSON을 입력하세요.', true);
+      try {
+        await api('/api/v1/admin/secrets/google_oauth_client', { method: 'PUT', body: JSON.stringify({ value }) });
+        $('google-client').value = ''; syncSecretSaveButton('google-client', 'save-google-secret'); state.secrets.google_oauth_client = true; renderSettings(); await loadAudit(); toast('Google 인증정보를 저장했습니다.');
+      } catch (error) { toast(error.message, true); }
+    });
+
+    $('save-slack-secret').addEventListener('click', async () => {
+      const value = $('slack-token').value.trim();
+      if (!value) return toast('Slack token을 입력하세요.', true);
+      try {
+        await api('/api/v1/admin/secrets/slack_token', { method: 'PUT', body: JSON.stringify({ value }) });
+        $('slack-token').value = ''; syncSecretSaveButton('slack-token', 'save-slack-secret'); state.secrets.slack_token = true; renderSettings(); await saveSettings(); toast('Slack 인증정보를 저장했습니다. 연결 시험을 실행하세요.');
+      } catch (error) { toast(error.message, true); }
+    });
+
+    async function saveToken(name, inputId, label) {
+      const value = $(inputId).value.trim();
+      if (!value) return toast(`${label} 토큰을 입력하세요.`, true);
+      try {
+        await api(`/api/v1/admin/secrets/${name}_token`, { method: 'PUT', body: JSON.stringify({ value }) });
+        $(inputId).value = ''; syncSecretSaveButton(inputId, `save-${name}-secret`); state.secrets[`${name}_token`] = true; renderSettings(); await loadAudit();
+        toast(`${label} 토큰을 저장했습니다. 연결 시험을 실행하세요.`);
+      } catch (error) { toast(error.message, true); }
+    }
+
+    $('save-notion-secret').addEventListener('click', () => saveToken('notion', 'notion-token', 'Notion'));
+    $('save-github-secret').addEventListener('click', async () => { await saveSettings(); await saveToken('github', 'github-token', 'GitHub'); });
+
+    function summarizeConnection(name, result) {
+      const lines = [result.ok ? '유효한 연결입니다.' : '연결되었지만 필수 권한이 부족합니다.'];
+      if (result.identity) lines.push(`계정: ${result.identity}`);
+      if (result.workspace) lines.push(`Workspace: ${result.workspace}`);
+      if (result.organization) lines.push(`조직: ${result.organization}`);
+      if (result.team_id) lines.push(`Team ID: ${result.team_id}`);
+      if (result.has_accessible_content !== undefined) lines.push(`공유 콘텐츠 발견: ${result.has_accessible_content ? '예' : '아니오'}`);
+      if (result.repository_access !== undefined) lines.push(`저장소 접근: ${result.repository_access ? '예' : '아니오'}`);
+      if (result.missing_scopes?.length) lines.push(`부족한 권한: ${result.missing_scopes.join(', ')}`);
+      if (result.note) lines.push(result.note);
+      return lines.join('\n');
+    }
+
+    async function testConnection(name) {
+      const node = $(`result-${name}`); node.textContent = 'API 연결을 확인하고 있습니다…'; node.className = 'result';
+      try {
+        const body = await api(`/api/v1/admin/connections/${name}/test`, { method: 'POST', body: '{}' });
+        node.textContent = summarizeConnection(name, body.result);
+        node.className = body.result.ok ? 'result ok' : 'result error';
+        await loadAudit();
+      } catch (error) { node.textContent = error.message; node.className = 'result error'; }
+    }
+
+    ['google', 'slack', 'notion', 'github'].forEach((name) => {
+      $(`test-${name}`).addEventListener('click', () => testConnection(name));
+    });
+
+    async function loadAudit() {
+      try {
+        const body = await api('/api/v1/admin/audit?limit=100');
+        const table = $('audit-body'); table.textContent = '';
+        if (!body.items.length) {
+          const row = document.createElement('tr'); const cell = document.createElement('td'); cell.colSpan = 3; cell.textContent = '기록이 없습니다.'; row.appendChild(cell); table.appendChild(row); return;
+        }
+        body.items.forEach((item) => {
+          const row = document.createElement('tr');
+          [new Date(item.at).toLocaleString(), item.action, JSON.stringify(item.details || {})].forEach((value) => { const cell = document.createElement('td'); cell.textContent = value; row.appendChild(cell); });
+          table.appendChild(row);
+        });
+      } catch (_) {}
+    }
+
+    // Labels and columns are the server's schema, fetched once from
+    // /api/v1/admin/work/meta.  These literals are only the fallback for a
+    // meta request that failed, and they must stay a *total* partition of the
+    // status set for the same reason the server's do.
+    let WORK_STATUS_LABELS = {
+      in_progress: '진행 중', ready: '다음 할 일', todo: '해야 할 일', backlog: '백로그',
+      waiting: '대기', blocked: '막힘', done: '완료', cancelled: '취소',
+    };
+    const WORK_PRIORITY_LABELS = { urgent: '긴급', high: '높음', normal: '보통', low: '낮음' };
+    let WORK_COLUMNS = [
+      { key: 'in_progress', title: '진행 중', statuses: ['in_progress'] },
+      { key: 'ready', title: '다음 할 일', statuses: ['ready'] },
+      { key: 'todo', title: '해야 할 일', statuses: ['todo'] },
+      { key: 'backlog', title: '백로그', statuses: ['backlog'] },
+      { key: 'held', title: '대기 · 막힘', statuses: ['waiting', 'blocked'] },
+      { key: 'closed', title: '최근 완료', statuses: ['done', 'cancelled'], recentDays: 14 },
+    ];
+    const WORK_DOCUMENT_VERSION = 2;
+    const WORK_RESIDUE = { key: 'unclassified', title: '미분류' };
+    const WORK_POLL_MS = 15000;
+    const workState = {
+      items: [], loaded: false, timer: null, editing: null, busy: false, assignee: '',
+      total: 0, statusCounts: {}, metaLoaded: false, migratedFrom: null,
+    };
+
+    async function loadWorkMeta() {
+      if (workState.metaLoaded) return;
+      try {
+        const meta = await api('/api/v1/admin/work/meta');
+        if (meta.status_labels) WORK_STATUS_LABELS = meta.status_labels;
+        if (Array.isArray(meta.columns) && meta.columns.length) {
+          WORK_COLUMNS = meta.columns.map((column) => ({
+            key: column.key, title: column.title, statuses: column.statuses,
+            recentDays: column.recent_days,
+          }));
+        }
+        if (meta.residue_column) { WORK_RESIDUE.key = meta.residue_column.key; WORK_RESIDUE.title = meta.residue_column.title; }
+        workState.metaLoaded = true;
+        fillWorkSelect('work-status', WORK_STATUS_LABELS);
+      } catch (_) {
+        // Keep the built-in fallback rather than rendering an empty board.
+      }
+    }
+
+    function workRelativeTime(value) {
+      if (!value) return '-';
+      const moment = new Date(value);
+      if (Number.isNaN(moment.getTime())) return '-';
+      const minutes = Math.round((Date.now() - moment.getTime()) / 60000);
+      if (minutes < 1) return '방금';
+      if (minutes < 60) return `${minutes}분 전`;
+      if (minutes < 1440) return `${Math.round(minutes / 60)}시간 전`;
+      if (minutes < 20160) return `${Math.round(minutes / 1440)}일 전`;
+      return moment.toLocaleDateString();
+    }
+
+    function workChip(label, className = '') {
+      const node = document.createElement('span');
+      node.className = `work-chip${className ? ' ' + className : ''}`;
+      node.textContent = label;
+      return node;
+    }
+
+    function workLine(label, value) {
+      const node = document.createElement('div');
+      node.className = 'work-line';
+      const name = document.createElement('b');
+      name.textContent = `${label} `;
+      node.appendChild(name);
+      node.appendChild(document.createTextNode(value));
+      return node;
+    }
+
+    function workCard(item, byId) {
+      const card = document.createElement('article');
+      card.className = 'work-card';
+      const title = document.createElement('div');
+      title.className = 'work-card-title';
+      title.textContent = item.title;
+      card.appendChild(title);
+
+      const chips = document.createElement('div');
+      chips.className = 'work-chips';
+      chips.appendChild(workChip(item.assigned_to, 'assignee'));
+      chips.appendChild(workChip(WORK_PRIORITY_LABELS[item.priority] || item.priority, `priority-${item.priority}`));
+      chips.appendChild(workChip(WORK_STATUS_LABELS[item.status] || item.status));
+      chips.appendChild(workChip(workRelativeTime(item.updated_at)));
+      if (item.parent_id && byId.has(item.parent_id)) chips.appendChild(workChip(`상위: ${byId.get(item.parent_id).title}`));
+      card.appendChild(chips);
+
+      if (item.progress_summary) card.appendChild(workLine('진행', item.progress_summary));
+      if (item.next_action) card.appendChild(workLine('다음', item.next_action));
+      if (item.blocker) {
+        const blocker = workLine('막힘', item.blocker);
+        blocker.style.color = 'var(--danger)';
+        card.appendChild(blocker);
+      }
+      if (item.due_at) card.appendChild(workLine('마감', new Date(item.due_at).toLocaleDateString()));
+
+      const actions = document.createElement('div');
+      actions.className = 'work-card-actions';
+      const select = document.createElement('select');
+      select.setAttribute('aria-label', '상태 변경');
+      Object.keys(WORK_STATUS_LABELS).forEach((status) => {
+        const option = document.createElement('option');
+        option.value = status; option.textContent = WORK_STATUS_LABELS[status];
+        if (status === item.status) option.selected = true;
+        select.appendChild(option);
+      });
+      select.addEventListener('change', () => changeWorkStatus(item, select.value));
+      actions.appendChild(select);
+
+      const edit = document.createElement('button');
+      edit.type = 'button'; edit.className = 'button'; edit.textContent = '편집';
+      edit.addEventListener('click', () => openWorkEditor(item));
+      actions.appendChild(edit);
+
+      const archive = document.createElement('button');
+      archive.type = 'button'; archive.className = 'button danger'; archive.textContent = '보관';
+      archive.addEventListener('click', () => archiveWork(item));
+      actions.appendChild(archive);
+      card.appendChild(actions);
+      return card;
+    }
+
+    function workVisibleItems() {
+      return workState.items.filter((item) => !workState.assignee || item.assigned_to === workState.assignee);
+    }
+
+    function workColumnItems(visible) {
+      // The board is a total partition of what it was given: every item lands
+      // in exactly one column, or in the residue column, or is counted as aged
+      // out of a dated column.  A status no column claims must be loud, not
+      // invisible -- that is how an in_progress item went missing before.
+      const placed = new Set();
+      const columns = WORK_COLUMNS.map((column) => {
+        const items = visible.filter((item) => {
+          if (!column.statuses.includes(item.status)) return false;
+          if (column.recentDays) {
+            const stamp = new Date(item.completed_at || item.updated_at).getTime();
+            if (Number.isFinite(stamp) && stamp < Date.now() - column.recentDays * 86400000) return false;
+          }
+          placed.add(item.id);
+          return true;
+        });
+        return { ...column, items };
+      });
+      const claimed = new Set(WORK_COLUMNS.flatMap((column) => column.statuses));
+      const leftover = visible.filter((item) => !placed.has(item.id));
+      const unclaimed = leftover.filter((item) => !claimed.has(item.status));
+      columns.push({ ...WORK_RESIDUE, statuses: [], items: unclaimed, residue: true });
+      return { columns, agedOut: leftover.length - unclaimed.length };
+    }
+
+    function renderWork() {
+      const board = $('work-board');
+      board.textContent = '';
+      const byId = new Map(workState.items.map((item) => [item.id, item]));
+      const visible = workVisibleItems();
+      const { columns, agedOut } = workColumnItems(visible);
+      columns.forEach((column) => {
+        if (column.residue && !column.items.length) return;
+        const section = document.createElement('section');
+        section.className = `work-column${column.residue ? ' residue' : ''}`;
+        const header = document.createElement('header');
+        const heading = document.createElement('h2');
+        heading.textContent = column.title;
+        const count = document.createElement('span');
+        count.className = 'badge';
+        count.textContent = String(column.items.length);
+        header.appendChild(heading); header.appendChild(count);
+        section.appendChild(header);
+        if (column.residue) {
+          const warning = document.createElement('p');
+          warning.className = 'work-empty';
+          warning.style.color = 'var(--danger)';
+          warning.textContent = '어느 단계에도 속하지 않는 상태입니다. 화면이 스키마를 따라가지 못하고 있습니다.';
+          section.appendChild(warning);
+        }
+        const list = document.createElement('div');
+        list.className = 'work-list';
+        if (!column.items.length) {
+          const empty = document.createElement('p');
+          empty.className = 'work-empty';
+          empty.textContent = '해당하는 업무가 없습니다.';
+          list.appendChild(empty);
+        } else {
+          column.items.forEach((item) => list.appendChild(workCard(item, byId)));
+        }
+        section.appendChild(list);
+        board.appendChild(section);
+      });
+      renderWorkHint(visible, agedOut);
+      renderWorkAssigneeFilter();
+    }
+
+    function renderWorkHint(visible, agedOut) {
+      // Anything the board is not showing is stated here.  A filtered count
+      // must never be able to pass for the complete picture.
+      const notes = [];
+      const hidden = workState.total - visible.length;
+      if (workState.assignee) notes.push(`담당 '${workState.assignee}' 필터가 켜져 있어 ${hidden}건을 숨기고 있습니다`);
+      else if (hidden > 0) notes.push(`${hidden}건이 목록에 없습니다`);
+      if (agedOut > 0) notes.push(`완료된 지 오래된 ${agedOut}건은 '최근 완료'에서 제외했습니다`);
+      if (workState.migratedFrom) notes.push(`저장 문서가 v${workState.migratedFrom}이며 다음 저장에서 v${WORK_DOCUMENT_VERSION}로 올라갑니다`);
+      const node = $('work-hint');
+      node.textContent = '';
+      if (!notes.length) return;
+      const strong = document.createElement('b');
+      strong.textContent = '표시 범위: ';
+      node.appendChild(strong);
+      node.appendChild(document.createTextNode(notes.join(' · ')));
+    }
+
+    function renderWorkAssigneeFilter() {
+      const select = $('work-filter-assignee');
+      const assignees = [...new Set(workState.items.map((item) => item.assigned_to))].sort();
+      if (select.dataset.signature === assignees.join(',')) return;
+      select.dataset.signature = assignees.join(',');
+      select.textContent = '';
+      const all = document.createElement('option');
+      all.value = ''; all.textContent = '담당 전체';
+      select.appendChild(all);
+      assignees.forEach((name) => {
+        const option = document.createElement('option');
+        option.value = name; option.textContent = name;
+        select.appendChild(option);
+      });
+      select.value = assignees.includes(workState.assignee) ? workState.assignee : '';
+      workState.assignee = select.value;
+    }
+
+    function setWorkState(message, isError = false) {
+      const node = $('work-state');
+      node.textContent = message;
+      node.className = isError ? 'work-state error' : 'work-state';
+    }
+
+    async function loadWork({ quiet = false } = {}) {
+      // A poll must never discard what the operator is typing.
+      if (quiet && (workState.editing || workState.busy)) return;
+      if (!quiet && !workState.loaded) setWorkState('불러오는 중…');
+      try {
+        await loadWorkMeta();
+        const body = await api('/api/v1/admin/work/items');
+        workState.items = body.items || [];
+        workState.total = typeof body.total === 'number' ? body.total : workState.items.length;
+        workState.statusCounts = body.status_counts || {};
+        workState.migratedFrom = body.migrated_from || null;
+        workState.loaded = true;
+        if (workState.editing || workState.busy) return;
+        renderWork();
+        setWorkState(`업무 ${workVisibleItems().length}건 표시 · 전체 ${workState.total}건 · 마지막 확인 ${new Date().toLocaleTimeString()}`);
+      } catch (error) {
+        setWorkState(`업무 정보를 불러오지 못했습니다: ${error.message}`, true);
+      }
+    }
+
+    function startWorkPolling() {
+      stopWorkPolling();
+      workState.timer = setInterval(() => loadWork({ quiet: true }), WORK_POLL_MS);
+    }
+
+    function stopWorkPolling() {
+      if (workState.timer) { clearInterval(workState.timer); workState.timer = null; }
+    }
+
+    function fillWorkSelect(id, labels) {
+      const select = $(id);
+      select.textContent = '';
+      Object.keys(labels).forEach((value) => {
+        const option = document.createElement('option');
+        option.value = value; option.textContent = labels[value];
+        select.appendChild(option);
+      });
+    }
+
+    function openWorkEditor(item) {
+      // A non-null `editing` marks the form as active, so polling never
+      // re-renders the board underneath what the operator is typing.
+      workState.editing = item ? { ...item } : { id: null };
+      $('work-dialog-title').textContent = item ? '업무 편집' : '업무 추가';
+      $('work-dialog-notice').textContent = '';
+      const parent = $('work-parent');
+      parent.textContent = '';
+      const none = document.createElement('option');
+      none.value = ''; none.textContent = '없음';
+      parent.appendChild(none);
+      workState.items
+        .filter((candidate) => !item || candidate.id !== item.id)
+        .forEach((candidate) => {
+          const option = document.createElement('option');
+          option.value = candidate.id; option.textContent = candidate.title;
+          parent.appendChild(option);
+        });
+      $('work-title').value = item ? item.title : '';
+      $('work-assigned').value = item ? item.assigned_to : '';
+      $('work-requested').value = item ? item.requested_by : '';
+      $('work-status').value = item ? item.status : 'backlog';
+      $('work-priority').value = item ? item.priority : 'normal';
+      parent.value = item && item.parent_id ? item.parent_id : '';
+      $('work-due').value = item && item.due_at ? item.due_at.slice(0, 10) : '';
+      $('work-progress').value = item ? item.progress_summary || '' : '';
+      $('work-next').value = item ? item.next_action || '' : '';
+      $('work-blocker').value = item ? item.blocker || '' : '';
+      $('work-detail').value = item ? item.detail || '' : '';
+      $('work-overlay').classList.remove('hidden');
+      $('work-title').focus();
+    }
+
+    function closeWorkEditor() {
+      workState.editing = null;
+      $('work-overlay').classList.add('hidden');
+    }
+
+    function workFormFields() {
+      return {
+        title: $('work-title').value.trim(),
+        assigned_to: $('work-assigned').value.trim(),
+        requested_by: $('work-requested').value.trim(),
+        status: $('work-status').value,
+        priority: $('work-priority').value,
+        parent_id: $('work-parent').value || null,
+        due_at: $('work-due').value || null,
+        progress_summary: $('work-progress').value.trim(),
+        next_action: $('work-next').value.trim(),
+        blocker: $('work-blocker').value.trim() || null,
+        detail: $('work-detail').value.trim() || null,
+      };
+    }
+
+    $('work-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const fields = workFormFields();
+      const editing = workState.editing && workState.editing.id ? workState.editing : null;
+      workState.busy = true;
+      try {
+        if (editing) {
+          // Send only what changed, so a concurrent edit to another field survives.
+          const changed = {};
+          Object.keys(fields).forEach((key) => {
+            const before = key === 'due_at' ? (editing.due_at || '').slice(0, 10) || null : (editing[key] ?? null);
+            const after = fields[key] === '' && before === null ? null : fields[key];
+            if (JSON.stringify(before) !== JSON.stringify(after)) changed[key] = after;
+          });
+          if (!Object.keys(changed).length) { closeWorkEditor(); workState.busy = false; return; }
+          await api(`/api/v1/admin/work/items/${editing.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ fields: changed, expected_revision: editing.revision }),
+          });
+        } else {
+          await api('/api/v1/admin/work/items', { method: 'POST', body: JSON.stringify({ fields }) });
+        }
+        closeWorkEditor();
+        workState.busy = false;
+        await loadWork();
+        toast(editing ? '업무를 수정했습니다.' : '업무를 추가했습니다.');
+      } catch (error) {
+        workState.busy = false;
+        $('work-dialog-notice').textContent = error.message;
+      }
+    });
+
+    async function changeWorkStatus(item, status) {
+      if (status === item.status) return;
+      workState.busy = true;
+      try {
+        await api(`/api/v1/admin/work/items/${item.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ fields: { status }, expected_revision: item.revision }),
+        });
+        workState.busy = false;
+        await loadWork();
+        toast(`상태를 ${WORK_STATUS_LABELS[status]}(으)로 바꿨습니다.`);
+      } catch (error) {
+        workState.busy = false;
+        toast(error.message, true);
+        await loadWork();
+      }
+    }
+
+    async function archiveWork(item) {
+      if (!confirm(`"${item.title}" 업무를 보관할까요? 목록에서만 사라지고 기록은 남습니다.`)) return;
+      workState.busy = true;
+      try {
+        await api(`/api/v1/admin/work/items/${item.id}/archive`, {
+          method: 'POST',
+          body: JSON.stringify({ expected_revision: item.revision }),
+        });
+        workState.busy = false;
+        await loadWork();
+        toast('업무를 보관했습니다.');
+      } catch (error) {
+        workState.busy = false;
+        toast(error.message, true);
+        await loadWork();
+      }
+    }
+
+    $('work-add').addEventListener('click', () => openWorkEditor(null));
+    $('work-cancel').addEventListener('click', closeWorkEditor);
+    $('work-refresh').addEventListener('click', () => loadWork());
+    $('work-filter-assignee').addEventListener('change', (event) => {
+      workState.assignee = event.target.value;
+      renderWork();
+      setWorkState(`업무 ${workVisibleItems().length}건 표시 · 전체 ${workState.total}건 · 마지막 확인 ${new Date().toLocaleTimeString()}`);
+    });
+    fillWorkSelect('work-status', WORK_STATUS_LABELS);
+    fillWorkSelect('work-priority', WORK_PRIORITY_LABELS);
+
+
+    // ------------------------------------------------------------ 수집 현황
+    const COLLECTION_SOURCE_LABELS = {
+      slack: 'Slack', notion: 'Notion', 'google-calendar': 'Google Calendar',
+      google_calendar: 'Google Calendar',
+    };
+    const COVERAGE_LABELS = {
+      collected: '수집됨', partial: '부분 수집', running: '진행 중', failed: '실패',
+      not_collected: '미수집', unknown: '불명',
+    };
+    const RUN_STATE_LABELS = {
+      success: '성공', success_with_skips: '성공 (스킵 있음)', degraded: '저하', failed: '실패',
+      running: '진행 중', stale: '중단 추정', malformed: 'manifest 손상', unknown: '불명',
+    };
+    const RULE_ATTRIBUTION_LABELS = {
+      declared: '명시', inferred: '추론', legacy: 'legacy', unknown: '불명',
+    };
+    const DENSITY_LABELS = {
+      day_slice: '일자 슬라이스', incremental_continuous: '연속 증분', unknown: '불명',
+    };
+    const COMPLETENESS_LABELS = { complete: '완전', incomplete: '불완전', unknown: '불명' };
+    const COLLECTION_POLL_MS = 20000;
+    const collectionState = { timer: null, rulesLoaded: false, busy: false, environments: [] };
+
+    function collectionBytes(value) {
+      if (value === null || value === undefined) return '불명';
+      const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+      let size = Number(value); let index = 0;
+      while (size >= 1024 && index < units.length - 1) { size /= 1024; index += 1; }
+      return `${index === 0 ? size : size.toFixed(1)} ${units[index]}`;
+    }
+
+    function collectionWhen(value, { dateOnly = false } = {}) {
+      if (!value) return '-';
+      const moment = new Date(value);
+      if (Number.isNaN(moment.getTime())) return '-';
+      return dateOnly ? moment.toLocaleDateString() : moment.toLocaleString();
+    }
+
+    function collectionPill(text, className) {
+      const node = document.createElement('span');
+      node.className = `cov ${className || ''}`.trim();
+      node.textContent = text;
+      return node;
+    }
+
+    function collectionCell(row, ...nodes) {
+      const cell = document.createElement('td');
+      const wrap = document.createElement('div');
+      wrap.className = 'collection-cell';
+      nodes.filter(Boolean).forEach((node) => wrap.appendChild(node));
+      cell.appendChild(wrap);
+      row.appendChild(cell);
+      return cell;
+    }
+
+    function collectionNote(text, title) {
+      if (text === null || text === undefined || text === '') return null;
+      const node = document.createElement('small');
+      node.textContent = text;
+      if (title) node.title = title;
+      return node;
+    }
+
+    function collectionRuleLabel(rule) {
+      if (!rule || !rule.version) return '불명';
+      const attribution = RULE_ATTRIBUTION_LABELS[rule.attribution] || rule.attribution || '불명';
+      return `${rule.version} · ${attribution}`;
+    }
+
+    function setCollectionState(message, isError = false) {
+      const node = $('collection-state');
+      node.textContent = message;
+      node.className = `work-state${isError ? ' error' : ''}`;
+    }
+
+    function renderCollectionCards(overview) {
+      const host = $('collection-cards');
+      host.textContent = '';
+      overview.cards.forEach((card) => {
+        const article = document.createElement('article');
+        article.className = 'card';
+        const label = document.createElement('div');
+        label.className = 'label';
+        label.textContent = COLLECTION_SOURCE_LABELS[card.source] || card.source;
+        article.appendChild(label);
+
+        const active = (card.active || [])[0];
+        const metric = document.createElement('div');
+        metric.className = 'metric';
+        metric.style.fontSize = '17px';
+        const last = card.last_run;
+        metric.textContent = active
+          ? (RUN_STATE_LABELS[active.state] || active.state)
+          : (last ? (RUN_STATE_LABELS[last.state] || last.state) : '실행 기록 없음');
+        article.appendChild(metric);
+
+        const lines = [];
+        if (active) {
+          lines.push(`진행 run ${active.run_id} · ${active.environment}`);
+          lines.push(`원본 ${active.raw_file_count ?? '불명'}개 · ${collectionBytes(active.raw_bytes)}`);
+          lines.push(`최종 활동 ${collectionWhen(active.last_activity_at)}`);
+          if (active.state_reason) lines.push(active.state_reason);
+        } else if (last) {
+          lines.push(`마지막 run ${last.run_id} · ${last.environment}`);
+          lines.push(`종료 ${collectionWhen(last.finished_at || last.last_activity_at)}`);
+          lines.push(`규칙 ${collectionRuleLabel(last.rule)}`);
+        }
+        if (card.last_success) {
+          lines.push(`마지막 성공 ${collectionWhen(card.last_success.finished_at || card.last_success.last_activity_at)}`);
+        }
+        lines.push(`실행 ${card.runs}건 · ${Object.entries(card.states).map(([state, count]) => `${RUN_STATE_LABELS[state] || state} ${count}`).join(', ') || '없음'}`);
+        lines.forEach((text) => {
+          const line = document.createElement('div');
+          line.className = 'work-line';
+          line.textContent = text;
+          article.appendChild(line);
+        });
+        host.appendChild(article);
+      });
+    }
+
+    function renderCollectionRuns(payload) {
+      const body = $('collection-runs-body');
+      body.textContent = '';
+      const runs = payload.recent_runs || payload.items || [];
+      if (!runs.length) {
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 12; cell.textContent = '실행 기록이 없습니다.';
+        row.appendChild(cell); body.appendChild(row); return;
+      }
+      runs.forEach((run) => {
+        const row = document.createElement('tr');
+        collectionCell(row,
+          collectionNote(COLLECTION_SOURCE_LABELS[run.source] || run.source),
+          collectionNote(run.environment));
+        collectionCell(row, collectionNote(run.run_id));
+        const status = collectionPill(RUN_STATE_LABELS[run.state] || run.state, run.state);
+        collectionCell(row, status,
+          collectionNote(run.state_reason || run.malformed_reason || null),
+          collectionNote(run.capture_density ? `밀도 ${run.capture_density}${run.dry_run ? ' · dry-run' : ''}` : null));
+        collectionCell(row, collectionNote(collectionWhen(run.started_at)));
+        collectionCell(row, collectionNote(collectionWhen(run.finished_at)));
+        collectionCell(row, collectionNote(collectionWhen(run.last_activity_at)));
+        collectionCell(row, collectionNote(
+          run.checkpoint_advanced === true ? '전진' : run.checkpoint_advanced === false ? '유지' : '불명'));
+        collectionCell(row,
+          collectionNote(`${run.raw_file_count ?? '불명'}개 · ${collectionBytes(run.raw_bytes)}`),
+          collectionNote(run.raw_from_manifest ? 'manifest 기준' : '디렉터리 스캔'),
+          collectionNote(run.raw_scan_truncated ? '스캔 상한 도달' : null));
+        collectionCell(row,
+          collectionNote(`레코드 ${run.ledger_records ?? '불명'}`, run.ledger_reason || ''),
+          collectionNote(`스키마 오류 ${run.ledger_schema_errors_known ? run.ledger_schema_errors : '불명'}`));
+        const skipKinds = (run.skip_kinds || []).map((entry) => `${entry.kind} ${entry.count}`).join(', ');
+        const errorKinds = (run.error_kinds || []).map((entry) => `${entry.kind} ${entry.count}`).join(', ');
+        collectionCell(row,
+          collectionNote(`skip ${run.skips_total ?? '불명'} · failure ${run.errors_total ?? '불명'}`),
+          collectionNote(skipKinds || null, skipKinds),
+          collectionNote(errorKinds || null, errorKinds),
+          collectionNote(run.truncated ? `truncated ${run.truncation_total ?? ''}`.trim() : null));
+        collectionCell(row,
+          collectionNote(collectionRuleLabel(run.rule)),
+          collectionNote(run.rule && run.rule.digest ? run.rule.digest.slice(0, 19) : null,
+            run.rule ? (run.rule.digest || '') : ''),
+          collectionNote(run.rule && run.rule.evidence && run.rule.evidence.length
+            ? `근거 ${run.rule.evidence.join(', ')}` : null));
+        const evidence = run.manifest_path || run.raw_run_dir || '-';
+        collectionCell(row,
+          collectionNote(evidence, evidence),
+          collectionNote(run.manifest_revisions > 1 ? `manifest ${run.manifest_revisions}회 기록` : null));
+        body.appendChild(row);
+      });
+      const errors = payload.manifest_errors || [];
+      $('collection-runs-note').textContent = errors.length
+        ? `읽을 수 없는 manifest ${errors.length}건은 성공으로 집계하지 않고 격리했습니다: ${errors.map((item) => item.manifest_path || item.run_id).join(', ')}`
+        : '읽을 수 없는 manifest는 없습니다.';
+      $('collection-runs-badge').textContent = `${runs.length}건 표시`;
+    }
+
+    function coverageCellNode(cell) {
+      const wrap = document.createElement('div');
+      wrap.className = 'collection-cell';
+      wrap.appendChild(collectionPill(COVERAGE_LABELS[cell.coverage] || cell.coverage, cell.coverage));
+      const versions = (cell.rule_versions || [])
+        .map((entry) => `${entry.version || '불명'}·${RULE_ATTRIBUTION_LABELS[entry.attribution] || entry.attribution}${entry.count ? ` ×${entry.count}` : ''}`)
+        .join(', ');
+      const runs = cell.runs_known ? `실행 ${cell.runs}회` : '실행 횟수 불명';
+      [
+        versions || '규칙 근거 없음',
+        `${runs} · 최종 ${cell.last_status ? (RUN_STATE_LABELS[cell.last_status] || cell.last_status) : '-'}`,
+        `밀도 ${DENSITY_LABELS[cell.density] || '불명'} · 완전성 ${COMPLETENESS_LABELS[cell.completeness] || '불명'}`,
+      ].forEach((text) => { const node = collectionNote(text); if (node) wrap.appendChild(node); });
+      if (cell.evidence && cell.evidence.length) {
+        const node = collectionNote(cell.evidence[0] + (cell.evidence.length > 1 ? ` 외 ${cell.evidence.length - 1}건` : ''), cell.evidence.join('\n'));
+        if (node) wrap.appendChild(node);
+      }
+      (cell.notes || []).forEach((text) => { const node = collectionNote(text); if (node) wrap.appendChild(node); });
+      return wrap;
+    }
+
+    function renderCoverage(payload) {
+      const head = $('coverage-head');
+      const body = $('coverage-body');
+      head.textContent = ''; body.textContent = '';
+      const headRow = document.createElement('tr');
+      [payload.group === 'weekday' ? '요일' : '날짜 (KST)', ...payload.sources.map((source) => COLLECTION_SOURCE_LABELS[source] || source)]
+        .forEach((label) => { const cell = document.createElement('th'); cell.textContent = label; headRow.appendChild(cell); });
+      head.appendChild(headRow);
+
+      if (payload.group === 'weekday') {
+        (payload.weekday_rows || []).forEach((row) => {
+          const tr = document.createElement('tr');
+          const first = document.createElement('td');
+          first.textContent = `${row.weekday} (${row.dates}일)`;
+          tr.appendChild(first);
+          payload.sources.forEach((source) => {
+            const cell = row.cells[source] || {};
+            const td = document.createElement('td');
+            const wrap = document.createElement('div');
+            wrap.className = 'collection-cell';
+            Object.entries(cell.coverage_counts || {}).forEach(([key, count]) => {
+              wrap.appendChild(collectionPill(`${COVERAGE_LABELS[key] || key} ${count}`, key));
+            });
+            const versions = Object.entries(cell.rule_versions || {}).map(([label, count]) => `${label} ×${count}`).join(', ');
+            [
+              cell.runs_known ? `실행 합계 ${cell.runs}회` : '실행 횟수 불명',
+              versions || '규칙 근거 없음',
+              `미수집 ${cell.dates_not_collected}일`,
+            ].forEach((text) => { const node = collectionNote(text); if (node) wrap.appendChild(node); });
+            td.appendChild(wrap); tr.appendChild(td);
+          });
+          body.appendChild(tr);
+        });
+      } else {
+        payload.rows.forEach((row) => {
+          const tr = document.createElement('tr');
+          const first = document.createElement('td');
+          first.textContent = `${row.date} (${row.weekday})`;
+          tr.appendChild(first);
+          payload.sources.forEach((source) => {
+            const td = document.createElement('td');
+            td.appendChild(coverageCellNode(row.cells[source] || {}));
+            tr.appendChild(td);
+          });
+          body.appendChild(tr);
+        });
+      }
+      const inventory = payload.legacy_inventory || {};
+      const observed = Object.entries(inventory.observed || {})
+        .map(([source, value]) => `${COLLECTION_SOURCE_LABELS[source] || source} ${value.first}~${value.last} (${value.dates}일)`)
+        .join(' · ');
+      $('collection-coverage-badge').textContent = `${payload.start} ~ ${payload.end}`;
+      $('coverage-note').textContent = [
+        `KST 기준. 근거가 없는 날짜는 미수집, 근거가 있어도 판정할 수 없으면 불명으로 표시합니다.`,
+        inventory.complete ? `V0 legacy 인벤토리 완전 · ${observed || '관측 없음'}` : `V0 legacy 인벤토리 불완전 (${inventory.reason || '사유 불명'}) — 부재는 미수집의 근거가 아닙니다.`,
+        payload.legacy_meta_probed ? 'legacy meta.json 확인함' : `legacy meta.json 미확인 (조회 범위가 넓음)`,
+        payload.range_truncated ? '조회 범위가 상한으로 잘렸습니다.' : '',
+      ].filter(Boolean).join(' · ');
+    }
+
+    function renderCollectionRules(registry) {
+      const host = $('collection-rules');
+      host.textContent = '';
+      registry.rules.forEach((rule) => {
+        const block = document.createElement('article');
+        block.className = 'rule-block';
+        const header = document.createElement('header');
+        const title = document.createElement('h3');
+        title.textContent = `${rule.version} · ${rule.title}`;
+        header.appendChild(title);
+        header.appendChild(collectionPill(rule.status === 'active' ? '적용 중' : '대체됨', rule.status === 'active' ? 'collected' : 'unknown'));
+        block.appendChild(header);
+
+        const digest = document.createElement('div');
+        digest.className = 'mono';
+        digest.textContent = `digest ${rule.digest} · registry schema v${rule.registry_schema_version}`;
+        block.appendChild(digest);
+
+        [
+          rule.summary,
+          `적용 기간: ${rule.effective.start || '불명'} ~ ${rule.effective.end || (rule.status === 'active' ? '현재' : '불명')} (${rule.effective.basis})`,
+          `manifest schema ${rule.manifest_schema_version ?? '없음'} · ledger schema ${rule.ledger_schema_version ?? '없음'} · source schema ${rule.source_schema_version ?? '없음'}`,
+          `capture profile: ${rule.capture_profiles.join(', ') || '없음'}`,
+        ].forEach((text) => {
+          const line = document.createElement('div');
+          line.className = 'work-line';
+          line.textContent = text;
+          block.appendChild(line);
+        });
+
+        if (rule.storage_layout && rule.storage_layout.length) {
+          block.appendChild(ruleList('저장 위치', rule.storage_layout));
+        }
+        if (rule.unknowns && rule.unknowns.length) {
+          block.appendChild(ruleList('결손 · 불명 항목', rule.unknowns));
+        }
+        rule.sources.forEach((source) => {
+          const section = document.createElement('div');
+          section.className = 'rule-source';
+          const heading = document.createElement('h4');
+          heading.textContent = `${source.label} — ${DENSITY_LABELS[source.density_kind] || source.density_kind}`;
+          section.appendChild(heading);
+          const scope = document.createElement('div');
+          scope.className = 'work-line';
+          scope.textContent = `범위: ${source.scope}`;
+          section.appendChild(scope);
+          const density = document.createElement('div');
+          density.className = 'work-line';
+          density.textContent = `밀도: ${source.density}`;
+          section.appendChild(density);
+          [['포함', source.includes], ['제외', source.excludes], ['알려진 한계', source.known_limitations],
+           ['근거', source.evidence], ['불명', source.unknowns]].forEach(([label, values]) => {
+            if (values && values.length) section.appendChild(ruleList(label, values));
+          });
+          block.appendChild(section);
+        });
+        host.appendChild(block);
+      });
+      $('collection-registry-badge').textContent = registry.digests_pinned
+        ? `append-only 확인됨 · 활성 ${registry.active_version}`
+        : '경고: 게시된 규칙의 digest가 일치하지 않습니다';
+    }
+
+    function ruleList(label, values) {
+      const wrap = document.createElement('div');
+      const heading = document.createElement('div');
+      heading.className = 'work-line';
+      const strong = document.createElement('b');
+      strong.textContent = label;
+      heading.appendChild(strong);
+      wrap.appendChild(heading);
+      const list = document.createElement('ul');
+      values.forEach((value) => { const item = document.createElement('li'); item.textContent = value; list.appendChild(item); });
+      wrap.appendChild(list);
+      return wrap;
+    }
+
+    function fillCollectionEnvironments(environments) {
+      const names = new Set();
+      Object.values(environments || {}).forEach((list) => (list || []).forEach((name) => names.add(name)));
+      const ordered = [...names].sort();
+      if (ordered.join('|') === collectionState.environments.join('|')) return;
+      collectionState.environments = ordered;
+      const select = $('collection-environment');
+      const current = select.value;
+      select.textContent = '';
+      const all = document.createElement('option');
+      all.value = ''; all.textContent = '환경 전체';
+      select.appendChild(all);
+      ordered.forEach((name) => {
+        const option = document.createElement('option');
+        option.value = name; option.textContent = name;
+        select.appendChild(option);
+      });
+      select.value = ordered.includes(current) ? current : '';
+    }
+
+    function coverageQuery() {
+      const parameters = new URLSearchParams();
+      const start = $('coverage-start').value;
+      const end = $('coverage-end').value;
+      if (start) parameters.set('start', start);
+      if (end) parameters.set('end', end);
+      parameters.set('group', $('coverage-group').value);
+      const environment = $('collection-environment').value;
+      if (environment) parameters.set('environment', environment);
+      return parameters.toString();
+    }
+
+    async function loadCoverage() {
+      try {
+        const payload = await api(`/api/v1/admin/collection/coverage?${coverageQuery()}`);
+        if (!$('coverage-start').value) $('coverage-start').value = payload.start;
+        if (!$('coverage-end').value) $('coverage-end').value = payload.end;
+        renderCoverage(payload);
+      } catch (error) {
+        $('coverage-note').textContent = `커버리지를 불러오지 못했습니다: ${error.message}`;
+      }
+    }
+
+    async function loadCollection({ quiet = false, coverage = false } = {}) {
+      if (collectionState.busy) return;
+      collectionState.busy = true;
+      try {
+        const environment = $('collection-environment').value;
+        const query = environment ? `?limit=40&environment=${encodeURIComponent(environment)}` : '?limit=40';
+        const overview = await api(`/api/v1/admin/collection/overview${query}`);
+        fillCollectionEnvironments(overview.environments);
+        renderCollectionCards(overview);
+        renderCollectionRuns(overview);
+        $('collection-rule-badge').textContent = `원본 루트 ${overview.roots.archive_root}`;
+        setCollectionState(`갱신 ${new Date(overview.generated_at).toLocaleTimeString()} · 진행 중 판정 기준 ${Math.round(overview.stale_after_seconds / 60)}분 · 진행 스냅숏 ${overview.roots.progress_available ? '사용 가능' : '미생성'}`);
+        if (!collectionState.rulesLoaded) {
+          renderCollectionRules(await api('/api/v1/admin/collection/rules'));
+          collectionState.rulesLoaded = true;
+        }
+        if (coverage || !$('coverage-start').value) await loadCoverage();
+      } catch (error) {
+        if (!quiet) setCollectionState(`수집 현황을 불러오지 못했습니다: ${error.message}`, true);
+      } finally {
+        collectionState.busy = false;
+      }
+    }
+
+    function startCollectionPolling() {
+      stopCollectionPolling();
+      collectionState.timer = setInterval(() => loadCollection({ quiet: true }), COLLECTION_POLL_MS);
+    }
+
+    function stopCollectionPolling() {
+      if (collectionState.timer) { clearInterval(collectionState.timer); collectionState.timer = null; }
+    }
+
+    $('collection-refresh').addEventListener('click', () => loadCollection({ coverage: true }));
+    $('coverage-load').addEventListener('click', () => loadCoverage());
+    $('coverage-group').addEventListener('change', () => loadCoverage());
+    $('collection-environment').addEventListener('change', () => loadCollection({ coverage: true }));
+
+
+    // -------------------------------------------------- 스케줄 · 서버 상태
+    function scheduleRow(label, value, title) {
+      const row = document.createElement('tr');
+      const head = document.createElement('td');
+      head.textContent = label;
+      head.style.color = 'var(--muted)';
+      head.style.whiteSpace = 'nowrap';
+      const cell = document.createElement('td');
+      cell.textContent = value === null || value === undefined || value === '' ? '불명' : value;
+      if (title) cell.title = title;
+      row.appendChild(head); row.appendChild(cell);
+      return row;
+    }
+
+    function scheduleWhen(value) {
+      if (!value) return null;
+      const moment = new Date(value);
+      return Number.isNaN(moment.getTime()) ? null : moment.toLocaleString();
+    }
+
+    function renderSchedules(payload) {
+      const host = $('schedule-list');
+      host.textContent = '';
+      (payload.batches || []).forEach((batch) => {
+        const block = document.createElement('article');
+        block.className = 'rule-block';
+        const header = document.createElement('header');
+        const title = document.createElement('h3');
+        title.textContent = batch.name;
+        header.appendChild(title);
+        const install = batch.installation || {};
+        const tone = install.installed === true
+          ? (install.active ? 'collected' : 'partial')
+          : (install.installed === false ? 'failed' : 'unknown');
+        header.appendChild(collectionPill(install.state_label || '불명', tone));
+        block.appendChild(header);
+
+        const table = document.createElement('table');
+        table.className = 'audit';
+        const body = document.createElement('tbody');
+        const next = batch.next_run || {};
+        const configured = batch.configured_next_run || {};
+        [
+          ['목적', batch.purpose],
+          ['실행 주체', batch.runner],
+          ['실행 명령', batch.command],
+          ['systemd unit', `${batch.timer_unit} · ${batch.service_unit}`],
+          ['주기', batch.cadence],
+          ['실행 시각 · 타임존', batch.schedule_description],
+          ['설정상 다음 실행', configured.at
+            ? `${scheduleWhen(configured.at)} (${configured.timezone}) · 설정값이며 확정 아님`
+            : `불명 — ${configured.reason || '설정을 읽을 수 없습니다'}`],
+          ['systemd 다음 실행', next.at
+            ? `${scheduleWhen(next.at)} · systemd 기준(확정)`
+            : `불명 — ${next.unknown_reason || '사유 불명'}`],
+          ['최근 실행', scheduleWhen(batch.last_trigger_at) || '기록 없음 또는 불명'],
+          ['최근 결과', batch.last_result
+            ? `${batch.last_result}${batch.last_exit_status ? ` (exit ${batch.last_exit_status})` : ''}`
+            : '불명'],
+          ['활성 상태', install.reason ? `불명 — ${install.reason}` : (install.state_label || '불명')],
+          ['대상 범위', batch.scope],
+          ['중복 방지', batch.concurrency],
+          ['로그', batch.logs],
+          ['실패 확인법', batch.failure_check],
+          ['상세 설명', batch.detail],
+        ].forEach(([label, value]) => body.appendChild(scheduleRow(label, value)));
+        table.appendChild(body);
+        const scroll = document.createElement('div');
+        scroll.className = 'table-scroll';
+        scroll.appendChild(table);
+        block.appendChild(scroll);
+        host.appendChild(block);
+      });
+      $('schedule-badge').textContent = payload.systemd_readable
+        ? `배치 ${(payload.batches || []).length}건 · systemd 조회됨`
+        : 'systemd 조회 불가';
+      $('schedule-state').textContent = payload.systemd_readable
+        ? `갱신 ${new Date(payload.generated_at).toLocaleTimeString()}`
+        : `systemd 상태를 읽을 수 없습니다: ${payload.systemd_unavailable_reason || '사유 불명'}. 설치·활성·다음 실행은 불명으로 표시합니다.`;
+    }
+
+    async function loadSchedules() {
+      try {
+        renderSchedules(await api('/api/v1/admin/schedules'));
+      } catch (error) {
+        $('schedule-state').textContent = `스케줄 정보를 불러오지 못했습니다: ${error.message}`;
+        $('schedule-badge').textContent = '조회 실패';
+      }
+    }
+
+    async function loadServerStatus() {
+      const body = $('server-runtime-body');
+      body.textContent = '';
+      const rows = [];
+      try {
+        const overview = await api('/api/v1/admin/collection/overview?limit=1');
+        rows.push(['외부 원본 루트', overview.roots.archive_root]);
+        rows.push(['원장 staging 루트', overview.roots.ledger_root]);
+        rows.push(['레거시 루트', overview.roots.legacy_root]);
+        rows.push(['진행 스냅숏', overview.roots.progress_available ? `사용 가능 · ${overview.roots.progress_root}` : `미생성 · ${overview.roots.progress_root}`]);
+        rows.push(['수집 환경', Object.entries(overview.environments || {}).map(([source, list]) => `${source}: ${list.join(', ')}`).join(' · ') || '불명']);
+      } catch (error) {
+        rows.push(['수집 런타임', `불명 — ${error.message}`]);
+      }
+      try {
+        const response = await fetch('/healthz', { credentials: 'same-origin' });
+        rows.push(['서비스 데이터베이스', response.ok ? '응답함 (healthz ok)' : `응답하지 않음 (HTTP ${response.status})`]);
+      } catch (error) {
+        rows.push(['서비스 데이터베이스', '불명 — healthz에 도달하지 못했습니다']);
+      }
+      const configured = Object.entries(state.secrets || {}).filter(([, ok]) => ok).map(([name]) => name);
+      rows.push(['구성된 인증정보', configured.length ? configured.join(', ') : '없음']);
+      rows.push(['타임존 설정', state.settings.timezone || '불명']);
+      rows.forEach(([label, value]) => body.appendChild(scheduleRow(label, value)));
+      $('server-runtime-badge').textContent = `확인 ${new Date().toLocaleTimeString()}`;
+    }
+
+    $('nav').addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-page]');
+      if (!button || button.disabled) return;
+      document.querySelectorAll('nav button').forEach((node) => node.classList.remove('active'));
+      document.querySelectorAll('.page').forEach((node) => node.classList.remove('active'));
+      button.classList.add('active'); $(`page-${button.dataset.page}`).classList.add('active');
+      if (button.dataset.page === 'audit') loadAudit();
+      if (button.dataset.page === 'work') { loadWork(); startWorkPolling(); } else { stopWorkPolling(); }
+      if (button.dataset.page === 'collection') { loadCollection(); startCollectionPolling(); } else { stopCollectionPolling(); }
+      if (button.dataset.page === 'schedules') loadSchedules();
+      if (button.dataset.page === 'server') loadServerStatus();
+    });
+
+    $('logout').addEventListener('click', async () => {
+      stopWorkPolling();
+      stopCollectionPolling();
+      try { await api('/api/v1/admin/logout', { method: 'POST', body: '{}' }); } catch (_) {}
+      state.csrf = null; const session = await api('/api/v1/admin/session'); showAuth(session);
+    });
+
+    initialize();
+  </script>
+</body>
+</html>

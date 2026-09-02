@@ -5,8 +5,13 @@ from contextlib import contextmanager
 from typing import Any, Iterator
 
 import psycopg
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from psycopg.rows import dict_row
+
+from .admin_web import require_company_session, router as admin_router
+from .collection_web import router as collection_router
+from .schedule_web import router as schedule_router
+from .work_web import router as work_router
 
 
 app = FastAPI(
@@ -14,6 +19,10 @@ app = FastAPI(
     description="Read-only local activity timeline API",
     version="0.1.0",
 )
+app.include_router(admin_router)
+app.include_router(work_router)
+app.include_router(collection_router)
+app.include_router(schedule_router)
 
 
 @contextmanager
@@ -42,6 +51,7 @@ def timeline(
     source: str | None = Query(default=None, pattern="^(slack|google_calendar|github)$"),
     actor: str | None = None,
     container: str | None = None,
+    _session: dict[str, Any] = Depends(require_company_session),
 ) -> dict[str, Any]:
     clauses: list[str] = []
     parameters: dict[str, Any] = {"limit": limit}

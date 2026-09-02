@@ -8,6 +8,8 @@ from typing import Sequence
 
 
 DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+CALENDAR_READONLY_SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
 
 
 def _atomic_private_write(path: Path, content: str) -> None:

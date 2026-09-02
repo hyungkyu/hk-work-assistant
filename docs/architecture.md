@@ -103,3 +103,25 @@ Slack / Google Calendar / GitHub
 
 비밀정보 값은 로그, fixture, Git, 테스트 실패 메시지에 포함하지 않는다.
 
+
+
+## Backoffice menu and schedules
+
+The backoffice menu is grouped: **업무** (업무 현황 · 로드맵), **운영** (수집 현황 ·
+서버 상태 · 스케줄), **설정** (연결 · 저장소·백업 · 로컬 모델 · 보안), and 감사 기록.
+업무 현황 is the landing screen after login.  로드맵 is a deliberately disabled
+placeholder: its source system and fields are not decided, so no behaviour is built
+behind it.
+
+`schedules.py` keeps two kinds of fact apart.  The **catalogue** describes batches this
+repository defines - name, purpose, runner, cadence, scope, overlap prevention, logs, how
+to check a failure - and those are properties of the code.  **State** (installed,
+enabled, active, last run, next run) is never asserted: it is read from the operator's
+settings and from `systemctl show`, and when it cannot be read the answer is `불명` with a
+reason.  The next-run time computed from settings is shown separately from systemd's, and
+only systemd's is marked authoritative.
+
+`GET /api/v1/admin/schedules` is super-administrator only, read-only, and takes no
+parameters at all - the unit names come from the catalogue, never from a request.  The
+`systemctl show` call runs without a shell, with a fixed argument list and a timeout, and
+nothing here installs, enables or changes a unit.

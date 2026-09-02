@@ -1,0 +1,862 @@
+"""The 수집 현황 reader: classification, KST dates, and safe reading.
+
+Every test drives a synthetic archive in a temporary directory. Nothing here
+reads the real ``/data`` tree, and nothing here writes to an archive it did
+not create.
+"""
+
+from __future__ import annotations
+
+import gzip
+import json
+import os
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Iterator
+
+import pytest
+
+from rlwrld_worklog import collection_status as status
+from rlwrld_worklog.collection_progress import PROGRESS_SCHEMA_VERSION
+from rlwrld_worklog.collection_rules import active_rule, active_rule_stamp
+
+KST = status.KST
+NOW = datetime(2026, 9, 2, 3, 0, tzinfo=timezone.utc)  # 2026-09-02 12:00 KST
+
+
+@pytest.fixture()
+def paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[status.CollectionPaths]:
+    archive_root = tmp_path / "archive"
+    config_root = tmp_path / "config"
+    ledger_root = tmp_path / "archive" / "staging" / "ledger"
+    legacy_root = archive_root / "legacy" / "claude" / "weekly"
+    for directory in (archive_root, config_root, ledger_root, legacy_root):
+        directory.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("RAW_ARCHIVE_ROOT", str(archive_root))
+    monkeypatch.setenv("LEDGER_ROOT", str(ledger_root))
+    monkeypatch.setenv("APP_CONFIG_ROOT", str(config_root))
+    monkeypatch.setenv("LEGACY_ROOT", str(legacy_root))
+    status.clear_caches()
+    yield status.paths_from_environment()
+    status.clear_caches()
+
+
+def write_manifest(
+    paths: status.CollectionPaths,
+    *,
+    source: str = "slack",
+    environment: str = "production",
+    run_id: str = "20260901T000000Z-aaaaaa",
+    name: str | None = None,
+    raw: str | None = None,
+    **overrides: Any,
+) -> Path:
+    payload: dict[str, Any] = {
+        "schema_version": 2,
+        "source": source,
+        "environment": environment,
+        "run_id": run_id,
+        "status": "success",
+        "capture_profile": "live-slack-web-api/v1",
+        "capture_density": "full",
+        "dry_run": False,
+        "started_at": "2026-09-01T00:00:00+00:00",
+        "finished_at": "2026-09-01T00:05:00+00:00",
+        "requested_window": {"since": "2026-08-30T22:00:00+00:00"},
+        "checkpoint_in": {"run_id": "previous"},
+        "checkpoint_advanced": True,
+        "api_coverage": {},
+        "coverage_notes": ["slack.search_index_lag: search can lag the live channel."],
+        "pages_archived": 2,
+        "rate_limit_hits": 0,
+        "truncated": False,
+        "truncation": [],
+        "skips": [],
+        "errors": [],
+        "files": [
+            {"path": "raw/a", "compressed_bytes": 100, "kind": "history"},
+            {"path": "raw/b", "compressed_bytes": 250, "kind": "history"},
+        ],
+        **active_rule_stamp(),
+    }
+    payload.update(overrides)
+    directory = paths.manifest_root / source / environment
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / (name or f"{run_id}.json")
+    path.write_text(
+        raw if raw is not None else json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return path
+
+
+def write_raw_run(
+    paths: status.CollectionPaths,
+    *,
+    source: str = "slack",
+    environment: str = "production",
+    day: str = "2026/09/02",
+    run_id: str = "20260902T010000Z-bbbbbb",
+    pages: int = 3,
+    secret: str = "TOP-SECRET-MESSAGE-BODY",
+    mtime: datetime | None = None,
+) -> Path:
+    directory = paths.raw_root / source / environment / day / run_id
+    directory.mkdir(parents=True, exist_ok=True)
+    for index in range(pages):
+        target = directory / f"{index + 1:06d}-history-abcdef012345.json.gz"
+        target.write_bytes(gzip.compress(json.dumps({"text": secret}).encode(), mtime=0))
+        if mtime is not None:
+            stamp = mtime.timestamp()
+            os.utime(target, (stamp, stamp))
+    if mtime is not None:
+        stamp = mtime.timestamp()
+        os.utime(directory, (stamp, stamp))
+    return directory
+
+
+def write_legacy_day(
+    paths: status.CollectionPaths,
+    *,
+    day: str,
+    root: str = "shared",
+    sources: tuple[str, ...] = ("slack", "notion", "gcal"),
+    meta: dict[str, Any] | None = None,
+) -> None:
+    for name in sources:
+        directory = paths.legacy_root / root / "daily_raw" / day / name
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "payload.json").write_text("{}", encoding="utf-8")
+        body = {"status": "ok", "target_date": day, "truncation_warnings": []}
+        if meta is not None:
+            body.update(meta)
+        (directory / "meta.json").write_text(json.dumps(body), encoding="utf-8")
+
+
+def write_snapshot(paths: status.CollectionPaths, **fields: Any) -> Path:
+    payload: dict[str, Any] = {
+        "schema_version": PROGRESS_SCHEMA_VERSION,
+        "source": "notion",
+        "environment": "production",
+        "run_id": "20260902T020000Z-cccccc",
+        "phase": "capture",
+        "status": "running",
+        "started_at": "2026-09-02T02:00:00+00:00",
+        "updated_at": "2026-09-02T02:58:00+00:00",
+        "pid": os.getpid(),
+        "host": os.uname().nodename,
+        "raw_run_dir": "raw/notion/production/2026/09/02/20260902T020000Z-cccccc",
+        "capture_density": "full",
+        "dry_run": False,
+        "files_written": 42,
+        "bytes_written": 4242,
+        "manifest_path": None,
+        "ledger": None,
+    }
+    payload.update(fields)
+    directory = (
+        paths.config_root
+        / "collection-status"
+        / "progress"
+        / str(payload["source"])
+        / str(payload["environment"])
+    )
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{payload['run_id']}.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def find_run(index: status.RunIndex, run_id: str) -> dict[str, Any]:
+    for run in index.runs.values():
+        if run["run_id"] == run_id:
+            return run
+    raise AssertionError(f"run {run_id} was not indexed")
+
+
+# ------------------------------------------------------- rule attribution
+
+
+def test_a_stamped_manifest_reports_its_rule_as_declared(paths: status.CollectionPaths) -> None:
+    write_manifest(paths, run_id="20260901T000000Z-aaaaaa")
+    run = find_run(status.build_run_index(paths, now=NOW), "20260901T000000Z-aaaaaa")
+    assert run["rule"]["version"] == "V1"
+    assert run["rule"]["attribution"] == "declared"
+    assert run["rule"]["digest"] == active_rule().digest
+    assert run["rule"]["digest_matches_registry"] is True
+    assert run["rule"]["evidence"] == ["manifest.collection_rule_version"]
+
+
+def test_a_declared_version_the_registry_does_not_know_is_flagged(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(
+        paths,
+        run_id="20260901T000001Z-aaaaab",
+        collection_rule_version="V9",
+        collection_rule_digest="sha256:deadbeef",
+    )
+    run = find_run(status.build_run_index(paths, now=NOW), "20260901T000001Z-aaaaab")
+    assert run["rule"]["version"] == "V9"
+    assert run["rule"]["attribution"] == "declared"
+    assert run["rule"]["known_version"] is False
+    assert run["rule"]["digest_matches_registry"] is None
+
+
+def test_an_unstamped_manifest_of_the_current_collector_is_inferred_v1(
+    paths: status.CollectionPaths,
+) -> None:
+    """Rule 6: the reconstruction is reported as inferred, never as declared."""
+    write_manifest(
+        paths,
+        run_id="20260901T000002Z-aaaaac",
+        collection_rule_version=None,
+        collection_rule_digest=None,
+        collection_rule_schema_version=None,
+    )
+    run = find_run(status.build_run_index(paths, now=NOW), "20260901T000002Z-aaaaac")
+    assert run["rule"]["version"] == "V1"
+    assert run["rule"]["attribution"] == "inferred"
+    assert run["rule"]["digest"] is None
+    assert "manifest.capture_profile" in run["rule"]["evidence"]
+
+
+def test_an_old_manifest_without_a_capture_profile_is_still_inferred_v1(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(
+        paths,
+        run_id="20260825T105742Z-66cc09832a",
+        schema_version=1,
+        capture_profile=None,
+        capture_density=None,
+        collection_rule_version=None,
+        collection_rule_digest=None,
+        collection_rule_schema_version=None,
+        started_at="2026-08-25T10:57:42+00:00",
+        finished_at="2026-08-25T10:58:00+00:00",
+    )
+    run = find_run(status.build_run_index(paths, now=NOW), "20260825T105742Z-66cc09832a")
+    assert run["rule"]["attribution"] == "inferred"
+    assert set(run["rule"]["evidence"]) >= {"manifest_location", "run_id_format"}
+
+
+def test_a_manifest_that_identifies_no_rule_is_unknown_not_guessed(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(
+        paths,
+        run_id="importedbatch",
+        capture_profile=None,
+        collection_rule_version=None,
+        collection_rule_digest=None,
+        collection_rule_schema_version=None,
+        schema_version=None,
+        started_at="2024-03-04T01:00:00+00:00",
+        finished_at="2024-03-04T01:10:00+00:00",
+    )
+    run = find_run(status.build_run_index(paths, now=NOW), "importedbatch")
+    assert run["rule"]["version"] is None
+    assert run["rule"]["attribution"] == "unknown"
+
+
+# ---------------------------------------------------------- run aggregation
+
+
+def test_success_degraded_failed_running_and_stale_are_all_distinguished(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(paths, run_id="20260901T010000Z-000001", status="success")
+    write_manifest(
+        paths, run_id="20260901T020000Z-000002", status="success_with_skips",
+        skips=[{"kind": "channel_not_found"}, {"kind": "channel_not_found"}, {"kind": "is_archived"}],
+    )
+    write_manifest(paths, run_id="20260901T030000Z-000003", status="degraded")
+    write_manifest(
+        paths, run_id="20260901T040000Z-000004", status="failed",
+        errors=[{"kind": "http_500"}],
+    )
+    write_raw_run(paths, run_id="20260902T025500Z-000005", mtime=NOW - timedelta(minutes=2))
+    write_raw_run(paths, run_id="20260901T000000Z-000006", day="2026/09/01",
+                  mtime=NOW - timedelta(days=1))
+
+    index = status.build_run_index(paths, now=NOW)
+    states = {run["run_id"]: run["state"] for run in index.runs.values()}
+    assert states["20260901T010000Z-000001"] == "success"
+    assert states["20260901T020000Z-000002"] == "success_with_skips"
+    assert states["20260901T030000Z-000003"] == "degraded"
+    assert states["20260901T040000Z-000004"] == "failed"
+    assert states["20260902T025500Z-000005"] == "running"
+    assert states["20260901T000000Z-000006"] == "stale"
+
+    stale = find_run(index, "20260901T000000Z-000006")
+    assert "no manifest exists" in stale["state_reason"]
+
+    skipped = find_run(index, "20260901T020000Z-000002")
+    assert skipped["skips_total"] == 3
+    assert skipped["skip_kinds"][0] == {"kind": "channel_not_found", "count": 2}
+    failed = find_run(index, "20260901T040000Z-000004")
+    assert failed["errors_total"] == 1
+
+    overview = status.overview(paths, now=NOW)
+    slack_card = next(card for card in overview["cards"] if card["source"] == "slack")
+    assert slack_card["states"] == {
+        "success": 1,
+        "success_with_skips": 1,
+        "degraded": 1,
+        "failed": 1,
+        "running": 1,
+        "stale": 1,
+    }
+    assert [run["run_id"] for run in slack_card["active"]] == [
+        "20260902T025500Z-000005",
+        "20260901T000000Z-000006",
+    ]
+
+
+def test_a_finished_run_is_summarized_from_its_manifest_not_by_walking_raw(
+    paths: status.CollectionPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_manifest(paths, run_id="20260902T000000Z-dddddd")
+    write_raw_run(paths, run_id="20260902T000000Z-dddddd", pages=9)
+
+    def explode(path: Path) -> dict[str, Any]:  # pragma: no cover - must not run
+        raise AssertionError(f"a completed run must not be walked: {path}")
+
+    monkeypatch.setattr(status, "scan_raw_run", explode)
+    run = find_run(status.build_run_index(paths, now=NOW), "20260902T000000Z-dddddd")
+    assert run["raw_from_manifest"] is True
+    assert run["raw_file_count"] == 2
+    assert run["raw_bytes"] == 350
+
+
+def test_repeat_manifests_for_one_run_collapse_into_one_row(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(paths, run_id="20260901T050000Z-eeeeee", status="failed")
+    write_manifest(
+        paths, run_id="20260901T050000Z-eeeeee", name="20260901T050000Z-eeeeee.1.json",
+        status="success",
+    )
+    index = status.build_run_index(paths, now=NOW)
+    run = find_run(index, "20260901T050000Z-eeeeee")
+    assert len([key for key in index.runs if key[2] == "20260901T050000Z-eeeeee"]) == 1
+    assert run["manifest_revisions"] == 2
+    assert run["state"] == "success"
+
+
+def test_a_manifest_whose_run_directory_vanished_is_still_reported(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(paths, run_id="20260901T060000Z-ffffff")
+    run = find_run(status.build_run_index(paths, now=NOW), "20260901T060000Z-ffffff")
+    assert run["state"] == "success"
+    assert run.get("raw_run_dir") is None
+    view = status.run_view(paths, run)
+    assert view["ledger_records"] is None
+    assert view["ledger_reason"] == "no ledger file for this run"
+
+
+# ------------------------------------------------------------- malformed
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"schema_version": 2, "run_id": "x", "status": "suc',  # partially written
+        "[]",  # not an object
+        "not json at all",
+    ],
+)
+def test_a_malformed_manifest_is_quarantined_and_never_counted_as_success(
+    paths: status.CollectionPaths, raw: str
+) -> None:
+    write_manifest(paths, run_id="20260901T070000Z-999999", raw=raw)
+    index = status.build_run_index(paths, now=NOW)
+    run = find_run(index, "20260901T070000Z-999999")
+    assert run["state"] == "malformed"
+    assert run["malformed"] is True
+    assert run["malformed_reason"]
+    assert index.manifest_errors and index.manifest_errors[0]["run_id"] == "20260901T070000Z-999999"
+
+    overview = status.overview(paths, now=NOW)
+    slack_card = next(card for card in overview["cards"] if card["source"] == "slack")
+    assert slack_card["last_success"] is None
+    assert slack_card["states"] == {"malformed": 1}
+
+
+def test_a_manifest_with_an_unrecognised_status_is_not_treated_as_success(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(paths, run_id="20260901T080000Z-888888", status="halfway")
+    run = find_run(status.build_run_index(paths, now=NOW), "20260901T080000Z-888888")
+    assert run["state"] == "unknown"
+    assert "halfway" in run["malformed_reason"]
+
+
+# ------------------------------------------------------ raw run progress
+
+
+def test_an_active_run_reports_counts_and_never_raw_content(
+    paths: status.CollectionPaths,
+) -> None:
+    mtime = NOW - timedelta(minutes=3)
+    directory = write_raw_run(
+        paths, run_id="20260902T024500Z-777777", pages=4, secret="NEVER-SHOW-THIS", mtime=mtime
+    )
+    expected = sum(entry.stat().st_size for entry in directory.iterdir())
+    run = find_run(status.build_run_index(paths, now=NOW), "20260902T024500Z-777777")
+    assert run["state"] == "running"
+    assert run["raw_file_count"] == 4
+    assert run["raw_bytes"] == expected
+    assert run["raw_last_mtime"] == mtime.astimezone(timezone.utc).isoformat()
+    assert run["raw_scan_truncated"] is False
+    assert run["raw_run_dir"] == "raw/slack/production/2026/09/02/20260902T024500Z-777777"
+
+    serialized = json.dumps(status.overview(paths, now=NOW), ensure_ascii=False, default=str)
+    assert "NEVER-SHOW-THIS" not in serialized
+
+
+def test_the_raw_scan_is_capped_and_says_so(
+    paths: status.CollectionPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_raw_run(paths, run_id="20260902T024600Z-666666", pages=5, mtime=NOW)
+    monkeypatch.setattr(status, "MAX_RAW_ENTRIES_SCANNED", 2)
+    status.clear_caches()
+    run = find_run(status.build_run_index(paths, now=NOW), "20260902T024600Z-666666")
+    assert run["raw_file_count"] == 2
+    assert run["raw_scan_truncated"] is True
+
+
+def test_manifest_skip_and_error_details_are_reduced_to_kinds(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(
+        paths,
+        run_id="20260901T090000Z-555555",
+        status="success_with_skips",
+        skips=[{"kind": "channel_not_found", "channel": "C-PRIVATE-SECRET"}],
+        errors=[{"kind": "http_500", "detail": "token xoxp-secret leaked into a detail"}],
+    )
+    run = find_run(status.build_run_index(paths, now=NOW), "20260901T090000Z-555555")
+    payload = json.dumps(status.run_view(paths, run), ensure_ascii=False)
+    assert "channel_not_found" in payload and "http_500" in payload
+    assert "C-PRIVATE-SECRET" not in payload
+    assert "xoxp-secret" not in payload
+
+
+# --------------------------------------------------------- KST boundaries
+
+
+def test_kst_date_and_weekday_are_computed_at_the_seoul_boundary() -> None:
+    last_moment = status.parse_instant("2026-09-01T14:59:59+00:00")
+    first_moment = status.parse_instant("2026-09-01T15:00:00+00:00")
+    assert status.kst_date(last_moment) == "2026-09-01"
+    assert status.kst_date(first_moment) == "2026-09-02"
+    assert status.weekday_label(status.parse_iso_date("2026-09-01")) == "화"
+    assert status.weekday_label(status.parse_iso_date("2026-08-31")) == "월"
+    assert status.weekday_label(status.parse_iso_date("2026-09-06")) == "일"
+    start, end = status.kst_day_bounds(status.parse_iso_date("2026-09-01"))
+    assert start.isoformat() == "2026-09-01T00:00:00+09:00"
+    assert end.isoformat() == "2026-09-02T00:00:00+09:00"
+    assert start.astimezone(timezone.utc).isoformat() == "2026-08-31T15:00:00+00:00"
+
+
+def test_a_run_finishing_just_before_kst_midnight_belongs_to_that_day(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(
+        paths,
+        run_id="20260901T145959Z-111111",
+        started_at="2026-09-01T14:59:00+00:00",
+        finished_at="2026-09-01T14:59:59+00:00",
+        requested_window={"since": "2026-09-01T14:00:00+00:00"},
+    )
+    grid = status.coverage(
+        paths,
+        start=status.parse_iso_date("2026-09-01"),
+        end=status.parse_iso_date("2026-09-02"),
+        sources=["slack"],
+        now=NOW,
+    )
+    by_date = {row["date"]: row["cells"]["slack"] for row in grid["rows"]}
+    assert by_date["2026-09-01"]["coverage"] == "collected"
+    assert by_date["2026-09-02"]["coverage"] == "not_collected"
+
+
+def test_a_run_crossing_kst_midnight_is_attributed_to_both_dates(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(
+        paths,
+        run_id="20260901T145500Z-222222",
+        started_at="2026-09-01T14:55:00+00:00",
+        finished_at="2026-09-01T15:10:00+00:00",
+        requested_window={"since": "2026-09-01T14:55:00+00:00"},
+    )
+    grid = status.coverage(
+        paths,
+        start=status.parse_iso_date("2026-09-01"),
+        end=status.parse_iso_date("2026-09-02"),
+        sources=["slack"],
+        now=NOW,
+    )
+    by_date = {row["date"]: row["cells"]["slack"] for row in grid["rows"]}
+    assert by_date["2026-09-01"]["coverage"] == "collected"
+    assert by_date["2026-09-02"]["coverage"] == "collected"
+    assert by_date["2026-09-01"]["runs"] == 1 and by_date["2026-09-02"]["runs"] == 1
+
+
+# ------------------------------------------------------------- coverage
+
+
+def test_a_date_with_no_evidence_is_not_collected_never_assumed(
+    paths: status.CollectionPaths,
+) -> None:
+    grid = status.coverage(
+        paths,
+        start=status.parse_iso_date("2026-07-01"),
+        end=status.parse_iso_date("2026-07-03"),
+        sources=["slack", "notion", "google_calendar"],
+        now=NOW,
+    )
+    for row in grid["rows"]:
+        for cell in row["cells"].values():
+            assert cell["coverage"] == "not_collected"
+            assert cell["rule_versions"] == []
+            assert cell["evidence"] == []
+            assert cell["completeness"] == "unknown"
+
+
+def test_legacy_dates_are_reported_as_v0_with_no_run_count(
+    paths: status.CollectionPaths,
+) -> None:
+    write_legacy_day(paths, day="2026-06-10")
+    grid = status.coverage(
+        paths,
+        start=status.parse_iso_date("2026-06-09"),
+        end=status.parse_iso_date("2026-06-11"),
+        sources=["slack", "notion", "google_calendar"],
+        now=NOW,
+    )
+    by_date = {row["date"]: row["cells"] for row in grid["rows"]}
+    for source in ("slack", "notion", "google_calendar"):
+        cell = by_date["2026-06-10"][source]
+        assert cell["coverage"] == "collected"
+        assert cell["rule_versions"] == [
+            {"version": "V0", "attribution": "legacy", "count": 1}
+        ]
+        assert cell["runs"] is None and cell["runs_known"] is False
+        assert cell["density"] == "day_slice"
+        assert cell["completeness"] == "unknown"
+        assert any("run identity" in note for note in cell["notes"])
+    assert by_date["2026-06-10"]["google_calendar"]["evidence"] == [
+        "legacy/claude/weekly/shared/daily_raw/2026-06-10/gcal"
+    ]
+    assert by_date["2026-06-09"]["slack"]["coverage"] == "not_collected"
+    assert grid["legacy_inventory"]["observed"]["slack"] == {
+        "first": "2026-06-10",
+        "last": "2026-06-10",
+        "dates": 1,
+    }
+
+
+def test_legacy_truncation_warnings_make_a_date_partial(
+    paths: status.CollectionPaths,
+) -> None:
+    write_legacy_day(
+        paths,
+        day="2026-06-12",
+        sources=("slack",),
+        meta={"truncation_warnings": [{"where": "channel_history"}], "rate_limit_hits": 9},
+    )
+    grid = status.coverage(
+        paths,
+        start=status.parse_iso_date("2026-06-12"),
+        end=status.parse_iso_date("2026-06-12"),
+        sources=["slack"],
+        now=NOW,
+    )
+    cell = grid["rows"][0]["cells"]["slack"]
+    assert cell["coverage"] == "partial"
+    assert cell["completeness"] == "incomplete"
+    assert cell["legacy_meta"][0]["declared_status_is_evidence"] is False
+    assert cell["legacy_meta"][0]["rate_limit_hits"] == 9
+
+
+def test_an_incomplete_legacy_inventory_reports_unknown_not_missing(
+    paths: status.CollectionPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_legacy_day(paths, day="2026-06-13", sources=("slack",))
+    monkeypatch.setattr(status, "LEGACY_INVENTORY_MAX_SECONDS", -1.0)
+    status.clear_caches()
+    grid = status.coverage(
+        paths,
+        start=status.parse_iso_date("2026-06-20"),
+        end=status.parse_iso_date("2026-06-20"),
+        sources=["slack"],
+        now=NOW,
+    )
+    cell = grid["rows"][0]["cells"]["slack"]
+    assert grid["legacy_inventory"]["complete"] is False
+    assert cell["coverage"] == "unknown"
+    assert cell["runs_known"] is False
+    assert any("absence is not evidence" in note for note in cell["notes"])
+
+
+def test_a_stale_run_alone_makes_a_date_unknown_rather_than_collected(
+    paths: status.CollectionPaths,
+) -> None:
+    write_raw_run(
+        paths, run_id="20260830T000000Z-444444", day="2026/08/30",
+        mtime=NOW - timedelta(days=3),
+    )
+    grid = status.coverage(
+        paths,
+        start=status.parse_iso_date("2026-08-30"),
+        end=status.parse_iso_date("2026-08-30"),
+        sources=["slack"],
+        now=NOW,
+    )
+    cell = grid["rows"][0]["cells"]["slack"]
+    assert cell["coverage"] == "unknown"
+    assert cell["states"] == ["stale"]
+    assert any("no manifest" in note for note in cell["notes"])
+
+
+def test_a_malformed_manifest_makes_a_date_unknown(paths: status.CollectionPaths) -> None:
+    write_manifest(paths, run_id="20260828T120000Z-333333", raw="{broken")
+    grid = status.coverage(
+        paths,
+        start=status.parse_iso_date("2026-08-28"),
+        end=status.parse_iso_date("2026-08-28"),
+        sources=["slack"],
+        now=NOW,
+    )
+    cell = grid["rows"][0]["cells"]["slack"]
+    assert cell["coverage"] == "unknown"
+    assert any("quarantined" in note for note in cell["notes"])
+
+
+def test_weekday_grouping_rolls_dates_up_by_kst_weekday(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(
+        paths,
+        run_id="20260901T020000Z-abcdef",
+        started_at="2026-09-01T02:00:00+00:00",
+        finished_at="2026-09-01T02:10:00+00:00",
+        requested_window={"since": "2026-09-01T02:00:00+00:00"},
+    )
+    grid = status.coverage(
+        paths,
+        start=status.parse_iso_date("2026-08-31"),
+        end=status.parse_iso_date("2026-09-06"),
+        sources=["slack"],
+        group="weekday",
+        now=NOW,
+    )
+    assert grid["group"] == "weekday"
+    rows = {row["weekday"]: row for row in grid["weekday_rows"]}
+    assert list(rows) == ["월", "화", "수", "목", "금", "토", "일"]
+    tuesday = rows["화"]["cells"]["slack"]
+    assert tuesday["coverage_counts"] == {"collected": 1}
+    assert tuesday["runs"] == 1
+    assert tuesday["rule_versions"] == {"V1·declared": 1}
+    monday = rows["월"]["cells"]["slack"]
+    assert monday["coverage_counts"] == {"not_collected": 1}
+    assert monday["dates_not_collected"] == 1
+
+
+def test_the_coverage_range_is_capped(
+    paths: status.CollectionPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(status, "MAX_COVERAGE_DAYS", 3)
+    grid = status.coverage(
+        paths,
+        start=status.parse_iso_date("2026-01-01"),
+        end=status.parse_iso_date("2026-09-01"),
+        sources=["slack"],
+        now=NOW,
+    )
+    assert grid["range_truncated"] is True
+    assert len(grid["rows"]) == 3
+    assert grid["start"] == "2026-08-30" and grid["end"] == "2026-09-01"
+
+
+# ------------------------------------------------------ progress snapshots
+
+
+def test_a_live_snapshot_reports_a_run_that_has_written_no_manifest(
+    paths: status.CollectionPaths,
+) -> None:
+    write_snapshot(paths, updated_at=(NOW - timedelta(minutes=2)).isoformat())
+    run = find_run(status.build_run_index(paths, now=NOW), "20260902T020000Z-cccccc")
+    assert run["state"] == "running"
+    assert run["source"] == "notion"
+    assert run["raw_file_count"] == 42
+    assert run["raw_bytes"] == 4242
+    assert run["progress"]["liveness"]["state"] == "running"
+    assert run["progress"]["liveness"]["process_alive"] is True
+
+
+def test_a_snapshot_whose_process_is_gone_is_stale_immediately(
+    paths: status.CollectionPaths,
+) -> None:
+    """A crashed capture must not look alive until its heartbeat times out."""
+    dead = 2
+    while dead < 200_000:
+        try:
+            os.kill(dead, 0)
+        except ProcessLookupError:
+            break
+        except PermissionError:
+            pass
+        dead += 1
+    write_snapshot(paths, pid=dead, updated_at=(NOW - timedelta(seconds=30)).isoformat())
+    run = find_run(status.build_run_index(paths, now=NOW), "20260902T020000Z-cccccc")
+    assert run["state"] == "stale"
+    assert "process that wrote this snapshot is gone" in run["state_reason"]
+
+
+def test_a_snapshot_that_stopped_advancing_is_stale(paths: status.CollectionPaths) -> None:
+    write_snapshot(paths, pid=None, host="another-host", updated_at="2026-09-01T00:00:00+00:00")
+    run = find_run(status.build_run_index(paths, now=NOW), "20260902T020000Z-cccccc")
+    assert run["state"] == "stale"
+    assert "no progress for" in run["state_reason"]
+
+
+def test_a_finished_snapshot_never_overrides_the_manifest(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(
+        paths, source="notion", run_id="20260902T020000Z-cccccc", status="success_with_skips",
+        capture_profile="live-notion-api/v1",
+    )
+    write_snapshot(
+        paths,
+        phase="finished",
+        status="success_with_skips",
+        ledger={"records_written": 812, "schema_errors": 0, "output_path": "ledger/notion/x.jsonl"},
+    )
+    run = find_run(status.build_run_index(paths, now=NOW), "20260902T020000Z-cccccc")
+    assert run["state"] == "success_with_skips"
+    assert run["ledger_records"] == 812
+    assert run["ledger_schema_errors"] == 0
+    view = status.run_view(paths, run)
+    assert view["ledger_schema_errors_known"] is True
+
+
+def test_ledger_schema_errors_are_unknown_when_nothing_recorded_them(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(paths, run_id="20260901T100000Z-aaaa11")
+    run = find_run(status.build_run_index(paths, now=NOW), "20260901T100000Z-aaaa11")
+    view = status.run_view(paths, run)
+    assert view["ledger_schema_errors"] is None
+    assert view["ledger_schema_errors_known"] is False
+
+
+def test_ledger_records_are_counted_from_the_run_jsonl(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(paths, run_id="20260901T110000Z-aaaa22")
+    target = paths.ledger_root / "ledger" / "slack" / "live-20260901T110000Z-aaaa22.jsonl"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("".join(f'{{"n": {index}}}\n' for index in range(7)), encoding="utf-8")
+    run = find_run(status.build_run_index(paths, now=NOW), "20260901T110000Z-aaaa22")
+    view = status.run_view(paths, run)
+    assert view["ledger_records"] == 7
+    assert view["ledger_path"] == "staging/ledger/ledger/slack/live-20260901T110000Z-aaaa22.jsonl"
+
+
+# --------------------------------------------------------- path handling
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["..", ".", "../etc", "a/b", "", ".hidden", "-dash", "/absolute", "x" * 121, "sp ace"],
+)
+def test_unsafe_directory_names_are_never_joined(
+    paths: status.CollectionPaths, name: str
+) -> None:
+    assert status.safe_child(paths.archive_root, name, root=paths.archive_root) is None
+
+
+def test_within_rejects_a_path_outside_its_root(paths: status.CollectionPaths) -> None:
+    assert status.within(paths.archive_root / "raw" / "slack", paths.archive_root)
+    assert status.within(paths.archive_root, paths.archive_root)
+    assert not status.within(Path("/etc/passwd"), paths.archive_root)
+    assert not status.within(paths.archive_root / ".." / "elsewhere", paths.archive_root)
+
+
+def test_an_unsafely_named_environment_directory_is_ignored(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(paths, environment="production", run_id="20260901T120000Z-aaaa33")
+    hostile = paths.manifest_root / "slack" / ".."
+    hostile.mkdir(parents=True, exist_ok=True)
+    weird = paths.manifest_root / "slack" / "-injected"
+    weird.mkdir(parents=True, exist_ok=True)
+    (weird / "20260901T130000Z-aaaa44.json").write_text("{}", encoding="utf-8")
+    index = status.build_run_index(paths, now=NOW)
+    assert {key[1] for key in index.runs} == {"production"}
+
+
+def test_a_symlinked_environment_directory_is_not_followed(
+    paths: status.CollectionPaths, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside"
+    (outside / "slack" / "production").mkdir(parents=True)
+    (outside / "slack" / "production" / "20260901T140000Z-aaaa55.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    (paths.manifest_root / "slack").mkdir(parents=True, exist_ok=True)
+    os.symlink(outside / "slack" / "production", paths.manifest_root / "slack" / "escape")
+    index = status.build_run_index(paths, now=NOW)
+    assert index.runs == {}
+    assert index.environments.get("slack", set()) == set()
+
+
+def test_the_reader_only_looks_at_the_three_known_sources(
+    paths: status.CollectionPaths,
+) -> None:
+    directory = paths.manifest_root / "github" / "production"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "20260901T150000Z-aaaa66.json").write_text("{}", encoding="utf-8")
+    index = status.build_run_index(paths, now=NOW)
+    assert index.runs == {}
+
+
+def test_checkpoint_and_link_queue_files_are_not_mistaken_for_runs(
+    paths: status.CollectionPaths,
+) -> None:
+    directory = paths.manifest_root / "slack" / "production"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "checkpoint.json").write_text('{"run_id": "x"}', encoding="utf-8")
+    (directory / "link-queue.json").write_text("{}", encoding="utf-8")
+    (directory / "checkpoints").mkdir(exist_ok=True)
+    write_manifest(paths, run_id="20260901T160000Z-aaaa77")
+    index = status.build_run_index(paths, now=NOW)
+    assert [key[2] for key in index.runs] == ["20260901T160000Z-aaaa77"]
+
+
+def test_list_runs_filters_and_orders_by_last_activity(paths: status.CollectionPaths) -> None:
+    write_manifest(paths, run_id="20260901T170000Z-aaaa88", environment="production")
+    write_manifest(
+        paths,
+        run_id="20260901T180000Z-aaaa99",
+        environment="test",
+        started_at="2026-09-01T18:00:00+00:00",
+        finished_at="2026-09-01T18:01:00+00:00",
+    )
+    write_manifest(paths, source="notion", run_id="20260901T190000Z-aaab00",
+                   capture_profile="live-notion-api/v1")
+    listed = status.list_runs(paths, source="slack", limit=10, now=NOW)
+    assert [item["run_id"] for item in listed["items"]] == [
+        "20260901T180000Z-aaaa99",
+        "20260901T170000Z-aaaa88",
+    ]
+    scoped = status.list_runs(paths, source="slack", environment="test", limit=10, now=NOW)
+    assert [item["run_id"] for item in scoped["items"]] == ["20260901T180000Z-aaaa99"]
+    assert listed["environments"]["slack"] == ["production", "test"]

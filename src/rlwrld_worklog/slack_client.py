@@ -61,13 +61,22 @@ class SlackClient:
         self._transport = transport or UrllibTransport()
         self._sleeper = sleeper
         self._max_attempts = max_attempts
+        self._last_response_headers: dict[str, str] = {}
+        self.rate_limit_hits = 0
+        self.call_counts: dict[str, int] = {}
+
+    @property
+    def last_response_headers(self) -> dict[str, str]:
+        return dict(self._last_response_headers)
 
     def call(self, method: str, **params: Any) -> dict[str, Any]:
         url = f"https://slack.com/api/{method}"
         headers = {"Authorization": f"Bearer {self._token}", "User-Agent": "rlwrld-worklog/0.1"}
+        self.call_counts[method] = self.call_counts.get(method, 0) + 1
         for attempt in range(1, self._max_attempts + 1):
             response = self._transport.get(url, headers, params)
             if response.status == 429:
+                self.rate_limit_hits += 1
                 if attempt == self._max_attempts:
                     raise SlackApiError(
                         f"Slack method {method} remained rate limited",
@@ -86,6 +95,7 @@ class SlackClient:
             if not response.body.get("ok"):
                 code = response.body.get("error", "unknown_error")
                 raise SlackApiError(f"Slack method {method} failed: {code}", method=method, code=str(code))
+            self._last_response_headers = {str(key).lower(): str(value) for key, value in response.headers.items()}
             return response.body
         raise AssertionError("unreachable")
 

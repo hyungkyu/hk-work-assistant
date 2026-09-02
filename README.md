@@ -1,53 +1,47 @@
-# RLWRLD Worklog
+# hk-work-assistant
 
-RLWRLD의 Slack, Google Calendar, GitHub 활동을 로컬에서 수집하고 기계적으로
-정규화해 하나의 검색 가능한 타임라인으로 만드는 개인 업무 인텔리전스 시스템입니다.
+Local, read-only tooling for collecting and organizing work context from services such as Slack and Google Calendar.
 
-## 안전 경계
+## Repository boundary
 
-- 운영 수집은 이 저장소의 로컬 프로그램이 수행합니다.
-- Codex/ChatGPT 플러그인은 운영 수집 경로로 사용하지 않습니다.
-- 운영 자격증명은 Git에서 제외한 로컬 `secrets/`에 mode 0600으로 둡니다.
-- 수집기는 읽기 전용 권한만 사용합니다.
-- 첨부파일 본문은 다운로드하지 않고 메타데이터와 링크만 보존합니다.
-- OpenAI에는 사용자가 명시적으로 선택한 데이터만 전달합니다.
+This is a source-code repository. It may contain application code, deployment configuration, schemas, tests with synthetic inputs, and Markdown files explicitly reviewed by the repository owner.
 
-## 저장 위치
+It must not contain collected or derived company data, including messages, calendar events, reactions, user attribution, run metadata, manifests, exports, database contents, search indexes, logs, or attachments. Public availability does not make data eligible for upload. Credentials and local environment files are also prohibited.
 
-- 코드, PostgreSQL, OpenSearch: NVMe
-- 원본 API 응답, manifest, export, 장기 로그: `/data/rlwrld-worklog/`
+Any future proposal to store data in Git requires a separate discussion and an explicit policy change before files are staged.
 
-자세한 설계는 [docs/architecture.md](docs/architecture.md)를 참고하세요.
+## Current scope
 
-## 현재 단계
+- Deterministic timeline normalization
+- Daily incremental read-only collection from Slack, Notion, and Google Calendar, with an
+  immutable raw archive, per-run manifests, and resumable per-source checkpoints
+  (`worklog daily-collect`, see [docs/daily-collection.md](docs/daily-collection.md))
+- Standard v1 ledger conversion and loading, for both live captures and legacy files
+  (see [docs/ledger.md](docs/ledger.md))
+- Delegated-work tracking shared by the backoffice `업무 현황` page and the local
+  `worklog work` CLI, stored under `APP_CONFIG_ROOT`
+  (see [docs/delegated-work.md](docs/delegated-work.md))
+- Collection status in the backoffice `수집 현황` page: running, completed and failed
+  runs per source, KST date and weekday coverage, and an append-only registry of the
+  collection rules (`V0` legacy dumps, `V1` official-API raw ledger) with a stable
+  content digest per version. Every new manifest records the rule version and digest
+  it was captured under; the dashboard is derived, read-only, and rebuildable
+- Read-only mirroring of legacy Slack and Google Calendar JSON to local storage
+- PostgreSQL and OpenSearch development services through Docker Compose
+- Local web API
 
-정규화 코어와 Slack 읽기 전용 수집기가 구현되어 있습니다. 단위 테스트는 외부 API에
-접속하지 않으며, 실제 연결은 사용자가 만든 Slack 앱의 User OAuth Token으로만
-실행합니다.
+Search indexing and response-drafting features are planned work.
+
+## Development
+
+Requires Python 3.12 or later.
 
 ```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-PYTHONPATH=src python3 -m rlwrld_worklog fixtures \
-  --input tests/fixtures \
-  --output /tmp/rlwrld-worklog-events.jsonl \
-  --self-slack-user-id U0SELF
+PYTHONPATH="$PWD/.python-packages:$PWD/src" python3 -m pytest -q
+docker compose config
 ```
 
-테스트 인프라는 다음 명령으로 시작합니다. 앱 포트만 호스트의
-`127.0.0.1:8080`에 게시되며 PostgreSQL과 OpenSearch는 Docker 내부 네트워크에만
-노출됩니다.
+No test reaches the network: every collector test drives a scripted fake API client
+against a temporary directory.
 
-```bash
-docker compose --env-file .env up -d --build
-curl -fsS http://127.0.0.1:8080/healthz
-```
-
-Slack 연결은 다음 안전 순서로 진행합니다.
-
-1. `integrations/slack/app-manifest.yaml`로 내부 Slack 앱 생성 및 워크스페이스 설치
-2. `scripts/install-slack-secret.sh`로 User OAuth Token을 로컬에 저장
-3. `doctor` 명령으로 자격증명과 읽기 권한만 검증
-4. 최근 24시간, 3개 채널/20개 메시지만 `test` 원문 경로에 수집
-5. 결과를 확인한 뒤 2년 과거 백필 및 매일 오전 5시 KST 증분 동기화
-
-실행 명령은 [docs/setup.md](docs/setup.md)의 "Slack 연결"을 참고하세요.
+Runtime credentials are stored outside Git. Collected data is stored outside the working tree under `/data/rlwrld-worklog`.

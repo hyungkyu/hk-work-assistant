@@ -78,10 +78,14 @@ def normalize_slack(record: dict[str, Any], *, self_user_id: str) -> TimelineEve
         for item in record.get("files", [])
     ]
     actor_id = record.get("user") or record.get("bot_id")
+    workspace_id = record.get("team_id") or record.get("workspace_id")
+    external_id = f"{record['channel']}:{record['ts']}"
+    if workspace_id:
+        external_id = f"{workspace_id}:{external_id}"
     return TimelineEvent.create(
         source=Source.SLACK,
         event_type="message_deleted" if record.get("deleted") else "message",
-        external_id=f"{record['channel']}:{record['ts']}",
+        external_id=external_id,
         actor_id=actor_id,
         occurred_at=_slack_datetime(record["ts"]),
         updated_at=_slack_datetime(record["edited"]["ts"]) if record.get("edited") else None,
@@ -102,9 +106,14 @@ def normalize_slack(record: dict[str, Any], *, self_user_id: str) -> TimelineEve
 
 def normalize_calendar(record: dict[str, Any]) -> TimelineEvent:
     private = record.get("visibility") == "private"
-    start = record.get("start", {}).get("dateTime") or record.get("start", {}).get("date")
+    start_value = record.get("start") or record.get("originalStartTime") or {}
+    if isinstance(start_value, dict):
+        start = start_value.get("dateTime") or start_value.get("date")
+    else:
+        start = start_value
     updated = record.get("updated")
     status = record.get("status", "confirmed")
+    start = start or updated or record.get("created") or datetime.now(timezone.utc).isoformat()
     summary = "Busy" if private else record.get("summary", "(untitled)")
     payload = {
         "summary": summary,
@@ -128,7 +137,7 @@ def normalize_calendar(record: dict[str, Any]) -> TimelineEvent:
     )
     return TimelineEvent.create(
         source=Source.GOOGLE_CALENDAR,
-        event_type="calendar_event",
+        event_type="calendar_event_cancelled" if status == "cancelled" else "calendar_event",
         external_id=f"{record['calendar_id']}:{record['id']}",
         actor_id=record.get("creator", {}).get("email"),
         occurred_at=_iso_datetime(start),
@@ -139,6 +148,61 @@ def normalize_calendar(record: dict[str, Any]) -> TimelineEvent:
         classification=classification,
         payload=payload,
         version_key=updated or status,
+    )
+
+
+def _plain_text(value: Any) -> str:
+    parts: list[str] = []
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            plain_text = item.get("plain_text")
+            if isinstance(plain_text, str):
+                parts.append(plain_text)
+            else:
+                for nested in item.values():
+                    visit(nested)
+        elif isinstance(item, list):
+            for nested in item:
+                visit(nested)
+
+    visit(value)
+    return "\n".join(part for part in parts if part)
+
+
+def normalize_notion(
+    page: dict[str, Any],
+    *,
+    blocks: list[dict[str, Any]] | None = None,
+    comments: list[dict[str, Any]] | None = None,
+    legacy_text: str | None = None,
+) -> TimelineEvent:
+    created = page.get("created_time") or page.get("last_edited_time")
+    if not created:
+        raise ValueError("Notion page is missing created_time and last_edited_time")
+    updated = page.get("last_edited_time") or created
+    page_id = str(page["id"])
+    content = legacy_text if legacy_text is not None else _plain_text(blocks or [])
+    title = page.get("title") or _plain_text(page.get("properties", {}))[:500]
+    return TimelineEvent.create(
+        source=Source.NOTION,
+        event_type="notion_page",
+        external_id=page_id,
+        actor_id=(page.get("last_edited_by") or {}).get("id"),
+        occurred_at=_iso_datetime(created),
+        updated_at=_iso_datetime(updated),
+        container_id=str((page.get("parent") or {}).get("page_id") or (page.get("parent") or {}).get("data_source_id") or ""),
+        thread_id=page_id,
+        permalink=page.get("url"),
+        classification=classify_text(f"{title}\n{content}"),
+        payload={
+            "title": title,
+            "properties": page.get("properties", {}),
+            "content_text": content,
+            "comments": comments or [],
+            "archived": bool(page.get("archived") or page.get("in_trash")),
+        },
+        version_key=str(updated),
     )
 
 
@@ -176,4 +240,6 @@ def normalize_records(
         return [normalize_calendar(record) for record in records]
     if source is Source.GITHUB:
         return [normalize_github(record) for record in records]
+    if source is Source.NOTION:
+        return [normalize_notion(record) for record in records]
     raise ValueError(f"Unsupported source: {source}")

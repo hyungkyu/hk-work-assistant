@@ -2,7 +2,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS sync_runs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    source text NOT NULL CHECK (source IN ('slack', 'google_calendar', 'github')),
+    source text NOT NULL CHECK (source IN ('slack', 'google_calendar', 'github', 'notion')),
     environment text NOT NULL CHECK (environment IN ('test', 'production')),
     started_at timestamptz NOT NULL DEFAULT now(),
     finished_at timestamptz,
@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS sync_runs (
 CREATE TABLE IF NOT EXISTS raw_objects (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     sync_run_id uuid NOT NULL REFERENCES sync_runs(id),
-    source text NOT NULL CHECK (source IN ('slack', 'google_calendar', 'github')),
+    source text NOT NULL CHECK (source IN ('slack', 'google_calendar', 'github', 'notion')),
     external_id text NOT NULL,
     version_key text NOT NULL,
     archive_path text NOT NULL,
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS people (
 CREATE TABLE IF NOT EXISTS identities (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     person_id uuid NOT NULL REFERENCES people(id),
-    source text NOT NULL CHECK (source IN ('slack', 'google_calendar', 'github')),
+    source text NOT NULL CHECK (source IN ('slack', 'google_calendar', 'github', 'notion')),
     external_id text NOT NULL,
     handle text,
     email text,
@@ -73,6 +73,42 @@ CREATE INDEX IF NOT EXISTS timeline_events_payload_gin_idx
 CREATE INDEX IF NOT EXISTS timeline_events_classifications_gin_idx
     ON timeline_events USING gin (classifications);
 
+CREATE TABLE IF NOT EXISTS source_object_observations (
+    id uuid PRIMARY KEY,
+    source text NOT NULL CHECK (source IN ('slack', 'google_calendar', 'github', 'notion')),
+    object_type text NOT NULL,
+    external_id text NOT NULL,
+    origin text NOT NULL CHECK (origin IN ('legacy', 'live')),
+    origin_priority integer NOT NULL,
+    observed_at timestamptz NOT NULL,
+    remote_updated_at timestamptz,
+    is_deleted boolean NOT NULL DEFAULT false,
+    payload jsonb NOT NULL,
+    timeline_event_id uuid REFERENCES timeline_events(event_id),
+    UNIQUE (source, object_type, external_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS source_object_observations_lookup_idx
+    ON source_object_observations (source, object_type, external_id, origin_priority DESC, remote_updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS source_object_heads (
+    source text NOT NULL,
+    object_type text NOT NULL,
+    external_id text NOT NULL,
+    observation_id uuid NOT NULL REFERENCES source_object_observations(id),
+    origin text NOT NULL,
+    origin_priority integer NOT NULL,
+    remote_updated_at timestamptz,
+    selected_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (source, object_type, external_id)
+);
+
+CREATE OR REPLACE VIEW current_timeline_events AS
+SELECT event.*
+FROM source_object_heads head
+JOIN source_object_observations observation ON observation.id = head.observation_id
+JOIN timeline_events event ON event.event_id = observation.timeline_event_id;
+
 CREATE TABLE IF NOT EXISTS mentions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     event_id uuid NOT NULL REFERENCES timeline_events(event_id) ON DELETE CASCADE,
@@ -100,4 +136,3 @@ CREATE TABLE IF NOT EXISTS action_candidates (
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (event_id, kind, rule_id)
 );
-
