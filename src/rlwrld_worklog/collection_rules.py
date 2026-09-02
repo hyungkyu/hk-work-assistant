@@ -32,10 +32,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
 
-RULE_REGISTRY_SCHEMA_VERSION = 1
+RULE_REGISTRY_SCHEMA_VERSION = 2
 
 # Canonical ledger source names, as used by the ledger and the service DB.
 SOURCES = ("slack", "notion", "google_calendar")
@@ -129,12 +129,19 @@ class CollectionRule:
     supersedes: str | None = None
 
     def content(self) -> dict[str, Any]:
-        """Everything the digest covers. The digest itself is never inside."""
+        """Everything the digest covers. The digest itself is never inside.
+
+        `status` is deliberately absent. It records where this version sits in
+        the registry's lifecycle, not what a run under it collected. Including
+        it meant that retiring a version -- which any registry with more than
+        one version must do -- changed its digest and tripped the append-only
+        check, making a required transition look like tampering. The frozen
+        thing is what the rule says about collection; that is what is hashed.
+        """
         return {
             "registry_schema_version": RULE_REGISTRY_SCHEMA_VERSION,
             "version": self.version,
             "title": self.title,
-            "status": self.status,
             "effective": self.effective.as_dict(),
             "summary": self.summary,
             "manifest_schema_version": self.manifest_schema_version,
@@ -340,7 +347,7 @@ V0 = CollectionRule(
 V1 = CollectionRule(
     version="V1",
     title="공식 API 기반 원본 원장 (official-API immutable raw ledger)",
-    status="active",
+    status="superseded",
     effective=EffectivePeriod(
         start="2026-08-25",
         end=None,
@@ -563,18 +570,119 @@ V1 = CollectionRule(
 )
 
 
+# --------------------------------------------------------------------- V2
+
+V2 = CollectionRule(
+    version="V2",
+    title="공식 API 원본 원장 + 노션 날짜 슬라이스 (date-sliced Notion capture)",
+    status="active",
+    effective=EffectivePeriod(
+        start="2026-09-02",
+        end=None,
+        basis=(
+            "observed: the first date-sliced Notion run "
+            "(manifests/notion/production/20260902T131021Z-4f3d2288913a.json, capture_density "
+            "date-slice). Still active; no successor rule is published."
+        ),
+    ),
+    summary=(
+        "V1 with one addition: Notion can be captured one bounded last_edited_time window "
+        "at a time instead of only from a checkpoint watermark forward. Slack and Google "
+        "Calendar are unchanged from V1. A bounded slice is a historical observation, not "
+        "the live head, so it does not advance the checkpoint and does not consult the "
+        "Notion link queue or the known-object re-check."
+    ),
+    manifest_schema_version=2,
+    ledger_schema_version="1.0",
+    source_schema_version=None,
+    capture_profiles=(
+        "live-slack-web-api/v1",
+        "live-notion-api/v1",
+        "live-google-calendar-api/v1",
+    ),
+    storage_layout=V1.storage_layout,
+    unknowns=V1.unknowns
+    + (
+        "A date slice observes one window. It says nothing about whether anything edited "
+        "before that window was ever captured, which is why it may not move the watermark.",
+    ),
+    sources=(
+        V1.source_rule("slack"),
+        replace(
+            V1.source_rule("notion"),
+            density=(
+                "연속 증분 또는 날짜 슬라이스 (incremental continuous or date slice). "
+                "슬라이스 모드에서는 last_edited_time 창 하나가 한 실행의 범위이며, "
+                "그 창을 벗어난 객체는 수집하지 않는다."
+            ),
+            density_kind="incremental_or_date_slice",
+            includes=V1.source_rule("notion").includes
+            + (
+                "A bounded last_edited_time window (`until`), so one run covers one KST day "
+                "and terminates by construction rather than after the whole workspace",
+            ),
+            excludes=V1.source_rule("notion").excludes
+            + (
+                "In slice mode: the link queue and the known-object re-check, which target "
+                "the live head and would make the slice unbounded again",
+            ),
+            known_limitations=V1.source_rule("notion").known_limitations
+            + (
+                "notion.date_slice_capture: a bounded window run captured one "
+                "last_edited_time slice instead of the live head. The link queue and the "
+                "known-object re-check were not consulted and the checkpoint was not "
+                "advanced: a historical slice proves nothing about everything edited "
+                "before its end.",
+            ),
+            evidence=V1.source_rule("notion").evidence
+            + (
+                "src/rlwrld_worklog/notion_collector.py (`collect(until=…)`, `_search` "
+                "upper bound, DATE_SLICE_NOTE)",
+                "manifest fields: requested_window.until, requested_window.mode, "
+                "counters.search.skipped_above_window",
+            ),
+        ),
+        V1.source_rule("google_calendar"),
+    ),
+    supersedes="V1",
+)
+
+
 # --------------------------------------------------------------- registry
 
-RULES: tuple[CollectionRule, ...] = (V0, V1)
+RULES: tuple[CollectionRule, ...] = (V0, V1, V2)
 
-ACTIVE_RULE_VERSION = "V1"
+ACTIVE_RULE_VERSION = "V2"
 
 # Content digests of every published version. A published rule is frozen: if
 # editing one changes its meaning, the digest moves and import fails here,
 # which is the signal to append a new version instead of rewriting history.
+# Digests these versions carried under registry schema 1, when `status` was
+# still part of the hash. Manifests written then recorded these, and they must
+# keep verifying: the rule content did not change, the digest definition did.
+HISTORICAL_DIGESTS: dict[str, tuple[str, ...]] = {
+    "V0": ("sha256:0be5ca5652806fc7e0c1439c3a860c2dd290a7c2be9e9b53fb25c30332edcc4a",),
+    "V1": ("sha256:2a7c9b6d1357927a85057917729dd810fa2f2f438f3c7b744bb2a4590476186a",),
+}
+
+
+def digest_is_recognised(version: str, digest: str | None) -> bool:
+    """Does this digest identify that version, now or under an earlier schema?"""
+    if not digest:
+        return False
+    rule = rule_for_version(version)
+    if rule is not None and digest == rule.digest:
+        return True
+    return digest in HISTORICAL_DIGESTS.get(version, ())
+
+
+# Re-pinned once, at registry schema 2, when `status` left the digest. The rule
+# *content* of V0 and V1 is byte-for-byte what it was; only what the hash covers
+# changed. HISTORICAL_DIGESTS above keeps the earlier values verifying.
 PUBLISHED_DIGESTS: dict[str, str] = {
-    "V0": "sha256:0be5ca5652806fc7e0c1439c3a860c2dd290a7c2be9e9b53fb25c30332edcc4a",
-    "V1": "sha256:2a7c9b6d1357927a85057917729dd810fa2f2f438f3c7b744bb2a4590476186a",
+    "V0": "sha256:1987bcce80c135426788e3975eac168312136665cb6e8239fba7114a85339cac",
+    "V1": "sha256:75c1314212d733305fb2acfaf337b033a9489e4eb81b1b6005bd564f486cb7d8",
+    "V2": "sha256:831aec5edb7e4a349798ec1ec8d9e5bd23f75b052d09c7b157ab5d1dafbfe939",
 }
 
 

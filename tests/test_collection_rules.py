@@ -70,24 +70,52 @@ def test_the_registry_refuses_an_edited_published_rule() -> None:
     original = rule_for_version("V0")
     assert original is not None
     edited = replace(original, title="quietly rewritten")
+    others = tuple(rule for rule in RULES if rule.version != "V0")
     with pytest.raises(RuleRegistryError, match="frozen"):
-        _validate_registry((edited, rule_for_version("V1")))
+        _validate_registry((edited,) + others)
 
 
 def test_the_registry_refuses_a_rule_that_forgets_a_source() -> None:
-    original = rule_for_version("V1")
-    assert original is not None
+    original = active_rule()
     edited = replace(original, sources=original.sources[:1])
+    others = tuple(rule for rule in RULES if rule.version != original.version)
     with pytest.raises(RuleRegistryError, match="does not define"):
-        _validate_registry((rule_for_version("V0"), edited))
+        _validate_registry(others + (edited,))
 
 
 def test_exactly_one_rule_is_active_and_it_is_the_stamped_one() -> None:
     active = [rule for rule in RULES if rule.status == "active"]
     assert [rule.version for rule in active] == [ACTIVE_RULE_VERSION]
     assert active_rule().version == ACTIVE_RULE_VERSION
+    retired = tuple(replace(rule, status="superseded") for rule in RULES)
     with pytest.raises(RuleRegistryError, match="must be active"):
-        _validate_registry((replace(RULES[1], status="superseded"),) + (RULES[0],))
+        _validate_registry(retired)
+
+
+def test_retiring_a_version_does_not_change_its_digest() -> None:
+    """`status` is registry lifecycle, not a claim about what was collected.
+
+    It used to be inside the digest, which meant superseding a version -- a
+    thing any registry with two versions must do -- moved its digest and
+    tripped the append-only check. The frozen thing is what the rule says
+    about collection.
+    """
+    for rule in RULES:
+        assert "status" not in rule.content()
+        flipped = "superseded" if rule.status == "active" else "active"
+        assert replace(rule, status=flipped).digest == rule.digest
+
+
+def test_a_digest_recorded_under_the_earlier_schema_still_verifies() -> None:
+    """Manifests on disk carry digests computed before `status` left the hash."""
+    from rlwrld_worklog.collection_rules import HISTORICAL_DIGESTS, digest_is_recognised
+
+    for version, digests in HISTORICAL_DIGESTS.items():
+        for digest in digests:
+            assert digest_is_recognised(version, digest), (version, digest)
+        assert digest_is_recognised(version, rule_for_version(version).digest)
+    assert not digest_is_recognised("V0", "sha256:" + "0" * 64)
+    assert not digest_is_recognised("V0", None)
 
 
 def test_the_manifest_stamp_names_the_active_rule_and_its_digest() -> None:
@@ -119,13 +147,18 @@ def test_v0_states_its_gaps_instead_of_implying_completeness() -> None:
         assert source.evidence
 
 
-def test_v1_names_every_limitation_the_collectors_actually_record() -> None:
-    """A collector that grows a new coverage note needs a new rule version."""
-    rule = rule_for_version("V1")
-    assert rule is not None
+def test_the_registry_names_every_limitation_the_collectors_actually_record() -> None:
+    """A collector that grows a new coverage note needs a new rule version.
+
+    Checked against every published version, not just the active one: a note
+    is named by whichever version introduced it, and older versions keep
+    naming the notes that existed when they were written.
+    """
+    rule = active_rule()
     declared = {
         limitation.split(":", 1)[0]
-        for source in rule.sources
+        for published in RULES
+        for source in published.sources
         for limitation in source.known_limitations
     }
     for module, source_name in (
@@ -139,15 +172,14 @@ def test_v1_names_every_limitation_the_collectors_actually_record() -> None:
         missing = keys - declared
         assert not missing, (
             f"{module} records coverage notes {sorted(missing)} that no published rule "
-            "names; append a new collection rule version rather than editing V1"
+            "names; append a new collection rule version rather than editing a published one"
         )
         assert rule.source_rule(source_name) is not None
 
 
-def test_v1_pins_the_schema_versions_its_runs_actually_write() -> None:
+def test_the_active_rule_pins_the_schema_versions_its_runs_actually_write() -> None:
     """If a schema version moves, the rule must be re-published, not patched."""
-    rule = rule_for_version("V1")
-    assert rule is not None
+    rule = active_rule()
     assert rule.manifest_schema_version == archive.MANIFEST_SCHEMA_VERSION
     assert rule.ledger_schema_version == LEDGER_SCHEMA_VERSION
     assert set(rule.capture_profiles) == {
@@ -156,7 +188,7 @@ def test_v1_pins_the_schema_versions_its_runs_actually_write() -> None:
         "live-google-calendar-api/v1",
     }
     for source in rule.sources:
-        assert source.density_kind == "incremental_continuous"
+        assert source.density_kind in {"incremental_continuous", "incremental_or_date_slice"}
 
 
 def test_the_registry_serializes_with_a_digest_per_rule() -> None:

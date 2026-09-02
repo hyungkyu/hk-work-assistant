@@ -18,7 +18,7 @@ import pytest
 
 from rlwrld_worklog import collection_status as status
 from rlwrld_worklog.collection_progress import PROGRESS_SCHEMA_VERSION
-from rlwrld_worklog.collection_rules import active_rule, active_rule_stamp
+from rlwrld_worklog.collection_rules import ACTIVE_RULE_VERSION, active_rule, active_rule_stamp
 
 KST = status.KST
 NOW = datetime(2026, 9, 2, 3, 0, tzinfo=timezone.utc)  # 2026-09-02 12:00 KST
@@ -180,7 +180,9 @@ def find_run(index: status.RunIndex, run_id: str) -> dict[str, Any]:
 def test_a_stamped_manifest_reports_its_rule_as_declared(paths: status.CollectionPaths) -> None:
     write_manifest(paths, run_id="20260901T000000Z-aaaaaa")
     run = find_run(status.build_run_index(paths, now=NOW), "20260901T000000Z-aaaaaa")
-    assert run["rule"]["version"] == "V1"
+    # The stamp names whichever rule was active when the manifest was written,
+    # so this follows the registry rather than pinning a version string.
+    assert run["rule"]["version"] == ACTIVE_RULE_VERSION
     assert run["rule"]["attribution"] == "declared"
     assert run["rule"]["digest"] == active_rule().digest
     assert run["rule"]["digest_matches_registry"] is True
@@ -203,7 +205,7 @@ def test_a_declared_version_the_registry_does_not_know_is_flagged(
     assert run["rule"]["digest_matches_registry"] is None
 
 
-def test_an_unstamped_manifest_of_the_current_collector_is_inferred_v1(
+def test_an_unstamped_manifest_of_the_current_collector_is_inferred_as_active(
     paths: status.CollectionPaths,
 ) -> None:
     """Rule 6: the reconstruction is reported as inferred, never as declared."""
@@ -215,13 +217,13 @@ def test_an_unstamped_manifest_of_the_current_collector_is_inferred_v1(
         collection_rule_schema_version=None,
     )
     run = find_run(status.build_run_index(paths, now=NOW), "20260901T000002Z-aaaaac")
-    assert run["rule"]["version"] == "V1"
+    assert run["rule"]["version"] == ACTIVE_RULE_VERSION
     assert run["rule"]["attribution"] == "inferred"
     assert run["rule"]["digest"] is None
     assert "manifest.capture_profile" in run["rule"]["evidence"]
 
 
-def test_an_old_manifest_without_a_capture_profile_is_still_inferred_v1(
+def test_an_old_manifest_without_a_capture_profile_is_still_inferred_as_active(
     paths: status.CollectionPaths,
 ) -> None:
     write_manifest(
@@ -664,7 +666,7 @@ def test_weekday_grouping_rolls_dates_up_by_kst_weekday(
     tuesday = rows["화"]["cells"]["slack"]
     assert tuesday["coverage_counts"] == {"collected": 1}
     assert tuesday["runs"] == 1
-    assert tuesday["rule_versions"] == {"V1·declared": 1}
+    assert tuesday["rule_versions"] == {f"{ACTIVE_RULE_VERSION}·declared": 1}
     monday = rows["월"]["cells"]["slack"]
     assert monday["coverage_counts"] == {"not_collected": 1}
     assert monday["dates_not_collected"] == 1
@@ -968,7 +970,7 @@ def test_a_date_with_both_v1_and_v0_keeps_the_v1_verdict_and_reports_mixed(
     assert cell["coverage"] == "collected"
     assert cell["evidence_class"] == "mixed"
     versions = {(entry["version"], entry["attribution"]) for entry in cell["rule_versions"]}
-    assert ("V1", "declared") in versions and ("V0", "legacy") in versions
+    assert (ACTIVE_RULE_VERSION, "declared") in versions and ("V0", "legacy") in versions
     assert cell["runs"] == 1
 
 

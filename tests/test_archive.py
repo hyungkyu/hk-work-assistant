@@ -197,6 +197,8 @@ def test_no_progress_snapshot_is_written_without_a_configured_root(
 def test_a_run_publishes_an_atomic_progress_snapshot_outside_the_archive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from rlwrld_worklog.collection_rules import ACTIVE_RULE_VERSION
+
     config_root = tmp_path / "config"
     monkeypatch.setenv("APP_CONFIG_ROOT", str(config_root))
     archive_root = tmp_path / "archive"
@@ -216,7 +218,7 @@ def test_a_run_publishes_an_atomic_progress_snapshot_outside_the_archive(
     assert opened["status"] == "running"
     assert opened["files_written"] == 0
     assert opened["raw_run_dir"].startswith("raw/notion/production/")
-    assert opened["collection_rule_version"] == "V1"
+    assert opened["collection_rule_version"] == ACTIVE_RULE_VERSION
     assert opened["pid"] and opened["host"]
 
     archive.write_page("page", {"secret": "NEVER-IN-A-SNAPSHOT"})

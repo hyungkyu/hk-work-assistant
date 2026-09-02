@@ -50,6 +50,7 @@ from .collection_rules import (
     COLLECTOR_TO_SOURCE,
     SOURCE_TO_COLLECTOR,
     active_rule,
+    digest_is_recognised,
     rule_for_version,
     stamp_from_manifest,
 )
@@ -312,7 +313,14 @@ def classify_rule(
             "schema_version": stamp["schema_version"],
             "known_version": known is not None,
             "digest_matches_registry": (
-                None if known is None or stamp["digest"] is None else stamp["digest"] == known.digest
+                # A manifest written before the digest definition changed
+                # carries the earlier value. That is not a mismatch: the rule
+                # content is the same, so the earlier digest still identifies
+                # it. Reporting it as a mismatch would flag real runs as
+                # tampered with.
+                None
+                if known is None or stamp["digest"] is None
+                else digest_is_recognised(stamp["version"], stamp["digest"])
             ),
             "evidence": ["manifest.collection_rule_version"],
         }

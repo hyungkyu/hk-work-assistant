@@ -108,7 +108,9 @@ def test_the_super_administrator_sees_the_rule_registry(owner: FakeRequest) -> N
     payload = collection_web.collection_rules(owner)
     assert payload["active_version"] == ACTIVE_RULE_VERSION
     assert payload["digests_pinned"] is True
-    assert [rule["version"] for rule in payload["rules"]] == ["V0", "V1"]
+    from rlwrld_worklog.collection_rules import RULES
+
+    assert [rule["version"] for rule in payload["rules"]] == [r.version for r in RULES]
     for rule in payload["rules"]:
         assert rule["digest"].startswith("sha256:")
         assert rule["effective"]["basis"]

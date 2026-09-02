@@ -111,6 +111,13 @@ PERMANENT_SKIP_WATERMARK_NOTE = (
     "no unknown window hiding behind it, and holding would freeze the watermark forever."
 )
 
+DATE_SLICE_NOTE = (
+    "notion.date_slice_capture: this run captured one bounded last_edited_time window "
+    "instead of the live head. The link queue and the known-object re-check were not "
+    "consulted and the checkpoint was not advanced: a historical slice proves nothing "
+    "about everything edited before its end."
+)
+
 SEARCH_INCOMPLETE_NOTE = (
     "notion.search_walk_incomplete: the /search walk stopped on an error before it had read "
     "every result page, so discovery for this run is partial. The run is marked truncated and "
@@ -187,7 +194,13 @@ class NotionCollector:
 
     # ------------------------------------------------------------- helpers
 
-    def _search(self, candidates: dict[str, _Candidate], *, since: datetime) -> dict[str, Any]:
+    def _search(
+        self,
+        candidates: dict[str, _Candidate],
+        *,
+        since: datetime,
+        until: datetime | None = None,
+    ) -> dict[str, Any]:
         """Walk /search, keeping whatever it managed to list.
 
         A failure part-way through the walk is not fatal: the candidates
@@ -195,12 +208,20 @@ class NotionCollector:
         elsewhere) are still worth collecting. It *is* a truncation, though --
         objects in the window may never have been listed -- so it marks the run
         truncated, which withholds the checkpoint.
+
+        ``until`` bounds the window from above. `/search` is ordered by
+        `last_edited_time` descending, so a bounded walk skips the newer
+        objects at the front, collects the slice, and still stops as soon as
+        results fall below ``since``. That is what makes one day's capture
+        finite: without an upper bound a first sync has to walk the whole
+        workspace before it can stop.
         """
         stats: dict[str, Any] = {
             "pages_walked": 0,
             "results": 0,
             "stopped_early": False,
             "complete": True,
+            "skipped_above_window": 0,
             "by_object": {},
         }
         cursor_pages = 0
@@ -223,6 +244,13 @@ class NotionCollector:
                     object_type = str(result.get("object") or "unknown")
                     stats["by_object"][object_type] = stats["by_object"].get(object_type, 0) + 1
                     edited = _parse_time(result.get("last_edited_time"))
+                    if until is not None and edited is not None and edited > until:
+                        # Newer than this slice. The walk is descending, so
+                        # these sit in front of the window and the walk must
+                        # keep going rather than stop.
+                        stats["skipped_above_window"] += 1
+                        page_had_recent = True
+                        continue
                     if edited is None or edited >= since:
                         page_had_recent = True
                         object_id = str(result["id"])
@@ -433,6 +461,7 @@ class NotionCollector:
         recheck_limit: int = DEFAULT_RECHECK_LIMIT,
         comment_request_budget: int | None = DEFAULT_COMMENT_REQUEST_BUDGET,
         advance_checkpoint: bool = True,
+        until: datetime | None = None,
     ) -> NotionCollectionResult:
         archive = self.archive
         # A dry or smoke run must not touch persistent production state. The
@@ -455,15 +484,27 @@ class NotionCollector:
             }
         )
         watermark = _parse_time(checkpoint.get("last_edited_watermark"))
-        # Overlap is harmless because the ledger is idempotent, and a stalled
-        # run must not leave a hole, so the earlier of the two bounds wins.
-        effective_since = min(since, watermark) if watermark else since
+        if until is not None:
+            # A bounded slice captures one historical window, out of order with
+            # the live head. Widening it by the checkpoint would pull in objects
+            # outside the slice, and advancing the watermark from it would claim
+            # everything up to that date had been seen. Neither is true, so the
+            # window is taken literally and the checkpoint is left alone.
+            effective_since = since
+            advance_checkpoint = False
+            archive.note_coverage(DATE_SLICE_NOTE)
+        else:
+            # Overlap is harmless because the ledger is idempotent, and a
+            # stalled run must not leave a hole, so the earlier bound wins.
+            effective_since = min(since, watermark) if watermark else since
         for note in COVERAGE_NOTES:
             archive.note_coverage(note)
         archive.set_requested_window(
             {
                 "since_requested": since.isoformat(),
                 "since_effective": effective_since.isoformat(),
+                "until": until.isoformat() if until else None,
+                "mode": "date_slice" if until else "incremental",
                 "checkpoint_watermark": checkpoint.get("last_edited_watermark"),
                 "max_objects": max_objects,
                 "recheck_limit": recheck_limit,
@@ -474,7 +515,11 @@ class NotionCollector:
         candidates: dict[str, _Candidate] = {}
         linked_by_id: dict[str, list[str]] = {}
         unresolved_urls: list[str] = []
-        for item in link_queue.pending():
+        # The link queue and the re-check target the live head. A date slice is
+        # a historical window, so pulling them in would make the slice
+        # unbounded again and would consume queue entries a real run needs.
+        slice_only = until is not None
+        for item in ([] if slice_only else link_queue.pending()):
             page_id = item.get("page_id") or canonical_notion_page_id(item["url"])
             if page_id:
                 candidates[page_id] = _Candidate(object_id=page_id, object_type="unknown", source="link_queue")
@@ -484,7 +529,7 @@ class NotionCollector:
                 link_queue.mark(item["url"], "unresolved", error="Notion page ID not present in URL")
                 archive.note_skip("link_queue_unresolved", url_hash=_url_fingerprint(item["url"]))
 
-        search_stats = self._search(candidates, since=effective_since)
+        search_stats = self._search(candidates, since=effective_since, until=until)
 
         known_objects: dict[str, dict[str, Any]] = {
             str(key): dict(value)
@@ -492,7 +537,9 @@ class NotionCollector:
             if isinstance(value, dict)
         }
         rechecked = 0
-        if recheck_limit > 0:
+        # The re-check exists to notice archives, trashes and lost shares at the
+        # live head. A historical slice is not the head, so it stays out.
+        if recheck_limit > 0 and not slice_only:
             stale = sorted(
                 (identifier for identifier in known_objects if identifier not in candidates),
                 key=lambda identifier: str(known_objects[identifier].get("last_checked") or ""),
