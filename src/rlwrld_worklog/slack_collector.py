@@ -7,11 +7,16 @@ Coverage design, and the honest limits of it:
     visible and their metadata is preserved.
   * `conversations.history` is resumed per channel from the checkpoint's own
     high watermark, so a daily run reads only what is new in that channel.
-  * Slack does not return thread replies in `conversations.history`. A reply
-    posted today to a thread whose parent is older than the window is
-    therefore invisible to history alone. Two independent mitigations run:
-    a bounded re-poll of watched threads carried in the checkpoint, and the
-    critical `search.messages` queries below. Both are recorded in coverage.
+  * Slack does not return thread replies in `conversations.history`. Every
+    parent sighted in the window that declares `reply_count` is therefore
+    swept through `conversations.replies` in the same run - a parent carries
+    `thread_ts` equal to its own `ts`, so only a message whose `thread_ts`
+    names a *different* message is a reply and skipped here. A reply posted
+    today to a thread whose parent predates the window stays invisible to
+    history; two independent mitigations cover it - a bounded re-poll of
+    watched threads carried in the checkpoint, and the critical
+    `search.messages` queries below. The sweep compares declared against
+    fetched replies and names any shortfall in coverage.
   * `search.messages` covers direct mentions, DMs to self, self-authored
     messages, `<!channel>`/`<!here>`/`<!everyone>` broadcasts and every
     usergroup the user belongs to. Matches that the context filter drops, and
@@ -61,9 +66,10 @@ COVERAGE_NOTES = (
     "slack.message_deletion_not_exposed: the Web API has no deleted-message feed; "
     "conversations.history stops returning a deleted message instead of tombstoning it. "
     "Tombstones are preserved only where Slack exposes them (subtype=tombstone).",
-    "slack.thread_replies_need_supplements: conversations.history omits thread replies, "
-    "so replies to older threads are covered by the bounded watched-thread re-poll and "
-    "by search.messages, not by history alone.",
+    "slack.thread_replies_need_supplements: conversations.history omits thread replies. "
+    "A parent sighted in the window has its replies swept through conversations.replies; "
+    "replies to a parent that predates the window are covered by the bounded watched-thread "
+    "re-poll and by search.messages, not by history alone.",
     "slack.search_index_lag: search.messages is an index and can lag the live channel, "
     "so a same-minute mention may first appear on the following run.",
 )
@@ -312,9 +318,12 @@ class SlackCollector:
 
         skipped_channels: list[dict[str, str]] = []
         threads_repolled = 0
+        parents_swept = 0
+        declared_replies = 0
+        replies_fetched = 0
 
         def collect_replies(channel_id: str, thread_ts: str, oldest: str) -> None:
-            nonlocal threads_repolled
+            nonlocal threads_repolled, replies_fetched
             threads_repolled += 1
             for reply_page in self._pages(
                 "conversations.replies",
@@ -326,12 +335,15 @@ class SlackCollector:
                 inclusive=True,
             ):
                 for reply in reply_page["messages"]:
+                    if str(reply.get("ts") or "") != str(thread_ts):
+                        replies_fetched += 1
                     add_message(channel_id, reply)
                     if at_limit():
                         archive.note_truncation("max_messages", limit=max_messages)
                         return
 
         def collect_channel(channel_id: str) -> None:
+            nonlocal parents_swept, declared_replies
             oldest = previous_watermarks.get(channel_id) or f"{since_ts:.6f}"
             for page in self._pages(
                 "conversations.history",
@@ -346,9 +358,22 @@ class SlackCollector:
                     if at_limit():
                         archive.note_truncation("max_messages", limit=max_messages)
                         return
-                    if message.get("thread_ts") or not message.get("reply_count"):
+                    # Slack stamps a thread *parent* with thread_ts == its own
+                    # ts, so testing thread_ts alone skips every parent and the
+                    # replies are never fetched. Only a genuine reply - one
+                    # whose thread_ts names a different message - is skipped
+                    # here; its siblings arrive through the parent's sweep.
+                    timestamp = str(message.get("ts") or "")
+                    thread_ts = message.get("thread_ts")
+                    if thread_ts and str(thread_ts) != timestamp:
                         continue
-                    collect_replies(channel_id, str(message["ts"]), oldest)
+                    reply_count = message.get("reply_count")
+                    if not reply_count:
+                        continue
+                    if isinstance(reply_count, int):
+                        declared_replies += reply_count
+                    parents_swept += 1
+                    collect_replies(channel_id, timestamp, oldest)
                     if at_limit():
                         return
 
@@ -459,6 +484,18 @@ class SlackCollector:
                 "workspace-wide and are skipped when the capture is channel- or message-bounded."
             )
 
+        # A thread parent declares how many replies it has, so a shortfall is
+        # measurable rather than invisible. Name it instead of letting the run
+        # report a clean success over replies it never fetched.
+        if declared_replies > replies_fetched:
+            archive.note_coverage(
+                "slack.thread_replies_incomplete: the parent sweep sighted "
+                f"{declared_replies} declared replies across {parents_swept} threads but "
+                f"archived {replies_fetched}. Replies posted before the requested window, "
+                "and replies lost to a rate limit or a truncated run, account for the "
+                "difference; re-run the window to close it."
+            )
+
         archive.note_rate_limit(getattr(self.client, "rate_limit_hits", 0))
         events = tuple(sorted(events_by_key.values(), key=lambda item: (item.occurred_at, item.event_id)))
         channels_collected = len(channels) - len(skipped_channels)
@@ -471,6 +508,9 @@ class SlackCollector:
             "self_usergroups": self_group_ids,
             "messages_seen": messages_seen,
             "threads_repolled": threads_repolled,
+            "thread_parents_swept": parents_swept,
+            "thread_replies_declared": declared_replies,
+            "thread_replies_fetched": replies_fetched,
             "searches_run": searches_run,
             "search_matches_kept": search_kept,
             "search_matches_context_filtered": search_filtered,
