@@ -285,6 +285,115 @@ def test_replies_to_an_older_thread_are_re_polled_from_the_checkpoint(tmp_path: 
     assert checkpoint["thread_watch"][CHANNEL][old_parent] == new_reply
 
 
+def test_a_parent_stamped_the_way_slack_stamps_one_still_gets_its_replies_swept(
+    tmp_path: Path,
+) -> None:
+    """Slack gives a thread parent a `thread_ts` equal to its own `ts`.
+
+    A guard that skips on the presence of `thread_ts` alone therefore skips
+    every parent, and `conversations.replies` is never reached. Fixtures that
+    leave `thread_ts` off the parent cannot see that: they describe a shape
+    Slack does not send. This one uses the real shape.
+    """
+    parent = ts(-500)
+    reply = ts(-100)
+    client = FakeSlack(
+        history={CHANNEL: [[message(parent, thread_ts=parent, reply_count=1, latest_reply=reply)]]},
+        replies={
+            (CHANNEL, parent): [
+                message(parent, thread_ts=parent, reply_count=1),
+                message(reply, thread_ts=parent, text="synthetic reply"),
+            ]
+        },
+    )
+
+    archive, result = collect(tmp_path, client)
+
+    swept = [params for method, params in client.calls if method == "conversations.replies"]
+    assert swept and swept[0]["ts"] == parent, (
+        "the parent's replies must be fetched from Slack, not merely present by some other route"
+    )
+    assert result.threads_repolled == 1
+    assert reply in {item["ts"] for item in archived(archive, tmp_path, f"replies-{CHANNEL}-{parent}")[0]["messages"]}
+
+
+def test_a_reply_carried_by_history_is_not_mistaken_for_a_parent(tmp_path: Path) -> None:
+    """The other direction: a genuine reply names a *different* message.
+
+    Sweeping from the reply itself would ask Slack for a thread rooted at a
+    timestamp that roots nothing, once per reply. The thread is reached
+    through its parent instead - here by the watched-thread re-poll, since a
+    parent this window never saw is a parent older than the window.
+    """
+    parent = ts(-500)
+    reply = ts(-100)
+    client = FakeSlack(
+        history={CHANNEL: [[message(reply, thread_ts=parent, reply_count=4, text="a reply")]]},
+        replies={(CHANNEL, parent): [message(reply, thread_ts=parent)]},
+    )
+
+    _, result = collect(tmp_path, client)
+
+    swept = [params["ts"] for method, params in client.calls if method == "conversations.replies"]
+    assert reply not in swept, "a reply must never be used as a thread root"
+    assert swept == [parent], "the thread is reached through the parent the reply names"
+    assert result.counters["thread_parents_swept"] == 0, (
+        "the history sweep counts parents it sighted; this one was reached by the re-poll"
+    )
+
+
+def test_the_sweep_reports_what_it_swept_and_names_replies_it_could_not_fetch(
+    tmp_path: Path,
+) -> None:
+    """A parent declares its reply count, so a shortfall is measurable.
+
+    Reporting a clean success over replies the run never archived is exactly
+    the failure this collector is supposed to make impossible.
+    """
+    parent = ts(-500)
+    reply = ts(-100)
+    client = FakeSlack(
+        history={CHANNEL: [[message(parent, thread_ts=parent, reply_count=3, latest_reply=reply)]]},
+        replies={
+            (CHANNEL, parent): [
+                message(parent, thread_ts=parent, reply_count=3),
+                message(reply, thread_ts=parent, text="the only reply Slack returned"),
+            ]
+        },
+    )
+
+    archive, result = collect(tmp_path, client)
+
+    counters = result.counters
+    assert counters["thread_parents_swept"] == 1
+    assert counters["thread_replies_declared"] == 3
+    assert counters["thread_replies_fetched"] == 1, "the parent echo is not counted as a reply"
+    manifest = json.loads((tmp_path / f"manifests/slack/test/{result.run_id}.json").read_text())
+    assert any(
+        note.startswith("slack.thread_replies_incomplete") for note in manifest["coverage_notes"]
+    ), "two replies never arrived and the manifest has to say so"
+
+
+def test_a_fully_swept_thread_does_not_claim_an_incomplete_sweep(tmp_path: Path) -> None:
+    parent = ts(-500)
+    client = FakeSlack(
+        history={CHANNEL: [[message(parent, thread_ts=parent, reply_count=1, latest_reply=ts(-100))]]},
+        replies={
+            (CHANNEL, parent): [
+                message(parent, thread_ts=parent, reply_count=1),
+                message(ts(-100), thread_ts=parent),
+            ]
+        },
+    )
+
+    _, result = collect(tmp_path, client)
+
+    manifest = json.loads((tmp_path / f"manifests/slack/test/{result.run_id}.json").read_text())
+    assert not [
+        note for note in manifest["coverage_notes"] if note.startswith("slack.thread_replies_incomplete")
+    ]
+
+
 def test_threads_older_than_the_lookback_are_dropped_from_the_watch_list(tmp_path: Path) -> None:
     ancient = f"{(NOW - timedelta(days=400)).timestamp():.6f}"
     seed = RawArchive(tmp_path, "slack", "run-0", "test")
