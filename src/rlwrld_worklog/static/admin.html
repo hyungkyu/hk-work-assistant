@@ -133,6 +133,10 @@
     .cov.failed { color: var(--danger); border-color: #7b3838; background: #2b1616; }
     .cov.stale, .cov.malformed { color: #e0a3d6; border-color: #6f3a66; background: #2a1a27; }
     .cov.unknown { color: #c0a2e0; border-color: #584070; background: #1e1729; }
+    .cov.collected_with_skips { color: var(--accent); border-color: #286b52; background: #102b22; border-style: dashed; }
+    /* Deliberately off the green/amber scale: a legacy date is not "good" or
+       "bad", it is a different grade of evidence that cannot be compared. */
+    .cov.unverified { color: var(--muted); border-color: var(--muted); background: transparent; border-style: dotted; }
     .collection-cell { display: grid; gap: 4px; }
     .collection-cell small { color: var(--muted); font-size: 11px; line-height: 1.5; word-break: break-word; }
     .mono { font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); word-break: break-all; }
@@ -1115,8 +1119,14 @@
       google_calendar: 'Google Calendar',
     };
     const COVERAGE_LABELS = {
-      collected: '수집됨', partial: '부분 수집', running: '진행 중', failed: '실패',
+      collected: '수집', collected_with_skips: '수집(누락 명시)', partial: '부분수집',
+      unverified: '레거시만(검증 불가)', running: '수집 중', failed: '실패',
       not_collected: '미수집', unknown: '불명',
+    };
+    const EVIDENCE_LABELS = {
+      manifest: '근거: 실행 매니페스트',
+      directory_only: '근거: 레거시 디렉터리뿐 (완전성을 주장할 수 없음)',
+      mixed: '근거: 실행 매니페스트 + 레거시 디렉터리',
     };
     const RUN_STATE_LABELS = {
       success: '성공', success_with_skips: '성공 (스킵 있음)', degraded: '저하', failed: '실패',
@@ -1304,6 +1314,10 @@
       if (cell.evidence && cell.evidence.length) {
         const node = collectionNote(cell.evidence[0] + (cell.evidence.length > 1 ? ` 외 ${cell.evidence.length - 1}건` : ''), cell.evidence.join('\n'));
         if (node) wrap.appendChild(node);
+      }
+      if (cell.evidence_class) {
+        const node = collectionNote(EVIDENCE_LABELS[cell.evidence_class] || cell.evidence_class);
+        if (node) { node.title = `evidence_class: ${cell.evidence_class}`; wrap.appendChild(node); }
       }
       (cell.notes || []).forEach((text) => { const node = collectionNote(text); if (node) wrap.appendChild(node); });
       return wrap;

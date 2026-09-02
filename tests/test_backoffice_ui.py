@@ -189,3 +189,33 @@ def test_the_backoffice_page_is_served_without_caching() -> None:
     assert response.headers["Cache-Control"] == "no-store"
     assert b'data-page="collection"' in response.body
     assert b'data-page="schedules"' in response.body
+
+
+def _rule_body(html: str, selector: str) -> str:
+    """The declarations of one CSS rule, so a test can assert what it renders."""
+    start = html.index(selector) + len(selector)
+    return html[start : html.index("}", start)]
+
+
+def test_the_coverage_vocabulary_is_wired_into_the_page(html: str, script: str) -> None:
+    for key in ("collected_with_skips", "unverified", "evidence_class", "EVIDENCE_LABELS"):
+        assert key in script
+    assert ".cov.unverified" in html
+
+
+def test_unverified_is_drawn_off_the_good_bad_colour_scale(html: str) -> None:
+    """Asserts the rendered property, not merely that the selector exists.
+
+    A legacy date is not "good" or "bad" -- it is a weaker grade of evidence.
+    Painting it in the same green or amber as a run manifest is the bug this
+    styling exists to prevent, so the test checks the colours themselves.
+    """
+    body = _rule_body(html, ".cov.unverified {")
+    for good_or_bad in ("var(--accent)", "var(--warning)", "var(--danger)", "#102b22", "#2b2415"):
+        assert good_or_bad not in body, f"unverified must not use {good_or_bad}: {body}"
+    assert "var(--muted)" in body
+    assert "background: transparent" in body
+    assert "dotted" in body
+
+    # And the states that DO carry a verdict keep their scale.
+    assert "var(--accent)" in _rule_body(html, ".cov.collected_with_skips {")

@@ -363,8 +363,14 @@ def _kind_counts(entries: Any, *, limit: int = 8) -> tuple[int, list[dict[str, A
             kind = entry.get("kind") or entry.get("reason")
         name = kind if isinstance(kind, str) and kind else "unspecified"
         counts[name] = counts.get(name, 0) + 1
-    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
-    return len(entries), [{"kind": kind, "count": count} for kind, count in ranked]
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ranked = ordered[:limit]
+    rows = [{"kind": kind, "count": count} for kind, count in ranked]
+    if len(ordered) > len(ranked):
+        # Mark the cap so a caller aggregating several runs cannot present a
+        # capped breakdown as the whole story.
+        rows.append({"kind": "__truncated__", "count": len(ordered) - len(ranked)})
+    return len(entries), rows
 
 
 def _window(manifest: Mapping[str, Any]) -> dict[str, Any]:
@@ -1089,6 +1095,22 @@ COVERAGE_RUNNING = "running"
 COVERAGE_FAILED = "failed"
 COVERAGE_NOT_COLLECTED = "not_collected"
 COVERAGE_UNKNOWN = "unknown"
+# A run that finished and named what it could not reach. Honest reporting is
+# not a defect, so it is kept apart from `partial`, which means the run does
+# not know what it missed.
+COVERAGE_COLLECTED_WITH_SKIPS = "collected_with_skips"
+# A V0 legacy date. A directory exists, and that is all it proves: the legacy
+# dumps carry no run identity and their meta.json `status` is hardcoded, so
+# nothing about them can assert completeness. Distinct from `unknown`, which
+# means evidence exists but could not be parsed.
+COVERAGE_UNVERIFIED = "unverified"
+
+# How strong the evidence behind a cell is. Its purpose is to make it
+# impossible for a UI to paint a directory listing and a run manifest on the
+# same badge scale.
+EVIDENCE_MANIFEST = "manifest"
+EVIDENCE_DIRECTORY_ONLY = "directory_only"
+EVIDENCE_MIXED = "mixed"
 
 _INCOMPLETE_STATES = {"degraded", "failed"}
 _ACTIVE_STATES = {"running", "stale"}
@@ -1114,6 +1136,20 @@ def _run_covers(run: Mapping[str, Any], start: datetime, end: datetime) -> bool:
     return window_start < end and window_end >= start
 
 
+def _run_evidence_class(runs: list[Mapping[str, Any]]) -> str:
+    """Which grade of evidence backs these runs.
+
+    A run with a manifest is a recorded observation. A run without one is a
+    directory being written (or abandoned), which proves only that something
+    ran. The two are never merged into one claim.
+    """
+    with_manifest = any(run.get("manifest_path") for run in runs)
+    directory_only = any(not run.get("manifest_path") for run in runs)
+    if with_manifest and directory_only:
+        return EVIDENCE_MIXED
+    return EVIDENCE_MANIFEST if with_manifest else EVIDENCE_DIRECTORY_ONLY
+
+
 def _cell_from_runs(runs: list[Mapping[str, Any]]) -> dict[str, Any]:
     states = [str(run.get("state")) for run in runs]
     rule_counts: dict[tuple[str | None, str], int] = {}
@@ -1121,9 +1157,13 @@ def _cell_from_runs(runs: list[Mapping[str, Any]]) -> dict[str, Any]:
         rule = run.get("rule") or {}
         key = (rule.get("version"), str(rule.get("attribution") or "unknown"))
         rule_counts[key] = rule_counts.get(key, 0) + 1
-    incomplete = any(
-        state in _INCOMPLETE_STATES or state == "success_with_skips" for state in states
-    ) or any(bool(run.get("truncated")) for run in runs)
+    # `degraded` is a stronger failure signal than `success_with_skips`
+    # (docs/daily-collection.md): a degraded run does not know what it missed,
+    # while a run with skips named every one of them. Only the former, and a
+    # truncated run, make a date incomplete.
+    truncated = any(bool(run.get("truncated")) for run in runs)
+    incomplete = any(state in _INCOMPLETE_STATES for state in states) or truncated
+    skipped_only = "success_with_skips" in states and not incomplete
     settled = [state for state in states if state in {"success", "success_with_skips"}]
     if "running" in states:
         coverage = COVERAGE_RUNNING
@@ -1141,14 +1181,43 @@ def _cell_from_runs(runs: list[Mapping[str, Any]]) -> dict[str, Any]:
         or any(state in {"malformed", "unknown"} for state in states)
     ):
         coverage = COVERAGE_PARTIAL
+    elif skipped_only:
+        coverage = COVERAGE_COLLECTED_WITH_SKIPS
     else:
         coverage = COVERAGE_COLLECTED
     completeness = "unknown"
     if coverage == COVERAGE_COLLECTED:
         completeness = "complete"
+    elif coverage == COVERAGE_COLLECTED_WITH_SKIPS:
+        # Everything the run set out to read, minus what it explicitly named.
+        completeness = "complete_with_known_gaps"
     elif coverage in {COVERAGE_PARTIAL, COVERAGE_FAILED}:
         completeness = "incomplete"
     notes: list[str] = []
+    skips_total = sum(int(run.get("skips_total") or 0) for run in runs)
+    if skips_total:
+        kinds: dict[str, int] = {}
+        capped = 0
+        for run in runs:
+            for entry in run.get("skip_kinds") or []:
+                name = str(entry.get("kind"))
+                if name == "__truncated__":
+                    capped += int(entry.get("count") or 0)
+                    continue
+                kinds[name] = kinds.get(name, 0) + int(entry.get("count") or 0)
+        ordered = sorted(kinds.items(), key=lambda item: (-item[1], item[0]))
+        shown = ordered[:6]
+        ranked = ", ".join(f"{kind} {count}" for kind, count in shown)
+        # The per-run list is already capped upstream, so the merged breakdown
+        # can be a subset. Say so rather than letting it read as exhaustive.
+        remainder = len(ordered) - len(shown)
+        if remainder > 0:
+            ranked += f", 외 {remainder}종"
+        elif capped:
+            ranked += f", 외 {capped}종"
+        notes.append(
+            f"이 날짜의 실행이 건너뛴 항목 {skips_total}건" + (f" ({ranked})" if ranked else "")
+        )
     if "stale" in states:
         notes.append(
             "a run of this date wrote raw pages and no manifest; what it covered is unknown"
@@ -1180,6 +1249,11 @@ def _cell_from_runs(runs: list[Mapping[str, Any]]) -> dict[str, Any]:
             }
         )[:12],
         "states": sorted(set(states)),
+        # A finished run is evidenced by its manifest; a running or crashed one
+        # is evidenced only by the raw directory it is writing. Calling the
+        # latter `manifest` was the same over-claim this module exists to
+        # prevent, one grade up.
+        "evidence_class": _run_evidence_class(runs),
         "notes": notes,
     }
 
@@ -1216,7 +1290,11 @@ def _legacy_cell(
         if meta.get("readable") and isinstance(meta.get("truncation_warnings"), int)
     ]
     completeness = "unknown"
-    coverage = COVERAGE_COLLECTED
+    # A directory proves a dump exists, not that it was complete. V0 carries no
+    # run identity and its meta.json `status` is hardcoded, so there is nothing
+    # here that can assert coverage -- the cell says `unverified` rather than
+    # borrowing the word a V1 manifest earns.
+    coverage = COVERAGE_UNVERIFIED
     if truncation and any(value > 0 for value in truncation):
         coverage = COVERAGE_PARTIAL
         completeness = "incomplete"
@@ -1231,6 +1309,7 @@ def _legacy_cell(
         "rule_versions": [{"version": "V0", "attribution": "legacy", "count": len(relative_dirs)}],
         "evidence": _legacy_evidence(paths, day=day, entries=relative_dirs),
         "states": [],
+        "evidence_class": EVIDENCE_DIRECTORY_ONLY,
         "legacy_meta": metas,
         "notes": notes,
     }
@@ -1299,6 +1378,9 @@ def coverage(
                     cell["evidence"] = (
                         cell["evidence"] + _legacy_evidence(paths, day=iso, entries=legacy_dirs)
                     )[:12]
+                    # The V1 verdict stands; the cell records that a weaker V0
+                    # source also covers this date rather than blending them.
+                    cell["evidence_class"] = EVIDENCE_MIXED
             elif legacy_dirs:
                 cell = _legacy_cell(
                     paths, day=iso, relative_dirs=legacy_dirs, probe_meta=probe_meta
@@ -1316,6 +1398,7 @@ def coverage(
                     "rule_versions": [],
                     "evidence": [],
                     "states": [],
+                    "evidence_class": None,
                     "notes": (
                         []
                         if inventory["complete"]

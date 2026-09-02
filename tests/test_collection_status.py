@@ -542,7 +542,9 @@ def test_legacy_dates_are_reported_as_v0_with_no_run_count(
     by_date = {row["date"]: row["cells"] for row in grid["rows"]}
     for source in ("slack", "notion", "google_calendar"):
         cell = by_date["2026-06-10"][source]
-        assert cell["coverage"] == "collected"
+        # A directory is not a claim of coverage; V0 can only ever be unverified.
+        assert cell["coverage"] == "unverified"
+        assert cell["evidence_class"] == "directory_only"
         assert cell["rule_versions"] == [
             {"version": "V0", "attribution": "legacy", "count": 1}
         ]
@@ -860,3 +862,204 @@ def test_list_runs_filters_and_orders_by_last_activity(paths: status.CollectionP
     scoped = status.list_runs(paths, source="slack", environment="test", limit=10, now=NOW)
     assert [item["run_id"] for item in scoped["items"]] == ["20260901T180000Z-aaaa99"]
     assert listed["environments"]["slack"] == ["production", "test"]
+
+
+# ------------------------------- coverage verdict: evidence grades (defect fix)
+
+
+def test_a_legacy_only_date_is_unverified_not_collected(
+    paths: status.CollectionPaths,
+) -> None:
+    """A V0 directory proves a dump exists, not that it was complete."""
+    write_legacy_day(paths, day="2026-06-14", sources=("slack",))
+    grid = status.coverage(
+        paths, start=status.parse_iso_date("2026-06-14"),
+        end=status.parse_iso_date("2026-06-14"), sources=["slack"], now=NOW,
+    )
+    cell = grid["rows"][0]["cells"]["slack"]
+    assert cell["coverage"] == "unverified"
+    assert cell["completeness"] == "unknown"
+    assert cell["evidence_class"] == "directory_only"
+    # `unknown` means evidence exists but could not be parsed; the two must not merge.
+    assert cell["coverage"] != status.COVERAGE_UNKNOWN
+    assert any("run identity" in note for note in cell["notes"])
+
+
+def test_legacy_truncation_warnings_still_make_a_date_partial(
+    paths: status.CollectionPaths,
+) -> None:
+    write_legacy_day(
+        paths, day="2026-06-15", sources=("slack",),
+        meta={"truncation_warnings": [{"where": "channel_history"}]},
+    )
+    grid = status.coverage(
+        paths, start=status.parse_iso_date("2026-06-15"),
+        end=status.parse_iso_date("2026-06-15"), sources=["slack"], now=NOW,
+    )
+    cell = grid["rows"][0]["cells"]["slack"]
+    assert cell["coverage"] == "partial"
+    assert cell["completeness"] == "incomplete"
+
+
+def _one_day(paths: status.CollectionPaths, day: str = "2026-09-01") -> dict[str, Any]:
+    grid = status.coverage(
+        paths, start=status.parse_iso_date(day), end=status.parse_iso_date(day),
+        sources=["slack"], now=NOW,
+    )
+    return grid["rows"][0]["cells"]["slack"]
+
+
+def test_a_run_that_only_succeeded_is_collected(paths: status.CollectionPaths) -> None:
+    write_manifest(paths, run_id="20260901T010000Z-c0f001", status="success")
+    cell = _one_day(paths)
+    assert cell["coverage"] == "collected"
+    assert cell["completeness"] == "complete"
+    assert cell["evidence_class"] == "manifest"
+
+
+def test_a_run_with_named_skips_is_collected_with_skips_not_partial(
+    paths: status.CollectionPaths,
+) -> None:
+    """Naming what it could not reach is honest reporting, not a defect."""
+    write_manifest(
+        paths, run_id="20260901T010100Z-c0f002", status="success_with_skips",
+        skips=[{"kind": "channel_not_found"}, {"kind": "channel_not_found"},
+               {"kind": "is_archived"}],
+    )
+    cell = _one_day(paths)
+    assert cell["coverage"] == "collected_with_skips"
+    assert cell["completeness"] == "complete_with_known_gaps"
+    assert cell["evidence_class"] == "manifest"
+    joined = " ".join(cell["notes"])
+    assert "3건" in joined and "channel_not_found 2" in joined
+
+
+def test_skips_plus_truncation_is_still_partial(paths: status.CollectionPaths) -> None:
+    write_manifest(
+        paths, run_id="20260901T010200Z-c0f003", status="success_with_skips",
+        skips=[{"kind": "channel_not_found"}], truncated=True,
+        truncation=[{"reason": "max_messages"}],
+    )
+    cell = _one_day(paths)
+    assert cell["coverage"] == "partial"
+    assert cell["completeness"] == "incomplete"
+
+
+def test_a_degraded_run_is_a_stronger_signal_than_skips(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(paths, run_id="20260901T010300Z-c0f004", status="degraded")
+    cell = _one_day(paths)
+    assert cell["coverage"] == "partial"
+    assert cell["completeness"] == "incomplete"
+
+
+def test_a_date_with_both_v1_and_v0_keeps_the_v1_verdict_and_reports_mixed(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(paths, run_id="20260901T010400Z-c0f005", status="success")
+    write_legacy_day(paths, day="2026-09-01", sources=("slack",))
+    cell = _one_day(paths)
+    assert cell["coverage"] == "collected"
+    assert cell["evidence_class"] == "mixed"
+    versions = {(entry["version"], entry["attribution"]) for entry in cell["rule_versions"]}
+    assert ("V1", "declared") in versions and ("V0", "legacy") in versions
+    assert cell["runs"] == 1
+
+
+@pytest.mark.parametrize(
+    "kind,expected",
+    [("running", "running"), ("failed", "failed"), ("malformed", "unknown")],
+)
+def test_the_other_verdicts_are_unchanged(
+    paths: status.CollectionPaths, kind: str, expected: str
+) -> None:
+    """Regression: only the skips and legacy verdicts moved."""
+    if kind == "running":
+        write_raw_run(paths, run_id="20260902T020500Z-c0f006", day="2026/09/02",
+                      mtime=NOW - timedelta(minutes=1))
+        day = "2026-09-02"
+    elif kind == "failed":
+        write_manifest(paths, run_id="20260901T010600Z-c0f007", status="failed")
+        day = "2026-09-01"
+    else:
+        write_manifest(paths, run_id="20260901T010700Z-c0f008", raw="{broken")
+        day = "2026-09-01"
+    assert _one_day(paths, day=day)["coverage"] == expected
+
+
+def test_a_stale_run_alone_is_still_unknown(paths: status.CollectionPaths) -> None:
+    write_raw_run(paths, run_id="20260901T010800Z-c0f009", day="2026/09/01",
+                  mtime=NOW - timedelta(days=3))
+    cell = _one_day(paths)
+    assert cell["coverage"] == "unknown"
+    # A crashed run wrote no manifest, so the only evidence is the directory
+    # it left behind. Calling that `manifest` would be the same over-claim
+    # this module exists to prevent.
+    assert cell["evidence_class"] == "directory_only"
+
+
+def test_a_date_with_no_evidence_reports_no_evidence_class(
+    paths: status.CollectionPaths,
+) -> None:
+    cell = _one_day(paths, day="2026-07-20")
+    assert cell["coverage"] == "not_collected"
+    assert cell["evidence_class"] is None
+
+
+def test_a_running_run_is_directory_evidence_not_manifest_evidence(
+    paths: status.CollectionPaths,
+) -> None:
+    """A run in flight has written no manifest; the cell must say so."""
+    write_raw_run(paths, run_id="20260902T020600Z-c0f010", day="2026/09/02",
+                  mtime=NOW - timedelta(minutes=1))
+    cell = _one_day(paths, day="2026-09-02")
+    assert cell["coverage"] == "running"
+    assert cell["evidence_class"] == "directory_only"
+
+
+def test_a_finished_and_an_unfinished_run_on_one_date_is_mixed_evidence(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(paths, run_id="20260901T010900Z-c0f011", status="success")
+    write_raw_run(paths, run_id="20260901T011000Z-c0f012", day="2026/09/01",
+                  mtime=NOW - timedelta(days=3))
+    cell = _one_day(paths)
+    assert cell["evidence_class"] == "mixed"
+
+
+def test_degraded_wins_over_skips_on_the_same_date(paths: status.CollectionPaths) -> None:
+    """The precedence DEFECT 2 turns on, with both states actually present."""
+    write_manifest(paths, run_id="20260901T011100Z-c0f013", status="success_with_skips",
+                   skips=[{"kind": "channel_not_found"}])
+    write_manifest(paths, run_id="20260901T011200Z-c0f014", status="degraded")
+    cell = _one_day(paths)
+    assert cell["coverage"] == "partial"
+    assert cell["completeness"] == "incomplete"
+
+
+def test_a_capped_skip_breakdown_says_it_is_partial(
+    paths: status.CollectionPaths,
+) -> None:
+    """A truncated per-kind list must not read as the whole story."""
+    write_manifest(
+        paths, run_id="20260901T011300Z-c0f015", status="success_with_skips",
+        skips=[{"kind": f"kind_{index:02d}"} for index in range(12)],
+    )
+    cell = _one_day(paths)
+    assert cell["coverage"] == "collected_with_skips"
+    joined = " ".join(cell["notes"])
+    assert "12건" in joined
+    assert "외" in joined and "종" in joined, joined
+
+
+def test_the_skip_breakdown_survives_hostile_manifest_entries(
+    paths: status.CollectionPaths,
+) -> None:
+    write_manifest(
+        paths, run_id="20260901T011400Z-c0f016", status="success_with_skips",
+        skips=["a string", 12, None, {"no_kind": 1}, {"kind": ""}],
+    )
+    cell = _one_day(paths)
+    assert cell["coverage"] == "collected_with_skips"
+    assert "5건" in " ".join(cell["notes"])
