@@ -588,6 +588,124 @@ def test_legacy_truncation_warnings_make_a_date_partial(
     assert cell["legacy_meta"][0]["rate_limit_hits"] == 9
 
 
+def test_a_wide_range_says_it_did_not_read_the_legacy_record(
+    paths: status.CollectionPaths,
+) -> None:
+    """The query's width must not silently change a date's verdict.
+
+    The same date reads `partial` in a narrow window, because meta.json records
+    a truncation warning. Widen the window past the probe limit and that file is
+    never opened, so the truncation branch cannot be reached. Reporting
+    `unverified` there would say the record was read and proved nothing. The
+    cell has to say instead that nobody looked.
+    """
+    write_legacy_day(
+        paths,
+        day="2026-06-12",
+        sources=("slack",),
+        meta={"truncation_warnings": [{"where": "channel_history"}]},
+    )
+    narrow = status.coverage(
+        paths,
+        start=status.parse_iso_date("2026-06-12"),
+        end=status.parse_iso_date("2026-06-12"),
+        sources=["slack"],
+        now=NOW,
+    )
+    assert narrow["legacy_meta_probed"] is True
+    narrow_cell = narrow["rows"][0]["cells"]["slack"]
+    assert narrow_cell["coverage"] == "partial"
+    assert narrow_cell["legacy_meta_probed"] is True
+
+    span = status.MAX_LEGACY_META_PROBE_DAYS + 30
+    wide = status.coverage(
+        paths,
+        start=status.parse_iso_date("2026-06-12") - timedelta(days=span),
+        end=status.parse_iso_date("2026-06-12"),
+        sources=["slack"],
+        now=NOW,
+    )
+    assert wide["legacy_meta_probed"] is False
+    assert wide["legacy_meta_probe_limit_days"] == status.MAX_LEGACY_META_PROBE_DAYS
+    assert wide["requested_span_days"] > status.MAX_LEGACY_META_PROBE_DAYS
+    wide_cell = next(
+        row["cells"]["slack"] for row in wide["rows"] if row["date"] == "2026-06-12"
+    )
+    assert wide_cell["coverage"] == status.COVERAGE_UNEXAMINED
+    assert wide_cell["coverage"] != status.COVERAGE_UNVERIFIED
+    assert wide_cell["legacy_meta_probed"] is False
+    assert wide_cell["legacy_meta"] == []
+    assert any("읽지 않았습니다" in note for note in wide_cell["notes"])
+
+
+def test_a_probed_legacy_date_without_truncation_stays_unverified(
+    paths: status.CollectionPaths,
+) -> None:
+    """Having looked and found no truncation is not a claim of coverage.
+
+    It is also not the same as not having looked, which is the whole point of
+    keeping `unexamined` apart from `unverified`.
+    """
+    write_legacy_day(paths, day="2026-06-14", sources=("slack",))
+    grid = status.coverage(
+        paths,
+        start=status.parse_iso_date("2026-06-14"),
+        end=status.parse_iso_date("2026-06-14"),
+        sources=["slack"],
+        now=NOW,
+    )
+    cell = grid["rows"][0]["cells"]["slack"]
+    assert cell["coverage"] == status.COVERAGE_UNVERIFIED
+    assert cell["legacy_meta_probed"] is True
+    assert cell["legacy_meta"], "the record was read, so it belongs in the cell"
+
+
+def test_a_run_backed_cell_reports_the_legacy_probe_as_not_applicable(
+    paths: status.CollectionPaths,
+) -> None:
+    """False would claim something is unknown that is not."""
+    write_manifest(
+        paths, source="slack", run_id="20260901T000000Z-aaaaaa",
+        started_at="2026-09-01T02:00:00+00:00",
+    )
+    grid = status.coverage(
+        paths,
+        start=status.parse_iso_date("2026-09-01"),
+        end=status.parse_iso_date("2026-09-01"),
+        sources=["slack"],
+        now=NOW,
+    )
+    cell = grid["rows"][0]["cells"]["slack"]
+    assert cell["runs"] == 1
+    assert cell["legacy_meta_probed"] is None
+
+
+def test_the_weekday_rollup_counts_the_dates_nobody_examined(
+    paths: status.CollectionPaths,
+) -> None:
+    """A rollup must not let unexamined dates vanish into a total."""
+    write_legacy_day(paths, day="2026-06-10", sources=("slack",))
+    span = status.MAX_LEGACY_META_PROBE_DAYS + 30
+    grid = status.coverage(
+        paths,
+        start=status.parse_iso_date("2026-06-10") - timedelta(days=span),
+        end=status.parse_iso_date("2026-06-10"),
+        sources=["slack"],
+        group="weekday",
+        now=NOW,
+    )
+    unexamined = sum(
+        bucket["cells"]["slack"]["dates_unexamined"] for bucket in grid["weekday_rows"]
+    )
+    assert unexamined == 1
+    counts = {
+        state
+        for bucket in grid["weekday_rows"]
+        for state in bucket["cells"]["slack"]["coverage_counts"]
+    }
+    assert status.COVERAGE_UNEXAMINED in counts
+
+
 def test_an_incomplete_legacy_inventory_reports_unknown_not_missing(
     paths: status.CollectionPaths, monkeypatch: pytest.MonkeyPatch
 ) -> None:

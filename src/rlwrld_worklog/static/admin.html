@@ -137,6 +137,9 @@
     /* Deliberately off the green/amber scale: a legacy date is not "good" or
        "bad", it is a different grade of evidence that cannot be compared. */
     .cov.unverified { color: var(--muted); border-color: var(--muted); background: transparent; border-style: dotted; }
+    /* Fainter still than `unverified`, because it carries even less: that one
+       read the record, this one never opened it. */
+    .cov.unexamined { color: var(--muted); border-color: transparent; background: var(--panel-2); border-style: dashed; }
     .collection-cell { display: grid; gap: 4px; }
     .collection-cell small { color: var(--muted); font-size: 11px; line-height: 1.5; word-break: break-word; }
     .mono { font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); word-break: break-all; }
@@ -1126,6 +1129,9 @@
       collected: '수집', collected_with_skips: '수집(누락 명시)', partial: '부분수집',
       unverified: '레거시만(검증 불가)', running: '수집 중', failed: '실패',
       not_collected: '미수집', unknown: '불명',
+      // Not a weaker `unverified`: nobody opened the record, so this date has
+      // no verdict at all in this range. Narrowing the range produces one.
+      unexamined: '레거시 기록 미확인(범위 넓음)',
     };
     const TIME_COVERAGE_LABELS = {
       complete: '하루 전체 관측', partial: '뒷부분 미관측', in_progress: '진행 중인 날짜',
@@ -1393,6 +1399,9 @@
               cell.runs_known ? `실행 합계 ${cell.runs}회` : '실행 횟수 불명',
               versions || '규칙 근거 없음',
               `미수집 ${cell.dates_not_collected}일`,
+              // Only when there are some: a steady "0일" would train the eye
+              // to skip the line on the days it matters.
+              cell.dates_unexamined ? `레거시 기록 미확인 ${cell.dates_unexamined}일` : null,
             ].forEach((text) => { const node = collectionNote(text); if (node) wrap.appendChild(node); });
             td.appendChild(wrap); tr.appendChild(td);
           });
@@ -1422,7 +1431,11 @@
       $('coverage-note').textContent = [
         `KST 기준. 근거가 없는 날짜는 미수집, 근거가 있어도 판정할 수 없으면 불명으로 표시합니다.`,
         inventory.complete ? `V0 legacy 인벤토리 완전 · ${observed || '관측 없음'}` : `V0 legacy 인벤토리 불완전 (${inventory.reason || '사유 불명'}) — 부재는 미수집의 근거가 아닙니다.`,
-        payload.legacy_meta_probed ? 'legacy meta.json 확인함' : `legacy meta.json 미확인 (조회 범위가 넓음)`,
+        // Say the numbers, not just the fact. Without them the reader cannot
+        // tell how far to narrow the range to turn `unexamined` into a verdict.
+        payload.legacy_meta_probed
+          ? 'legacy meta.json 확인함'
+          : `legacy meta.json 미확인 — 조회 범위 ${payload.requested_span_days}일이 상한 ${payload.legacy_meta_probe_limit_days}일을 넘습니다. 범위를 좁히면 그 날짜들이 판정됩니다.`,
         payload.range_truncated ? '조회 범위가 상한으로 잘렸습니다.' : '',
       ].filter(Boolean).join(' · ');
     }

@@ -23,6 +23,7 @@ from rlwrld_worklog.collection_rules import (
     _validate_registry,
     active_rule,
     active_rule_stamp,
+    effective_window,
     registry_as_dict,
     rule_digest_mismatches,
     rule_for_version,
@@ -34,15 +35,58 @@ SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src" / "rlwrld_worklog"
 _NOTE_KEY = re.compile(r'"([a-z_]+\.[a-z0-9_]+): ')
 
 
-def test_every_published_version_is_declared_once_and_covers_every_source() -> None:
+def test_every_published_version_is_declared_once_and_defines_known_sources() -> None:
     versions = [rule.version for rule in RULES]
     assert versions == sorted(set(versions), key=versions.index)
     assert len(versions) == len(set(versions))
     for rule in RULES:
-        assert {source.source for source in rule.sources} == set(SOURCES)
+        declared = {source.source for source in rule.sources}
+        # A retired version defines what its collectors actually knew about, so
+        # it may be a subset of today's sources -- but never something unknown.
+        assert declared and declared <= set(SOURCES)
+        assert len(declared) == len(rule.sources), "a source is defined twice"
         assert rule.title and rule.summary
         assert rule.status in {"active", "superseded"}
         assert rule.effective.basis
+
+
+def test_the_active_version_accounts_for_every_source_we_collect() -> None:
+    assert {source.source for source in active_rule().sources} == set(SOURCES)
+
+
+def test_a_retired_version_may_omit_a_source_added_after_it() -> None:
+    """Adding a source must not force a false claim into an old rule.
+
+    When a collector arrives, `SOURCES` grows. The versions published before it
+    genuinely did not collect it, so back-dating a definition into them would
+    make them lie. Only the active version has to cover the new source.
+    """
+    assert any(rule.status != "active" for rule in RULES), (
+        "this invariant only means something once a version is retired"
+    )
+    # A synthetic version name, because narrowing a real one would move its
+    # digest and the frozen-rule guard would fire first -- a different rule
+    # than the one under test here.
+    narrow = replace(
+        RULES[0], version="V-narrow", status="superseded", sources=RULES[0].sources[:1]
+    )
+    _validate_registry((narrow, active_rule()))
+
+
+def test_the_registry_refuses_a_version_that_defines_no_source() -> None:
+    original = RULES[0]
+    edited = replace(original, sources=())
+    others = tuple(rule for rule in RULES if rule.version != original.version)
+    with pytest.raises(RuleRegistryError, match="defines no source"):
+        _validate_registry((edited,) + others)
+
+
+def test_the_registry_refuses_a_version_that_defines_one_source_twice() -> None:
+    original = RULES[0]
+    edited = replace(original, sources=original.sources + (original.sources[0],))
+    others = tuple(rule for rule in RULES if rule.version != original.version)
+    with pytest.raises(RuleRegistryError, match="twice"):
+        _validate_registry((edited,) + others)
 
 
 def test_digest_is_stable_and_matches_what_was_published() -> None:
@@ -75,11 +119,11 @@ def test_the_registry_refuses_an_edited_published_rule() -> None:
         _validate_registry((edited,) + others)
 
 
-def test_the_registry_refuses_a_rule_that_forgets_a_source() -> None:
+def test_the_registry_refuses_an_active_rule_that_forgets_a_source() -> None:
     original = active_rule()
     edited = replace(original, sources=original.sources[:1])
     others = tuple(rule for rule in RULES if rule.version != original.version)
-    with pytest.raises(RuleRegistryError, match="does not define"):
+    with pytest.raises(RuleRegistryError, match="the active collection rule"):
         _validate_registry(others + (edited,))
 
 
@@ -90,6 +134,72 @@ def test_exactly_one_rule_is_active_and_it_is_the_stamped_one() -> None:
     retired = tuple(replace(rule, status="superseded") for rule in RULES)
     with pytest.raises(RuleRegistryError, match="must be active"):
         _validate_registry(retired)
+
+
+def test_a_versions_end_is_derived_from_its_successor_not_stored() -> None:
+    """Storing an end would mean editing a published rule when it is retired.
+
+    The same trap `status` was in: a fact that only exists once a successor
+    exists cannot live inside digest-frozen content, or publishing the
+    successor would have to reach back and forge the predecessor.
+    """
+    for rule in RULES:
+        assert rule.effective.end is None, (
+            f"{rule.version} stores an effective end; it must be derived"
+        )
+    stored = replace(
+        RULES[0],
+        effective=replace(RULES[0].effective, end="2026-09-02"),
+    )
+    others = tuple(rule for rule in RULES if rule.version != RULES[0].version)
+    with pytest.raises(RuleRegistryError, match="stores an effective end"):
+        _validate_registry((stored,) + others)
+
+
+def test_the_derived_window_closes_a_retired_version_at_its_successors_start() -> None:
+    superseded = [rule for rule in RULES if rule.status != "active"]
+    assert superseded, "this only means something once a version is retired"
+    for rule in superseded:
+        successor = next(
+            (later for later in RULES if later.supersedes == rule.version), None
+        )
+        window = effective_window(rule.version)
+        if successor is None:
+            # Retired without a named successor: nothing to derive an end from,
+            # and inventing one would be worse than leaving it open.
+            assert window["end"] is None
+            assert window["superseded_by"] is None
+        else:
+            assert window["end"] == successor.effective.start
+            assert window["superseded_by"] == successor.version
+        assert window["is_current"] is False
+
+
+def test_the_derived_window_marks_only_the_active_version_current() -> None:
+    current = [
+        rule.version for rule in RULES if effective_window(rule.version)["is_current"]
+    ]
+    assert current == [ACTIVE_RULE_VERSION]
+    active_window = effective_window(ACTIVE_RULE_VERSION)
+    assert active_window["end"] is None
+    assert active_window["superseded_by"] is None
+
+
+def test_the_serialized_registry_carries_the_derived_window_per_rule() -> None:
+    """The frozen prose can be stale; the view must not be.
+
+    V1 and V2 were published with a basis saying they were still active, and
+    the digest guard makes that text uncorrectable. A consumer reading the
+    registry has to be able to get the truth from somewhere.
+    """
+    payload = registry_as_dict()
+    for rule, published in zip(payload["rules"], RULES):
+        window = rule["effective_window"]
+        assert window == effective_window(published.version)
+    current = [
+        rule["version"] for rule in payload["rules"] if rule["effective_window"]["is_current"]
+    ]
+    assert current == [ACTIVE_RULE_VERSION]
 
 
 def test_retiring_a_version_does_not_change_its_digest() -> None:
@@ -197,7 +307,11 @@ def test_the_registry_serializes_with_a_digest_per_rule() -> None:
     assert [rule["version"] for rule in payload["rules"]] == [rule.version for rule in RULES]
     for rule, published in zip(payload["rules"], RULES):
         assert rule["digest"] == published.digest
-        assert "sources" in rule and len(rule["sources"]) == len(SOURCES)
+        assert {entry["source"] for entry in rule["sources"]} <= set(SOURCES)
+    serialized_active = next(
+        rule for rule in payload["rules"] if rule["version"] == ACTIVE_RULE_VERSION
+    )
+    assert {entry["source"] for entry in serialized_active["sources"]} == set(SOURCES)
 
 
 def test_a_rule_is_frozen_at_runtime() -> None:

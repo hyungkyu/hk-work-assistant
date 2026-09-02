@@ -1127,6 +1127,13 @@ COVERAGE_COLLECTED_WITH_SKIPS = "collected_with_skips"
 # nothing about them can assert completeness. Distinct from `unknown`, which
 # means evidence exists but could not be parsed.
 COVERAGE_UNVERIFIED = "unverified"
+# A V0 legacy date whose meta.json was never opened, because the requested
+# range was wider than `MAX_LEGACY_META_PROBE_DAYS`. Distinct from
+# `unverified`: that one means the record was read and proves nothing, this one
+# means nobody looked. Collapsing the two would let a query's own width change
+# a date's verdict without saying so -- the same date reads `partial` in a
+# 30-day window and `unverified` in a 276-day one.
+COVERAGE_UNEXAMINED = "unexamined"
 
 # How strong the evidence behind a cell is. Its purpose is to make it
 # impossible for a UI to paint a directory listing and a run manifest on the
@@ -1316,6 +1323,10 @@ def _cell_from_runs(runs: list[Mapping[str, Any]]) -> dict[str, Any]:
         # latter `manifest` was the same over-claim this module exists to
         # prevent, one grade up.
         "evidence_class": _run_evidence_class(runs),
+        # Not applicable rather than False: this cell rests on run manifests, so
+        # no legacy meta.json was relevant to read. False would say the probe
+        # was skipped and something is therefore unknown, which is not true here.
+        "legacy_meta_probed": None,
         "notes": notes,
     }
 
@@ -1403,7 +1414,23 @@ def _legacy_cell(
     # run identity and its meta.json `status` is hardcoded, so there is nothing
     # here that can assert coverage -- the cell says `unverified` rather than
     # borrowing the word a V1 manifest earns.
-    coverage = COVERAGE_UNVERIFIED
+    #
+    # But `unverified` is only honest once the record has been read. When the
+    # requested range was too wide to open meta.json, the truncation branch
+    # below cannot be reached at all, so a date carrying a truncation warning
+    # would silently read as though it carried none. That is the query changing
+    # the answer, and the cell has to say so instead.
+    coverage = COVERAGE_UNVERIFIED if probe_meta else COVERAGE_UNEXAMINED
+    if not probe_meta:
+        notes.append(
+            f"조회 범위가 {MAX_LEGACY_META_PROBE_DAYS}일을 넘어 이 날짜의 레거시 "
+            "meta.json 을 읽지 않았습니다. truncation 기록이 있는지 알 수 없습니다 — "
+            "범위를 좁혀 다시 조회하면 확인됩니다."
+        )
+    elif not metas:
+        notes.append(
+            "레거시 meta.json 을 찾지 못했거나 읽을 수 없습니다. 디렉터리만 증거입니다."
+        )
     if truncation and any(value > 0 for value in truncation):
         coverage = COVERAGE_PARTIAL
         completeness = "incomplete"
@@ -1424,6 +1451,10 @@ def _legacy_cell(
         "observed_through": None,
         "time_coverage": None,
         "legacy_meta": metas,
+        # Per cell, not just per response: a weekday rollup or a filtered view
+        # can carry cells from more than one probe decision, and a consumer
+        # holding one cell must still be able to tell whether it was examined.
+        "legacy_meta_probed": probe_meta,
         "notes": notes,
     }
 
@@ -1496,6 +1527,10 @@ def coverage(
                     # The V1 verdict stands; the cell records that a weaker V0
                     # source also covers this date rather than blending them.
                     cell["evidence_class"] = EVIDENCE_MIXED
+                    # A legacy dump is present here, so whether its record was
+                    # read is a real question about this cell -- unlike a cell
+                    # with runs only, where it stays not-applicable.
+                    cell["legacy_meta_probed"] = probe_meta
             elif legacy_dirs:
                 cell = _legacy_cell(
                     paths, day=iso, relative_dirs=legacy_dirs, probe_meta=probe_meta
@@ -1516,6 +1551,9 @@ def coverage(
                     "evidence_class": None,
                     "observed_through": None,
                     "time_coverage": None,
+                    # No legacy dump exists for this date, so there was no
+                    # meta.json to open and the probe decision is irrelevant.
+                    "legacy_meta_probed": None,
                     "notes": (
                         []
                         if inventory["complete"]
@@ -1559,6 +1597,11 @@ def coverage(
             "observed": inventory["observed"],
         },
         "legacy_meta_probed": probe_meta,
+        # The threshold and the requested span, so a reader can see for itself
+        # why the probe was skipped and how far to narrow the range to get a
+        # verdict rather than an `unexamined`.
+        "legacy_meta_probe_limit_days": MAX_LEGACY_META_PROBE_DAYS,
+        "requested_span_days": span,
         "rows": rows,
     }
     if group == "weekday":
@@ -1582,6 +1625,11 @@ def _weekday_rollup(rows: list[dict[str, Any]], sources: list[str]) -> list[dict
                         "runs_known": True,
                         "rule_versions": {},
                         "dates_not_collected": 0,
+                        # A rollup that only counted verdicts would let the
+                        # unexamined dates disappear into a total. The weekday
+                        # view has to be able to say how much of itself nobody
+                        # looked at.
+                        "dates_unexamined": 0,
                     }
                     for source in sources
                 },
@@ -1595,6 +1643,8 @@ def _weekday_rollup(rows: list[dict[str, Any]], sources: list[str]) -> list[dict
             counts[cell["coverage"]] = counts.get(cell["coverage"], 0) + 1
             if cell["coverage"] == COVERAGE_NOT_COLLECTED:
                 target["dates_not_collected"] += 1
+            if cell["coverage"] == COVERAGE_UNEXAMINED:
+                target["dates_unexamined"] += 1
             if cell["runs_known"] and isinstance(cell["runs"], int):
                 target["runs"] += cell["runs"]
             else:

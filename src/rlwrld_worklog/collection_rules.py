@@ -100,7 +100,14 @@ class SourceRule:
 
 @dataclass(frozen=True)
 class EffectivePeriod:
-    """When a rule applied, and how that is known."""
+    """When a rule applied, and how that is known.
+
+    `end` is always None in the registry, and `_validate_registry` enforces it.
+    A version's end is only knowable when a successor appears, so writing it
+    into the rule would mean editing published, digest-frozen content later --
+    the same trap `status` was in before it left the digest. The end is derived
+    from the successor's start instead, by `effective_window`.
+    """
 
     start: str | None
     end: str | None
@@ -575,7 +582,7 @@ V1 = CollectionRule(
 V2 = CollectionRule(
     version="V2",
     title="공식 API 원본 원장 + 노션 날짜 슬라이스 (date-sliced Notion capture)",
-    status="active",
+    status="superseded",
     effective=EffectivePeriod(
         start="2026-09-02",
         end=None,
@@ -648,11 +655,78 @@ V2 = CollectionRule(
 )
 
 
+V3 = CollectionRule(
+    version="V3",
+    title="공식 API 원본 원장 + 스레드 답글 전수 (thread replies swept)",
+    status="active",
+    effective=EffectivePeriod(
+        start="2026-09-02",
+        end=None,
+        # States only the observation that dates the start. No claim about
+        # being current: V1 and V2 both carry a frozen "Still active; no
+        # successor rule is published" that stopped being true the moment they
+        # were superseded, and the digest guard makes that text uncorrectable.
+        # Whether a version is current is derived from the registry instead.
+        basis=(
+            "observed: commit 3b301b6, which made the Slack sweep reach "
+            "conversations.replies for every thread parent."
+        ),
+    ),
+    summary=(
+        "V2 with one correction: Slack thread replies are actually collected. Slack stamps a "
+        "thread parent with a `thread_ts` equal to its own `ts`, so the guard meant to skip "
+        "replies skipped every parent too, and the replies were never requested. Notion and "
+        "Google Calendar are unchanged from V2. This is a boundary in what the archive holds, "
+        "not only in what the registry says: a Slack window captured under V0, V1 or V2 is "
+        "missing its thread replies and has to be re-run to gain them."
+    ),
+    manifest_schema_version=2,
+    ledger_schema_version="1.0",
+    source_schema_version=None,
+    capture_profiles=V2.capture_profiles,
+    storage_layout=V2.storage_layout,
+    unknowns=V2.unknowns
+    + (
+        "How many replies a pre-V3 Slack window is missing is knowable only by re-running it: "
+        "the parents were archived with their declared reply_count, so the shortfall is "
+        "measurable after the fact, but no manifest written before V3 records it.",
+    ),
+    sources=(
+        replace(
+            V2.source_rule("slack"),
+            includes=V2.source_rule("slack").includes
+            + (
+                "Thread replies for every parent the sweep sights, through "
+                "conversations.replies; a parent is no longer mistaken for a reply because "
+                "Slack stamps it with its own thread_ts",
+            ),
+            known_limitations=V2.source_rule("slack").known_limitations
+            + (
+                "slack.thread_replies_incomplete: the parent sweep sighted more declared "
+                "replies than it archived. Replies posted before the requested window, and "
+                "replies lost to a rate limit or a truncated run, account for the difference. "
+                "The note carries the counts, so the shortfall is measurable rather than "
+                "invisible, and re-running the window closes it.",
+            ),
+            evidence=V2.source_rule("slack").evidence
+            + (
+                "src/rlwrld_worklog/slack_collector.py (the conversations.replies sweep and "
+                "its declared/archived reply counters)",
+                "commit 3b301b6",
+            ),
+        ),
+        V2.source_rule("notion"),
+        V2.source_rule("google_calendar"),
+    ),
+    supersedes="V2",
+)
+
+
 # --------------------------------------------------------------- registry
 
-RULES: tuple[CollectionRule, ...] = (V0, V1, V2)
+RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3)
 
-ACTIVE_RULE_VERSION = "V2"
+ACTIVE_RULE_VERSION = "V3"
 
 # Content digests of every published version. A published rule is frozen: if
 # editing one changes its meaning, the digest moves and import fails here,
@@ -664,6 +738,35 @@ HISTORICAL_DIGESTS: dict[str, tuple[str, ...]] = {
     "V0": ("sha256:0be5ca5652806fc7e0c1439c3a860c2dd290a7c2be9e9b53fb25c30332edcc4a",),
     "V1": ("sha256:2a7c9b6d1357927a85057917729dd810fa2f2f438f3c7b744bb2a4590476186a",),
 }
+
+
+def effective_window(
+    version: str, rules: tuple[CollectionRule, ...] | None = None
+) -> dict[str, Any]:
+    """A version's applicable period and successor, derived rather than stored.
+
+    The rule's own `basis` prose was frozen at publication and may still say it
+    is current. This is what the registry actually knows now, and it is what a
+    view should show.
+    """
+    catalogue = rules if rules is not None else RULES
+    index = {rule.version: position for position, rule in enumerate(catalogue)}
+    position = index.get(version)
+    if position is None:
+        return {"start": None, "end": None, "superseded_by": None, "is_current": False}
+    rule = catalogue[position]
+    successor = next(
+        (later for later in catalogue[position + 1 :] if later.supersedes == version),
+        None,
+    )
+    return {
+        "start": rule.effective.start,
+        # The successor's start is this version's end: the day collection began
+        # following the new rule is the day it stopped following this one.
+        "end": successor.effective.start if successor is not None else None,
+        "superseded_by": successor.version if successor is not None else None,
+        "is_current": successor is None and rule.status == "active",
+    }
 
 
 def digest_is_recognised(version: str, digest: str | None) -> bool:
@@ -683,6 +786,7 @@ PUBLISHED_DIGESTS: dict[str, str] = {
     "V0": "sha256:1987bcce80c135426788e3975eac168312136665cb6e8239fba7114a85339cac",
     "V1": "sha256:75c1314212d733305fb2acfaf337b033a9489e4eb81b1b6005bd564f486cb7d8",
     "V2": "sha256:831aec5edb7e4a349798ec1ec8d9e5bd23f75b052d09c7b157ab5d1dafbfe939",
+    "V3": "sha256:52a5f9e46a1a1af21fa391f43be294ea87f1505a43b4eb94b3f76492205dadd8",
 }
 
 
@@ -699,21 +803,48 @@ def _validate_registry(rules: tuple[CollectionRule, ...]) -> None:
             raise RuleRegistryError(f"collection rule {rule.version} has an unknown status")
         if rule.status == "active":
             active.append(rule.version)
+        declared: set[str] = set()
         for source_rule in rule.sources:
             if source_rule.source not in SOURCES:
                 raise RuleRegistryError(
                     f"collection rule {rule.version} names an unknown source "
                     f"{source_rule.source!r}"
                 )
-        missing = set(SOURCES) - {source_rule.source for source_rule in rule.sources}
-        if missing:
+            if source_rule.source in declared:
+                raise RuleRegistryError(
+                    f"collection rule {rule.version} defines {source_rule.source!r} twice"
+                )
+            declared.add(source_rule.source)
+        if not declared:
+            raise RuleRegistryError(f"collection rule {rule.version} defines no source")
+        if rule.effective.end is not None:
+            # Storing an end would have to be written in after a successor
+            # appears, which means editing digest-frozen content. Derived by
+            # `effective_window` instead, so publishing a successor never has
+            # to reach back into a published rule.
             raise RuleRegistryError(
-                f"collection rule {rule.version} does not define {', '.join(sorted(missing))}"
+                f"collection rule {rule.version} stores an effective end; a version's end is "
+                "derived from its successor, never written into the published rule"
             )
     if active != [ACTIVE_RULE_VERSION]:
         raise RuleRegistryError(
             f"exactly one rule must be active and it must be {ACTIVE_RULE_VERSION}; got {active}"
         )
+    # A retired version is a record of what a past collector did, so it defines
+    # the sources it actually knew about and nothing more. Demanding that every
+    # version define every source would mean back-dating a source into rules
+    # written before that collector existed, which would make those rules lie.
+    # The guarantee that matters is about collection happening now, so it is
+    # the active version that must account for every source we collect.
+    for rule in rules:
+        if rule.status != "active":
+            continue
+        uncovered = set(SOURCES) - {source_rule.source for source_rule in rule.sources}
+        if uncovered:
+            raise RuleRegistryError(
+                f"the active collection rule {rule.version} does not define "
+                f"{', '.join(sorted(uncovered))}; every collected source needs a published rule"
+            )
     if rule_digest_mismatches(rules):
         raise RuleRegistryError(
             "a published collection rule was edited: "
@@ -768,7 +899,14 @@ def registry_as_dict() -> dict[str, Any]:
         "sources": list(SOURCES),
         "source_labels": dict(SOURCE_LABELS),
         "digests_pinned": not rule_digest_mismatches(),
-        "rules": [rule.as_dict() for rule in RULES],
+        # `effective_window` is attached per rule, outside the frozen body: a
+        # published rule's own prose was written before it had a successor and
+        # can still say it is current. The derived window is what the registry
+        # knows now, and a view showing the two together should trust this one.
+        "rules": [
+            {**rule.as_dict(), "effective_window": effective_window(rule.version)}
+            for rule in RULES
+        ],
     }
 
 
