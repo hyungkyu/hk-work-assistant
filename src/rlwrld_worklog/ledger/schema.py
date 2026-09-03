@@ -29,6 +29,10 @@ CAPTURE_PROFILES = {
     "notion_page": "legacy-notion-page/v1",
     "notion_block": "legacy-notion-block/v1",
     "notion_comment": "legacy-notion-comment-from-attribution/v1",
+    "github_commit": "live-github-commit-from-mirror/v1",
+    "github_rest": "live-github-rest/v1",
+    "slurm_job": "live-slurm-sacct-dump/v1",
+    "slurm_job_legacy": "legacy-slurm-sacct-archive/v1",
 }
 
 # Activity entities carry a timeline projection. Dimension entities describe
@@ -36,10 +40,40 @@ CAPTURE_PROFILES = {
 # ledger because rule 2 requires the service database to be rebuildable from
 # ledger data alone, and a message without its channel and its author is not
 # rebuildable. They are deliberately not projected onto the timeline.
-ACTIVITY_ENTITY_TYPES = ("message", "page", "block", "comment", "event")
-DIMENSION_ENTITY_TYPES = ("user", "usergroup", "conversation", "calendar", "data_source")
+ACTIVITY_ENTITY_TYPES = (
+    "message",
+    "page",
+    "block",
+    "comment",
+    "event",
+    # GitHub. A commit is read from a bare mirror, the other five from REST.
+    "commit",
+    "pull_request",
+    "review",
+    "review_comment",
+    "issue",
+    "issue_comment",
+    # Slurm. One record per finished job, keyed on its end date. Slurm step
+    # rows (`.batch`, `.extern`) are sub-resources of a job rather than
+    # activities of their own: they hold the real resource usage, the raw
+    # archive keeps all 117 columns of them, but projecting them onto the
+    # timeline would turn one job into two or three timeline events. They
+    # need a third category alongside activity and dimension, so they have no
+    # ledger entity type yet.
+    "job",
+)
+DIMENSION_ENTITY_TYPES = (
+    "user",
+    "usergroup",
+    "conversation",
+    "calendar",
+    "data_source",
+    # GitHub. A commit without its repository is not rebuildable, and the
+    # repository is a container, not an activity.
+    "repository",
+)
 ENTITY_TYPES = ACTIVITY_ENTITY_TYPES + DIMENSION_ENTITY_TYPES
-SOURCES = ("slack", "notion", "google_calendar")
+SOURCES = ("slack", "notion", "google_calendar", "github", "slurm")
 UNKNOWN_STATUSES = ("observed", "unknown", "not_recorded", "recorded")
 
 

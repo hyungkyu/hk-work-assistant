@@ -11,6 +11,7 @@ from typing import IO, Sequence
 from .daily import DEFAULT_SINCE
 from .models import Source, TimelineEvent
 from .normalizers import normalize_records
+from .slurm_collector import CLOUDS as SLURM_CLOUDS
 from .work_cli import add_work_parser, run_work
 
 
@@ -48,6 +49,78 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--google-token", type=Path, default=None)
     collect.add_argument("--calendar-id", action="append", default=[])
     collect.add_argument("--calendar-id-file", type=Path, default=None)
+    # GitHub keeps its own subcommand rather than joining `collect`: its window
+    # is a pair of KST calendar dates, while `collect --since` is an instant or
+    # a duration. Folding them together would make one of the two lie.
+    github = subparsers.add_parser(
+        "github-collect", help="Capture GitHub activity for a window of KST days"
+    )
+    github.add_argument("--since", required=True, help="First KST day, YYYY-MM-DD")
+    github.add_argument("--until", default=None, help="Last KST day, inclusive. Defaults to --since")
+    github.add_argument("--organization", default=None, help="Defaults to $GITHUB_ORG, then rlwrld")
+    github.add_argument("--mirror-root", type=Path, default=None, help="Bare mirror directory")
+    github.add_argument("--environment", choices=["test", "production"], default="test")
+    github.add_argument("--archive-root", type=Path, default=None)
+    github.add_argument("--config-root", type=Path, default=None)
+    github.add_argument("--repo", action="append", default=[])
+    github.add_argument("--max-repositories", type=_positive_int, default=None)
+    github.add_argument(
+        "--kinds", default=None, help="Comma-separated REST kinds. Defaults to all six"
+    )
+    github.add_argument("--no-commits", action="store_true")
+    github.add_argument(
+        "--repos-from-mirrors",
+        action="store_true",
+        help="List repositories from the mirror directory, not the API. Commit-only runs then need no network",
+    )
+    github.add_argument("--no-diffstat", action="store_true")
+    github.add_argument(
+        "--verify-mirror-refs",
+        action="store_true",
+        help="Compare each mirror's branch tips with the remote. One network round trip per repository, about four minutes across the org, and the only way to know a mirror is current",
+    )
+    github.add_argument(
+        "--backfill",
+        action="store_true",
+        help="Ignore the checkpoint and do not advance it. Required for historical windows",
+    )
+    github.add_argument("--dry-run", action="store_true")
+    github.add_argument(
+        "--lock-path",
+        type=Path,
+        default=None,
+        help="Defaults to <archive-root>/locks/github-collect-<environment>.lock. Never the daily lock",
+    )
+    slurm = subparsers.add_parser(
+        "slurm-collect", help="Capture Slurm accounting for a window of KST days"
+    )
+    slurm.add_argument("--since", required=True, help="First KST day, YYYY-MM-DD")
+    slurm.add_argument("--until", default=None, help="Last KST day, inclusive. Defaults to --since")
+    slurm.add_argument(
+        "--cloud",
+        action="append",
+        default=[],
+        choices=list(SLURM_CLOUDS),
+        help="Repeatable. Defaults to every cloud",
+    )
+    slurm.add_argument("--base-url", default=None, help="Defaults to $SLURM_DUMP_BASE_URL, then http://infra-node:8888")
+    slurm.add_argument("--environment", choices=["test", "production"], default="test")
+    slurm.add_argument("--archive-root", type=Path, default=None)
+    slurm.add_argument("--config-root", type=Path, default=None)
+    slurm.add_argument("--staging-root", type=Path, default=None)
+    slurm.add_argument("--no-steps", action="store_true", help="Exclude .batch/.extern rows. Not recommended")
+    slurm.add_argument(
+        "--backfill",
+        action="store_true",
+        help="Ignore the checkpoint and do not advance it. Required for historical windows",
+    )
+    slurm.add_argument("--dry-run", action="store_true")
+    slurm.add_argument(
+        "--lock-path",
+        type=Path,
+        default=None,
+        help="Defaults to <archive-root>/locks/slurm-collect-<environment>.lock. Never the daily lock",
+    )
     google_auth = subparsers.add_parser("google-auth", help="Authorize read-only Google access locally")
     google_auth.add_argument("--client-secrets", type=Path, default=Path("secrets/google-client.json"))
     google_auth.add_argument("--token", type=Path, default=Path("secrets/google-token.json"))
@@ -286,6 +359,190 @@ def run_google_auth(args: argparse.Namespace) -> int:
 
     authorize_installed_app(args.client_secrets, args.token, [DRIVE_READONLY_SCOPE, CALENDAR_READONLY_SCOPE])
     print("google_auth=ok " + json.dumps(token_summary(args.token), ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def collect_github(args: argparse.Namespace) -> int:
+    """Capture one GitHub window under its own lock.
+
+    The lock is deliberately its own file. Taking
+    `daily-collect-<environment>.lock` would make the 03:10 daily batch exit 3
+    and be read the next morning as a failed collection, when in fact a
+    backfill was simply still running.
+    """
+    from .daily import _acquire_lock, _release_lock
+    from .github_client import GhCliClient, GitMirrorReader, MirrorRepositoryLister
+    from .github_collector import REST_KINDS, Window, make_github_collector
+
+    archive_root = _archive_root(args)
+    organization = args.organization or os.environ.get("GITHUB_ORG") or "rlwrld"
+    mirror_root = args.mirror_root or Path(
+        os.environ.get("GITHUB_MIRROR_ROOT")
+        or "/data/rlwrld-worklog/legacy/claude/weekly/scripts/github_mirrors"
+    )
+    window = Window.parse(args.since, args.until)
+    if args.kinds is None:
+        kinds: tuple[str, ...] = REST_KINDS
+    elif args.kinds.strip().lower() in {"", "none"}:
+        # An explicit empty set means commits only. Falling back to "all six"
+        # here would quietly spend an API budget the caller declined.
+        kinds = ()
+    else:
+        kinds = tuple(part.strip() for part in args.kinds.split(",") if part.strip())
+    unknown = [kind for kind in kinds if kind not in REST_KINDS]
+    if unknown:
+        raise SystemExit(f"unknown kinds: {', '.join(unknown)}")
+    if args.repos_from_mirrors and kinds:
+        raise SystemExit("--repos-from-mirrors covers commit-only runs; pass --kinds none")
+
+    lock_path = args.lock_path or archive_root / "locks" / f"github-collect-{args.environment}.lock"
+    handle = _acquire_lock(lock_path)
+    if handle is None:
+        print(
+            json.dumps(
+                {"github_collection": "locked", "lock_path": str(lock_path)},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 3
+
+    reader = GitMirrorReader(mirror_root)
+    # The REST client is built even for a mirror-selected run. Selecting
+    # repositories from the mirror directory is about not depending on the API
+    # to find them, not about refusing to look: without the client the run
+    # cannot compare the two listings and reports the divergence as unknown,
+    # which is exactly the blind spot that lost 14 commits. If the API is
+    # unreachable the comparison degrades to unknown on its own.
+    rest = GhCliClient(organization, config_root=args.config_root)
+    archive, collector = make_github_collector(
+        client=MirrorRepositoryLister(reader, rest) if args.repos_from_mirrors else rest,
+        mirrors=reader,
+        archive_root=archive_root,
+        environment=args.environment,
+        organization=organization,
+        capture_density="dry-run" if args.dry_run else "full",
+        dry_run=args.dry_run,
+        config_root=args.config_root,
+    )
+    try:
+        result = collector.collect(
+            window=window,
+            repositories=args.repo or None,
+            kinds=kinds,
+            include_commits=not args.no_commits,
+            include_diffstat=not args.no_diffstat,
+            max_repositories=args.max_repositories,
+            backfill=args.backfill,
+            verify_mirror_refs=args.verify_mirror_refs,
+        )
+    except Exception as error:
+        failure_manifest = archive.finish(
+            {"status": "failed", "error_type": type(error).__name__, "error": str(error)}
+        )
+        print(f"github_collection=failed manifest={failure_manifest}", file=sys.stderr)
+        raise
+    finally:
+        _release_lock(handle)
+
+    print(
+        json.dumps(
+            {
+                "github_collection": "ok",
+                "run_id": result.run_id,
+                "window": result.window.as_dict(),
+                "mode": "backfill" if args.backfill else "incremental",
+                "repositories_listed": result.repositories_listed,
+                "repositories_collected": result.repositories_collected,
+                "repositories_skipped": result.repositories_skipped,
+                "commits": result.commits,
+                "commit_rows_archived": result.commit_rows,
+                "rest_counts": result.rest_counts,
+                "checkpoint_advanced": result.checkpoint_advanced,
+                "manifest": str(result.manifest_path),
+                "lock_path": str(lock_path),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def collect_slurm(args: argparse.Namespace) -> int:
+    """Capture one Slurm window under its own lock.
+
+    The dump is fetched once per cloud and projected onto KST days locally,
+    because the endpoint offers neither a time window nor pagination.
+    """
+    from .daily import _acquire_lock, _release_lock
+    from .slurm_client import SlurmDumpFetcher
+    from .slurm_collector import CLOUDS, Window, make_slurm_collector
+
+    archive_root = _archive_root(args)
+    window = Window.parse(args.since, args.until)
+    clouds = tuple(args.cloud) if args.cloud else CLOUDS
+
+    lock_path = args.lock_path or archive_root / "locks" / f"slurm-collect-{args.environment}.lock"
+    handle = _acquire_lock(lock_path)
+    if handle is None:
+        print(
+            json.dumps(
+                {"slurm_collection": "locked", "lock_path": str(lock_path)},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 3
+
+    fetcher_options = {"base_url": args.base_url} if args.base_url else {}
+    archive, collector = make_slurm_collector(
+        fetcher=SlurmDumpFetcher(**fetcher_options),
+        archive_root=archive_root,
+        environment=args.environment,
+        staging_root=args.staging_root,
+        capture_density="dry-run" if args.dry_run else "full",
+        dry_run=args.dry_run,
+        config_root=args.config_root,
+    )
+    try:
+        result = collector.collect(
+            window=window,
+            clouds=clouds,
+            backfill=args.backfill,
+            include_steps=not args.no_steps,
+        )
+    except Exception as error:
+        failure_manifest = archive.finish(
+            {"status": "failed", "error_type": type(error).__name__, "error": str(error)}
+        )
+        print(f"slurm_collection=failed manifest={failure_manifest}", file=sys.stderr)
+        raise
+    finally:
+        _release_lock(handle)
+
+    print(
+        json.dumps(
+            {
+                "slurm_collection": "ok",
+                "run_id": result.run_id,
+                "window": result.window.as_dict(),
+                "mode": "backfill" if args.backfill else "incremental",
+                "clouds_attempted": list(result.clouds_attempted),
+                "clouds_collected": list(result.clouds_collected),
+                "jobs": result.jobs,
+                "parent_rows_archived": result.parent_rows,
+                "step_rows": result.step_rows,
+                "checkpoint_advanced": result.checkpoint_advanced,
+                "manifest": str(result.manifest_path),
+                "lock_path": str(lock_path),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
@@ -580,6 +837,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return collect_google_calendar(args)
     if args.command == "collect" and args.source == "notion":
         return collect_notion(args)
+    if args.command == "slurm-collect":
+        return collect_slurm(args)
+    if args.command == "github-collect":
+        return collect_github(args)
     if args.command == "google-auth":
         return run_google_auth(args)
     if args.command == "legacy-drive-download":
