@@ -248,6 +248,23 @@ def test_the_backoffice_page_is_served_without_caching() -> None:
     assert b'data-page="schedules"' in response.body
 
 
+def test_the_work_board_offers_an_activity_timeline(html: str, script: str) -> None:
+    for marker in ('id="timeline-overlay"', 'id="timeline-list"', 'id="timeline-state"',
+                   'id="timeline-close"', 'id="timeline-title"'):
+        assert marker in html
+    assert "openTimeline" in script
+    assert "/timeline?limit=" in script
+
+
+def test_the_timeline_names_legacy_records_instead_of_hiding_them(script: str) -> None:
+    """A pre-timeline record must read as incomplete, not as empty."""
+    assert "record_schema === 'legacy'" in script
+    assert "unknown_fields" in script
+    assert "TIMELINE_RESOLUTION_LABELS" in script
+    for label in ("declared", "inferred", "unresolved"):
+        assert label in script
+
+
 def _rule_body(html: str, selector: str) -> str:
     """The declarations of one CSS rule, so a test can assert what it renders."""
     start = html.index(selector) + len(selector)

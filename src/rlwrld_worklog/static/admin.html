@@ -120,6 +120,13 @@
     .work-card-actions { display: flex; gap: 6px; align-items: center; }
     .work-card-actions select { width: auto; flex: 1; padding: 6px 8px; font-size: 12px; }
     .work-card-actions .button { padding: 6px 10px; font-size: 12px; }
+    .timeline-dialog { width: min(760px, 100%); max-height: 88vh; overflow-y: auto; border: 1px solid var(--line); background: var(--panel); padding: 24px; border-radius: 16px; box-shadow: 0 28px 80px #0009; }
+    .timeline-list { display: grid; gap: 10px; margin-top: 16px; }
+    .timeline-entry { border: 1px solid var(--line); background: var(--panel-2); border-radius: 11px; padding: 11px 12px; display: grid; gap: 5px; }
+    .timeline-entry.legacy { border-style: dashed; }
+    .timeline-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .timeline-when { color: var(--muted); font-size: 11px; margin-left: auto; white-space: nowrap; }
+    .timeline-entry small { color: var(--muted); font-size: 11px; line-height: 1.5; word-break: break-word; }
     .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .table-scroll table { min-width: 760px; }
     .collection-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
@@ -467,6 +474,15 @@
         <button class="button primary" type="submit" id="work-save">저장</button>
       </div>
     </form>
+  </div>
+  <div class="overlay hidden" id="timeline-overlay">
+    <div class="timeline-dialog">
+      <h1 id="timeline-title">활동 타임라인</h1>
+      <p class="help" id="timeline-subtitle"></p>
+      <p class="work-state" id="timeline-state"></p>
+      <div class="timeline-list" id="timeline-list"></div>
+      <div class="actions"><button class="button" type="button" id="timeline-close">닫기</button></div>
+    </div>
   </div>
   <div class="toast" id="toast"></div>
 
@@ -826,6 +842,11 @@
       edit.addEventListener('click', () => openWorkEditor(item));
       actions.appendChild(edit);
 
+      const timeline = document.createElement('button');
+      timeline.type = 'button'; timeline.className = 'button'; timeline.textContent = '이력';
+      timeline.addEventListener('click', () => openTimeline(item));
+      actions.appendChild(timeline);
+
       const archive = document.createElement('button');
       archive.type = 'button'; archive.className = 'button danger'; archive.textContent = '보관';
       archive.addEventListener('click', () => archiveWork(item));
@@ -1119,6 +1140,102 @@
     fillWorkSelect('work-status', WORK_STATUS_LABELS);
     fillWorkSelect('work-priority', WORK_PRIORITY_LABELS);
 
+
+    // -------------------------------------------------------- 활동 타임라인
+    const TIMELINE_PHASE_LABELS = {
+      assigned: '배정', started: '착수', progress: '진행', review: '검수',
+      build: '빌드', deploy: '배포', verified: '검증', failed: '실패',
+      change: '변경', test: '테스트', waiting: '대기', handoff: '인계',
+      start: '시작', failure: '실패', completed: '완료',
+    };
+    const TIMELINE_SOURCE_LABELS = {
+      work_history: '업무 기록', cowork_event: 'Cowork 이벤트', cowork_handoff: 'Cowork 인계',
+    };
+    const TIMELINE_RESOLUTION_LABELS = {
+      declared: '명시', inferred: '추론', unresolved: '불명',
+    };
+
+    function timelineActor(resolved) {
+      if (!resolved || !resolved.name) return '행위자 불명';
+      const label = TIMELINE_RESOLUTION_LABELS[resolved.resolution] || resolved.resolution;
+      return `${resolved.name} (${label})`;
+    }
+
+    function timelineEntryNode(entry) {
+      const node = document.createElement('article');
+      node.className = `timeline-entry${entry.record_schema === 'legacy' ? ' legacy' : ''}`;
+
+      const head = document.createElement('div');
+      head.className = 'timeline-head';
+      head.appendChild(collectionPill(
+        TIMELINE_SOURCE_LABELS[entry.source] || entry.source, 'unknown'));
+      if (entry.phase) {
+        head.appendChild(collectionPill(
+          TIMELINE_PHASE_LABELS[entry.phase] || entry.phase, 'running'));
+      }
+      if (entry.status) {
+        head.appendChild(collectionPill(
+          WORK_STATUS_LABELS[entry.status] || entry.status, 'collected'));
+      }
+      const when = document.createElement('span');
+      when.className = 'timeline-when';
+      when.textContent = collectionWhen(entry.at);
+      head.appendChild(when);
+      node.appendChild(head);
+
+      const lines = [];
+      lines.push(`행위자 ${timelineActor(entry.actor)}` +
+        (entry.directed_by ? ` · 지시 ${timelineActor(entry.directed_by)}` : ''));
+      const who = [];
+      if (entry.requested_by) who.push(`요청 ${entry.requested_by}`);
+      if (entry.assigned_to) who.push(`담당 ${entry.assigned_to}`);
+      if (entry.revision !== null && entry.revision !== undefined) who.push(`rev ${entry.revision}`);
+      if (entry.action) who.push(entry.action);
+      if (who.length) lines.push(who.join(' · '));
+      if (entry.status_from) lines.push(`상태 ${WORK_STATUS_LABELS[entry.status_from] || entry.status_from} → ${WORK_STATUS_LABELS[entry.status] || entry.status}`);
+      if (entry.fields && entry.fields.length) lines.push(`변경 필드: ${entry.fields.join(', ')}`);
+      if (entry.summary) lines.push(entry.summary);
+      if (entry.session_id) lines.push(`세션 ${entry.session_id}`);
+      if (entry.receipt) lines.push(`영수증 ${entry.receipt}`);
+      if (entry.handoff_id) lines.push(`인계 ${entry.handoff_id}`);
+      if (entry.record_schema === 'legacy') {
+        lines.push(`이 기록은 타임라인 필드가 생기기 전에 쓰였습니다. 미기록: ${(entry.unknown_fields || []).join(', ')}`);
+      }
+      lines.forEach((text) => { const n = collectionNote(text); if (n) node.appendChild(n); });
+      return node;
+    }
+
+    async function openTimeline(item) {
+      $('timeline-overlay').classList.remove('hidden');
+      $('timeline-title').textContent = item.title;
+      $('timeline-subtitle').textContent = `${item.id} · 요청 ${item.requested_by} · 담당 ${item.assigned_to}`;
+      $('timeline-list').textContent = '';
+      $('timeline-state').textContent = '불러오는 중…';
+      $('timeline-state').className = 'work-state';
+      try {
+        const payload = await api(`/api/v1/admin/work/items/${encodeURIComponent(item.id)}/timeline?limit=200`);
+        const list = $('timeline-list');
+        list.textContent = '';
+        if (!payload.entries.length) {
+          $('timeline-state').textContent = '이 업무에는 아직 기록된 활동이 없습니다.';
+          return;
+        }
+        payload.entries.slice().reverse().forEach((entry) => list.appendChild(timelineEntryNode(entry)));
+        const legacy = payload.entries.filter((e) => e.record_schema === 'legacy').length;
+        $('timeline-state').textContent =
+          `${payload.count}건${payload.truncated ? ' (상한까지만 표시)' : ''}` +
+          (legacy ? ` · 이전 형식 ${legacy}건은 일부 필드가 없습니다` : '');
+      } catch (error) {
+        $('timeline-state').textContent = `타임라인을 불러오지 못했습니다: ${error.message}`;
+        $('timeline-state').className = 'work-state error';
+      }
+    }
+
+    function closeTimeline() { $('timeline-overlay').classList.add('hidden'); }
+    $('timeline-close').addEventListener('click', closeTimeline);
+    $('timeline-overlay').addEventListener('click', (event) => {
+      if (event.target === $('timeline-overlay')) closeTimeline();
+    });
 
     // ------------------------------------------------------------ 수집 현황
     const COLLECTION_SOURCE_LABELS = {

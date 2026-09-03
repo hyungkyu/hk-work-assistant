@@ -16,7 +16,9 @@ from contextlib import contextmanager
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from .admin_web import _require_csrf, require_super_admin_session, store
+from .cowork import registry_as_dict
 from .work_store import (
+    PHASES,
     PRIORITIES,
     STATUSES,
     status_metadata,
@@ -109,6 +111,10 @@ def work_meta(request: Request) -> dict[str, Any]:
     payload = status_metadata()
     payload["statuses"] = list(STATUSES)
     payload["priorities"] = list(PRIORITIES)
+    payload["phases"] = list(PHASES)
+    # Who may direct whom, and how a historical actor name resolves. Additive:
+    # a client written against the earlier response is unaffected.
+    payload["cowork"] = registry_as_dict()
     return payload
 
 
@@ -181,6 +187,24 @@ async def archive_item(item_id: str, request: Request) -> dict[str, Any]:
         item = work_store().archive_item(item_id, actor=actor, **expectations)
     _audit("work.archived", actor=actor, item=item)
     return {"item": item}
+
+
+@router.get("/items/{item_id}/timeline")
+def work_timeline(
+    item_id: str,
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=1_000)] = 200,
+) -> dict[str, Any]:
+    """One item's activity: who directed it, who acted, and where the receipts are.
+
+    ``item_id`` is looked up in the work document and is never joined onto a
+    path, so it cannot address a file. Entries written before the timeline
+    fields existed come back marked ``legacy`` with their unknown fields
+    named, rather than back-filled with a guess.
+    """
+    require_super_admin_session(request)
+    with _translated_errors():
+        return work_store().read_timeline(item_id, limit=limit)
 
 
 @router.get("/history")

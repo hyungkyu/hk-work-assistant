@@ -1,7 +1,7 @@
-# Ari–Moa Markdown mailbox protocol (v1)
+# Ari–Mori–Moa Markdown mailbox protocol (v1)
 
-This protocol lets Ari and Moa exchange long instructions and handoffs without
-copying them through a chat window. The backoffice work item remains the source
+This protocol lets Ari, Mori and Moa exchange long instructions and handoffs
+without copying them through a chat window. The backoffice work item remains the source
 of truth for status, ownership, and optimistic revision. Mailbox files carry
 messages and evidence; they do not replace the work item.
 
@@ -9,7 +9,19 @@ messages and evidence; they do not replace the work item.
 
 - `hk`: decision maker and requester
 - `ari`: primary operator for requirements, rules, review criteria, and handoff verification
-- `moa`: Co-work operator that continues registered work when explicitly triggered
+- `mori`: Cowork deputy. Plans, manages work items, and may direct Moa when Ari is
+  away. Cannot run commands on the host, which is why Moa exists.
+- `moa`: Claude Code executor. Runs shell, code, tests, builds and deploys. Never
+  creates its own work and never widens a directive's scope.
+
+Authority when directives conflict is `hk` > `ari` > `mori`. When a conflict
+cannot be resolved from the messages alone, Moa does not act: it moves the work
+item to `waiting` and asks.
+
+Being visible is not authority. A work item sitting in `ready`, or a message
+merely present in the inbox, authorizes nothing. Only an `ASSIGN` from `hk`,
+`ari` or `mori` that names the work item, matches its current `assigned_to`, and
+carries the observed `expected_revision` may be acted on.
 
 ## Paths
 
@@ -18,6 +30,7 @@ The mailbox root is:
 ```text
 APP_CONFIG_ROOT/cowork/mailbox/
   to-ari/
+  to-mori/
   to-moa/
 ```
 
@@ -28,6 +41,7 @@ APP_CONFIG_ROOT/cowork/
   events.jsonl
   handoffs/
   latest.json
+  logs/          long command output, referenced by path from a message
 ```
 
 Directories use mode `0700`; files use mode `0600`. No mailbox reader may
@@ -68,7 +82,37 @@ subject: Short human-readable subject
 ```
 
 Allowed message types are `ASSIGN`, `ACK`, `PROGRESS`, `QUESTION`,
-`REVIEW_REQUEST`, and `HANDOFF`.
+`REVIEW_REQUEST`, and `HANDOFF`. Only `ASSIGN` carries authority to act; the
+others report, ask, or acknowledge.
+
+## What an unattended session may do
+
+The baseline for a Moa session running without a human present is **read,
+investigate, report, and test**. Anything beyond it is a separate opt-in that
+the `ASSIGN` must state explicitly as a literal `true`:
+
+| Front-matter flag | Grants |
+|---|---|
+| `allow_write: true`  | editing files in the working tree |
+| `allow_commit: true` | creating local commits |
+| `allow_build: true`  | building images |
+| `allow_deploy: true` | restarting or deploying services |
+
+A missing flag, a string `"true"`, or any non-boolean leaves the action
+ungranted. `git push`, `sudo`, deletion, and changes to policy or security
+controls are never granted by a message; each needs a human decision at the
+time. Validation is fail-closed: a message the validator cannot parse, cannot
+tie to a work item, or does not recognise is refused rather than assumed safe.
+
+## Identities in historical records
+
+Names that appear in older records -- `codex`, `claude-code`, `claude-cowork`
+-- predate the Ari/Mori/Moa naming and are **not** rewritten onto today's
+parties. An actor is resolved through an append-only alias registry that
+reports one of `declared`, `inferred`, or `unresolved` together with the basis
+for that answer. A party name used in a record written before the naming took
+effect resolves as `inferred`, never as `declared`. See
+`src/rlwrld_worklog/cowork.py`.
 
 - `ASSIGN`, `PROGRESS`, `REVIEW_REQUEST`, and `HANDOFF` require a work ID.
 - A reply sets `reply_to` to the original `message_id`.

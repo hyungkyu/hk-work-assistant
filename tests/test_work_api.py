@@ -220,3 +220,65 @@ def test_history_and_listing_stay_read_only_for_the_session(owner: dict[str, str
     # Read endpoints must work without a CSRF header; mutations must not.
     assert work_web.list_items(authorized(owner, csrf=None))["count"] == 0
     assert work_web.work_history(authorized(owner, csrf=None))["items"] == []
+
+
+# ------------------------------------------------- cowork timeline endpoint
+
+
+def test_the_timeline_endpoint_requires_a_super_administrator(
+    config_root: Path, owner: dict[str, str]
+) -> None:
+    item = create(owner)
+    with pytest.raises(HTTPException) as anonymous:
+        work_web.work_timeline(item["id"], FakeRequest())
+    assert anonymous.value.status_code == 401
+
+    token, _ = admin_web.store().create_session(
+        subject="staff", email="staff@rlwrld.ai", role="company_user", auth_method="google"
+    )
+    with pytest.raises(HTTPException) as company:
+        work_web.work_timeline(item["id"], FakeRequest(cookies={SESSION_COOKIE: token}))
+    assert company.value.status_code == 403
+
+
+def test_the_timeline_endpoint_returns_resolved_actors(
+    config_root: Path, owner: dict[str, str]
+) -> None:
+    item = create(owner, assigned_to="moa", requested_by="hk")
+    payload = work_web.work_timeline(item["id"], authorized(owner))
+    assert payload["item_id"] == item["id"]
+    assert payload["entries"]
+    entry = payload["entries"][-1]
+    assert "party" in entry["actor"] and "resolution" in entry["actor"]
+    assert entry["assigned_to"] == "moa"
+
+
+@pytest.mark.parametrize(
+    "item_id", ["../../etc/passwd", "..", "wi_does_not_exist", "/etc/passwd", ""],
+)
+def test_an_item_id_that_is_not_a_real_item_cannot_reach_the_filesystem(
+    config_root: Path, owner: dict[str, str], item_id: str
+) -> None:
+    """The id is looked up in the document; it is never joined onto a path."""
+    with pytest.raises(HTTPException) as error:
+        work_web.work_timeline(item_id, authorized(owner))
+    assert error.value.status_code == 404
+
+
+def test_the_meta_endpoint_publishes_the_cowork_authority_rules(
+    config_root: Path, owner: dict[str, str]
+) -> None:
+    payload = work_web.work_meta(authorized(owner))
+    # The original shape is preserved for existing clients.
+    assert "statuses" in payload and "priorities" in payload
+    cowork = payload["cowork"]
+    assert cowork["authority_order"] == ["hk", "ari", "mori"]
+    assert cowork["types_carrying_authority"] == ["ASSIGN"]
+    assert set(cowork["autonomous_baseline"]) == {"read", "investigate", "report", "test"}
+    assert "phases" in payload
+
+
+def test_the_timeline_limit_is_bounded(config_root: Path, owner: dict[str, str]) -> None:
+    item = create(owner)
+    payload = work_web.work_timeline(item["id"], authorized(owner), limit=1)
+    assert len(payload["entries"]) <= 1

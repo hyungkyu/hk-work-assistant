@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 from .admin_store import _atomic_private_write
+from .cowork import resolve_actor
 
 
 DOCUMENT_VERSION = 2
@@ -196,6 +197,77 @@ def _normalize_actor(value: Any, field: str) -> str:
             f"{field} must be a short identifier such as codex, claude-code, or an email address"
         )
     return text
+
+
+# Where a change sits in the life of a work item. Recorded on the history
+# entry so a timeline can be read without re-deriving intent from field names.
+PHASES = (
+    "assigned", "started", "progress", "review",
+    "build", "deploy", "verified", "failed",
+)
+
+# An operational note written by the caller for the timeline. It is not the
+# item's own text: `detail` and `progress_summary` still never reach the
+# history stream, so a summary cannot become a side channel for item content.
+MAX_CONTEXT_SUMMARY = 500
+
+
+def _normalize_receipt(value: Any) -> str | None:
+    """A receipt path recorded as a local identifier, never an absolute path.
+
+    Absolute paths and traversal are refused rather than trimmed: a timeline
+    that points outside the cowork tree is a worse record than one that
+    admits it has no receipt.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise WorkValidationError("receipt must be a non-empty string")
+    text = value.strip()
+    if len(text) > 300:
+        raise WorkValidationError("receipt path is too long")
+    if text.startswith("/") or text.startswith("~") or ".." in text.split("/"):
+        raise WorkValidationError("receipt must be a relative path inside the cowork tree")
+    return text
+
+
+def _normalize_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Validate the optional timeline context supplied with a change."""
+    if context is None:
+        return {}
+    if not isinstance(context, Mapping):
+        raise WorkValidationError("context must be an object")
+    unknown = sorted(set(context) - {"directed_by", "phase", "session_id", "summary", "receipt"})
+    if unknown:
+        raise WorkValidationError(f"unknown context fields: {', '.join(unknown)}")
+    normalized: dict[str, Any] = {}
+    if context.get("directed_by") is not None:
+        normalized["directed_by"] = _normalize_actor(context["directed_by"], "directed_by")
+    phase = context.get("phase")
+    if phase is not None:
+        if phase not in PHASES:
+            raise WorkValidationError(f"phase must be one of {', '.join(PHASES)}")
+        normalized["phase"] = phase
+    session = context.get("session_id")
+    if session is not None:
+        if not isinstance(session, str) or not session.strip():
+            raise WorkValidationError("session_id must be a non-empty string")
+        if len(session) > 120:
+            raise WorkValidationError("session_id is too long")
+        normalized["session_id"] = session.strip()
+    summary = context.get("summary")
+    if summary is not None:
+        if not isinstance(summary, str) or not summary.strip():
+            raise WorkValidationError("summary must be a non-empty string")
+        if len(summary) > MAX_CONTEXT_SUMMARY:
+            raise WorkValidationError(
+                f"summary must be at most {MAX_CONTEXT_SUMMARY} characters"
+            )
+        normalized["summary"] = summary.strip()
+    receipt = _normalize_receipt(context.get("receipt"))
+    if receipt is not None:
+        normalized["receipt"] = receipt
+    return normalized
 
 
 def _normalize_changes(changes: Mapping[str, Any]) -> dict[str, Any]:
@@ -593,15 +665,172 @@ class WorkStore:
                 entries.append(entry)
         return entries[-limit:][::-1]
 
+    # --------------------------------------------------------------- timeline
+
+    # Fields the history stream only started carrying once the cowork timeline
+    # existed. An older entry does not have them, and the reader says so
+    # instead of rendering an empty value as if it were an observed one.
+    TIMELINE_FIELDS = ("requested_by", "assigned_to", "directed_by", "phase",
+                       "session_id", "summary", "receipt")
+
+    def read_timeline(self, item_id: str, *, limit: int = 200) -> dict[str, Any]:
+        """One work item's activity, oldest first, with actors resolved.
+
+        Three sources are merged and each entry says which one it came from:
+        the work store's own history, the cowork change receipts, and the
+        cowork event stream. Nothing is rewritten -- an entry written before a
+        field existed is marked ``legacy`` and that field is reported as
+        unknown rather than empty.
+        """
+        item = self.get_item(item_id)
+        entries: list[dict[str, Any]] = []
+
+        for raw in self._history_for(item_id):
+            at = raw.get("at")
+            present = {key for key in self.TIMELINE_FIELDS if key in raw}
+            entry = {
+                "source": "work_history",
+                "at": at,
+                "action": raw.get("action"),
+                "revision": raw.get("revision"),
+                "status": raw.get("status"),
+                "status_from": raw.get("status_from"),
+                "fields": raw.get("fields") or [],
+                "actor": resolve_actor(raw.get("actor"), at=at),
+                "directed_by": (
+                    resolve_actor(raw.get("directed_by"), at=at)
+                    if "directed_by" in raw
+                    else None
+                ),
+                "requested_by": raw.get("requested_by"),
+                "assigned_to": raw.get("assigned_to"),
+                "phase": raw.get("phase"),
+                "session_id": raw.get("session_id"),
+                "summary": raw.get("summary"),
+                "receipt": raw.get("receipt"),
+                "record_schema": "current" if present else "legacy",
+                "unknown_fields": sorted(set(self.TIMELINE_FIELDS) - present),
+            }
+            entries.append(entry)
+
+        entries.extend(self._cowork_entries(item_id))
+        entries.sort(key=lambda e: (str(e.get("at") or ""), e.get("source") or ""))
+        return {
+            "item_id": item["id"],
+            "title": item["title"],
+            "requested_by": item["requested_by"],
+            "assigned_to": item["assigned_to"],
+            "status": item["status"],
+            "revision": item["revision"],
+            "parent_id": item["parent_id"],
+            "entries": entries[-limit:],
+            "truncated": len(entries) > limit,
+            "count": len(entries),
+        }
+
+    def _history_for(self, item_id: str) -> list[dict[str, Any]]:
+        if not self.history_path.exists():
+            return []
+        found: list[dict[str, Any]] = []
+        for line in self.history_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(entry, Mapping) and entry.get("item_id") == item_id:
+                found.append(dict(entry))
+        return found
+
+    def _cowork_entries(self, item_id: str) -> list[dict[str, Any]]:
+        """Change receipts and events recorded for this item under cowork/.
+
+        Read-only and best-effort: a missing or unreadable cowork tree yields
+        no entries rather than failing the timeline.
+        """
+        cowork = self.root / "cowork"
+        entries: list[dict[str, Any]] = []
+
+        events_path = cowork / "events.jsonl"
+        try:
+            lines = events_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            lines = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, Mapping) or event.get("work_id") != item_id:
+                continue
+            at = event.get("at")
+            entries.append({
+                "source": "cowork_event",
+                "at": at,
+                "action": event.get("event"),
+                "revision": event.get("revision"),
+                "phase": event.get("event"),
+                "summary": event.get("summary"),
+                "handoff_id": event.get("handoff_id"),
+                "actor": resolve_actor("moa", at=at),
+                "record_schema": "current",
+                "unknown_fields": [],
+            })
+
+        handoffs = cowork / "handoffs"
+        try:
+            names = sorted(
+                name for name in os.listdir(handoffs)
+                if name.endswith(".json") and item_id in name
+            )
+        except OSError:
+            names = []
+        for name in names:
+            try:
+                payload = json.loads((handoffs / name).read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, Mapping) or payload.get("work_id") != item_id:
+                continue
+            at = payload.get("created_at")
+            item_block = payload.get("item") or {}
+            entries.append({
+                "source": "cowork_handoff",
+                "at": at,
+                "action": "handoff",
+                "revision": item_block.get("revision_after") if isinstance(item_block, Mapping) else None,
+                "phase": payload.get("outcome"),
+                "summary": payload.get("next_action"),
+                "handoff_id": payload.get("handoff_id"),
+                # A local identifier, never an absolute path.
+                "receipt": f"cowork/handoffs/{name}",
+                "actor": resolve_actor(payload.get("actor"), at=at),
+                "record_schema": "current",
+                "unknown_fields": [],
+            })
+        return entries
+
     # ---------------------------------------------------------------- writing
 
-    def create_item(self, fields: Mapping[str, Any], *, actor: str) -> dict[str, Any]:
+    def create_item(
+        self,
+        fields: Mapping[str, Any],
+        *,
+        actor: str,
+        context: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         actor_name = _normalize_actor(actor, "actor")
         changes = _normalize_changes(fields)
         _require_create_fields(changes)
+        entry_context = _normalize_context(context)
         with self._locked():
             document = self.read_document()
-            return self._create_within(document, changes, actor=actor_name)
+            return self._create_within(
+                document, changes, actor=actor_name, context=entry_context
+            )
 
     def update_item(
         self,
@@ -611,16 +840,20 @@ class WorkStore:
         actor: str,
         expected_revision: int | None = None,
         expected_updated_at: str | None = None,
+        context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         actor_name = _normalize_actor(actor, "actor")
         normalized = _normalize_changes(changes)
         if not normalized:
             raise WorkValidationError("no fields to update")
+        entry_context = _normalize_context(context)
         with self._locked():
             document = self.read_document()
             item = _find(document["items"], item_id)
             _check_expectations(item, expected_revision, expected_updated_at)
-            return self._update_within(document, item, normalized, actor=actor_name)
+            return self._update_within(
+                document, item, normalized, actor=actor_name, context=entry_context
+            )
 
     def upsert_item(
         self,
@@ -684,9 +917,11 @@ class WorkStore:
         actor: str,
         expected_revision: int | None = None,
         expected_updated_at: str | None = None,
+        context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Soft delete: the item stays in the document with archived_at set."""
         actor_name = _normalize_actor(actor, "actor")
+        entry_context = _normalize_context(context)
         with self._locked():
             document = self.read_document()
             item = _find(document["items"], item_id)
@@ -707,13 +942,24 @@ class WorkStore:
             item["updated_at"] = now
             item["revision"] = int(item["revision"]) + 1
             self._commit(document, now)
-            self._append_history("work.archived", item, actor=actor_name, fields=["archived_at"])
+            self._append_history(
+                "work.archived",
+                item,
+                actor=actor_name,
+                fields=["archived_at"],
+                context=entry_context,
+            )
             return item
 
     # ----------------------------------------------------------- internals
 
     def _create_within(
-        self, document: dict[str, Any], changes: Mapping[str, Any], *, actor: str
+        self,
+        document: dict[str, Any],
+        changes: Mapping[str, Any],
+        *,
+        actor: str,
+        context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Append one validated item.  The store lock must already be held."""
         if len(document["items"]) >= MAX_ITEMS:
@@ -729,7 +975,9 @@ class WorkStore:
         _check_parent(document["items"], item)
         document["items"].append(item)
         self._commit(document, now)
-        self._append_history("work.created", item, actor=actor, fields=sorted(changes))
+        self._append_history(
+            "work.created", item, actor=actor, fields=sorted(changes), context=context
+        )
         return item
 
     def _update_within(
@@ -739,6 +987,7 @@ class WorkStore:
         changes: Mapping[str, Any],
         *,
         actor: str,
+        context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Apply validated changes in place.  The store lock must already be held."""
         if item["archived_at"] is not None:
@@ -759,6 +1008,7 @@ class WorkStore:
             actor=actor,
             fields=sorted(changes),
             status_from=previous_status,
+            context=context,
         )
         return item
 
@@ -782,11 +1032,14 @@ class WorkStore:
         actor: str,
         fields: Sequence[str],
         status_from: str | None = None,
+        context: Mapping[str, Any] | None = None,
     ) -> None:
         """Record that a change happened.
 
-        Only identifiers, field names, and status enum values are written, so a
-        work item's free text can never leak into the history stream.
+        Identifiers, field names, status enum values, and the caller's own
+        timeline context. The item's free text -- `detail`, `progress_summary`,
+        `blocker`, `next_action` -- is still never written here, so the history
+        stream cannot become a copy of the board.
         """
         entry = {
             "at": _utc_now(),
@@ -796,9 +1049,14 @@ class WorkStore:
             "revision": item["revision"],
             "fields": sorted(fields),
             "status": item["status"],
+            # Who asked and who is carrying it, taken from the item itself so
+            # a timeline never has to join back to the document to be read.
+            "requested_by": item.get("requested_by"),
+            "assigned_to": item.get("assigned_to"),
         }
         if status_from is not None and status_from != item["status"]:
             entry["status_from"] = status_from
+        entry.update(context or {})
         descriptor = os.open(self.history_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         try:
             with os.fdopen(descriptor, "a", encoding="utf-8") as stream:

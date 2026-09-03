@@ -128,6 +128,13 @@ def add_work_parser(subparsers: Any) -> None:
     history.add_argument("--limit", type=int, default=100)
     history.add_argument("--item-id")
 
+    timeline = commands.add_parser(
+        "timeline", help="Show one item's activity with actors resolved and receipts linked"
+    )
+    _add_common(timeline)
+    timeline.add_argument("item_id")
+    timeline.add_argument("--limit", type=int, default=200)
+
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
@@ -287,5 +294,9 @@ def _dispatch(args: argparse.Namespace) -> int:
     if command == "history":
         limit = max(1, min(int(args.limit), 500))
         _emit({"ok": True, "items": store.read_history(limit=limit, item_id=args.item_id)})
+        return 0
+    if command == "timeline":
+        limit = max(1, min(int(args.limit), 1_000))
+        _emit({"ok": True, **store.read_timeline(args.item_id, limit=limit)})
         return 0
     raise AssertionError(f"Unhandled work command: {command}")
