@@ -39,6 +39,13 @@ def message(timestamp: str, **overrides: Any) -> dict[str, Any]:
     return body
 
 
+def _within(item: dict[str, Any], oldest: float, latest: float | None) -> bool:
+    """Slack honours `oldest` and `latest`; so must the fake, or a bound the
+    collector sends can be asserted on without ever being obeyed."""
+    ts_value = float(item["ts"])
+    return ts_value >= oldest and (latest is None or ts_value < latest)
+
+
 class FakeSlack:
     """Scripted Slack Web API. Records every call for assertions."""
 
@@ -97,14 +104,16 @@ class FakeSlack:
                     code=self.failing_channels[channel],
                 )
             oldest = float(params.get("oldest") or 0)
+            latest = float(params["latest"]) if params.get("latest") else None
             for page in self.history.get(channel, []):
-                visible = [item for item in page if float(item["ts"]) >= oldest]
+                visible = [item for item in page if _within(item, oldest, latest)]
                 yield {"ok": True, "messages": visible, "response_metadata": {"next_cursor": ""}}
             return
         if method == "conversations.replies":
             key = (str(params["channel"]), str(params["ts"]))
             oldest = float(params.get("oldest") or 0)
-            found = [item for item in self.replies.get(key, []) if float(item["ts"]) >= oldest]
+            latest = float(params["latest"]) if params.get("latest") else None
+            found = [item for item in self.replies.get(key, []) if _within(item, oldest, latest)]
             yield {"ok": True, "messages": found, "response_metadata": {"next_cursor": ""}}
             return
         raise AssertionError(method)
@@ -392,6 +401,117 @@ def test_a_fully_swept_thread_does_not_claim_an_incomplete_sweep(tmp_path: Path)
     assert not [
         note for note in manifest["coverage_notes"] if note.startswith("slack.thread_replies_incomplete")
     ]
+
+
+def test_a_date_slice_refuses_to_advance_the_checkpoint(tmp_path: Path) -> None:
+    """A slice read one window, not everything up to its end.
+
+    Moving a channel's watermark to the slice's end would assert the months
+    between that end and the previous watermark had been read, and nothing
+    would ever fetch them again.
+    """
+    seed = RawArchive(tmp_path, "slack", "run-0", "test")
+    seed.write_checkpoint(
+        {
+            "schema_version": 2,
+            "source": "slack",
+            "run_id": "run-0",
+            "high_watermarks": {CHANNEL: ts(-60)},
+        }
+    )
+    old = ts(-86_400 * 200)
+    client = FakeSlack(history={CHANNEL: [[message(old)]], DM: [[]]})
+
+    archive, result = collect(
+        tmp_path, client, run_id="run-1", since=NOW - timedelta(days=210), until=NOW - timedelta(days=190)
+    )
+
+    assert result.checkpoint_advanced is False
+    checkpoint = json.loads((tmp_path / "manifests/slack/test/checkpoint.json").read_text())
+    assert checkpoint["run_id"] == "run-0", "the earlier checkpoint has to survive untouched"
+    assert checkpoint["high_watermarks"][CHANNEL] == ts(-60)
+    manifest = json.loads((tmp_path / f"manifests/slack/test/{result.run_id}.json").read_text())
+    assert any(note.startswith("slack.date_slice_capture") for note in manifest["coverage_notes"])
+    assert manifest["requested_window"]["mode"] == "date_slice"
+    assert manifest["requested_window"]["until"] is not None
+
+
+def test_a_date_slice_reads_the_window_rather_than_resuming_from_the_watermark(
+    tmp_path: Path,
+) -> None:
+    """The watermark tracks the incremental front, far ahead of any old window.
+
+    Honouring it would ask Slack for messages after today and hand back an
+    empty slice that still looked like a successful run.
+    """
+    seed = RawArchive(tmp_path, "slack", "run-0", "test")
+    seed.write_checkpoint(
+        {"schema_version": 2, "source": "slack", "run_id": "run-0", "high_watermarks": {CHANNEL: ts(-60)}}
+    )
+    old = ts(-86_400 * 200)
+    client = FakeSlack(history={CHANNEL: [[message(old)]], DM: [[]]})
+
+    _, result = collect(
+        tmp_path, client, run_id="run-1", since=NOW - timedelta(days=210), until=NOW - timedelta(days=190)
+    )
+
+    history = [params for method, params in client.calls if method == "conversations.history"]
+    asked = next(p for p in history if p["channel"] == CHANNEL)
+    assert float(asked["oldest"]) < float(ts(-60)), "the slice must not resume from the watermark"
+    assert asked["latest"] is not None, "the upper bound has to reach Slack"
+    assert result.messages_seen == 1
+
+
+def test_a_date_slice_leaves_the_incremental_supplements_alone(tmp_path: Path) -> None:
+    """Watched-thread re-poll and workspace search both track the present.
+
+    Running them inside a historical slice pulls today's traffic into it.
+    """
+    old_parent = ts(-86_400 * 200)
+    seed = RawArchive(tmp_path, "slack", "run-0", "test")
+    seed.write_checkpoint(
+        {
+            "schema_version": 2,
+            "source": "slack",
+            "run_id": "run-0",
+            "thread_watch": {CHANNEL: {old_parent: ts(-60)}},
+        }
+    )
+    client = FakeSlack(
+        history={CHANNEL: [[]], DM: [[]]},
+        replies={(CHANNEL, old_parent): [message(ts(-60), thread_ts=old_parent)]},
+        searches={"direct-mentions": [{"ts": ts(-30), "channel": {"id": CHANNEL}, "text": "<@U0TESTSELF>"}]},
+    )
+
+    _, result = collect(
+        tmp_path, client, run_id="run-1", since=NOW - timedelta(days=210), until=NOW - timedelta(days=190)
+    )
+
+    assert result.threads_repolled == 0, "the watch list belongs to the incremental front"
+    assert not [method for method, _ in client.calls if method == "search.messages"] or (
+        result.search_matches_kept == 0
+    ), "a mention from outside the window must not land in the slice"
+    assert result.messages_seen == 0
+
+
+def test_the_ordinary_incremental_run_still_resumes_and_advances(tmp_path: Path) -> None:
+    """The slice behaviour is additive: without `until` nothing changes."""
+    seed = RawArchive(tmp_path, "slack", "run-0", "test")
+    seed.write_checkpoint(
+        {"schema_version": 2, "source": "slack", "run_id": "run-0", "high_watermarks": {CHANNEL: ts(-600)}}
+    )
+    client = FakeSlack(history={CHANNEL: [[message(ts(-60))]], DM: [[]]})
+
+    _, result = collect(tmp_path, client, run_id="run-1")
+
+    assert result.checkpoint_advanced is True
+    history = [params for method, params in client.calls if method == "conversations.history"]
+    asked = next(p for p in history if p["channel"] == CHANNEL)
+    assert asked["oldest"] == ts(-600), "an incremental run still resumes from the watermark"
+    assert asked["latest"] is None
+    manifest = json.loads((tmp_path / f"manifests/slack/test/{result.run_id}.json").read_text())
+    assert not [n for n in manifest["coverage_notes"] if n.startswith("slack.date_slice_capture")]
+    assert manifest["requested_window"]["mode"] == "incremental"
 
 
 def test_threads_older_than_the_lookback_are_dropped_from_the_watch_list(tmp_path: Path) -> None:

@@ -191,6 +191,11 @@ class SlackCollector:
         *,
         since: datetime,
         expected_team_id: str | None,
+        # Exclusive upper bound, by the same convention the Notion date-slice
+        # driver uses: 2026-08-01 is captured with an `until` of
+        # 2026-08-02T00:00:00+09:00. A bounded run reads one slice, so it never
+        # advances the checkpoint - see the guard below.
+        until: datetime | None = None,
         channel_ids: set[str] | None = None,
         max_channels: int | None = None,
         max_messages: int | None = None,
@@ -211,11 +216,13 @@ class SlackCollector:
             for channel, threads in (checkpoint.get("thread_watch") or {}).items()
         }
         since_ts = since.timestamp()
+        until_ts = until.timestamp() if until is not None else None
         bounded = bool(channel_ids) or max_channels is not None or max_messages is not None
         archive.set_requested_window(
             {
                 "since": since.isoformat(),
-                "mode": "bounded" if bounded else "incremental",
+                "until": until.isoformat() if until is not None else None,
+                "mode": "date_slice" if until is not None else ("bounded" if bounded else "incremental"),
                 "resumed_channels": len(previous_watermarks),
                 "watched_threads": sum(len(value) for value in previous_threads.values()),
                 "thread_lookback_days": thread_lookback_days,
@@ -224,6 +231,18 @@ class SlackCollector:
         )
         for note in COVERAGE_NOTES:
             archive.note_coverage(note)
+        if until is not None:
+            # A slice saw one window, not everything up to its end. Advancing a
+            # channel's watermark to the slice's end would claim the months
+            # between that end and the previous watermark had been read, and
+            # they would never be fetched again.
+            advance_checkpoint = False
+            archive.note_coverage(
+                "slack.date_slice_capture: this run was bounded by an upper date and read only "
+                f"the window {since.isoformat()} to {until.isoformat()}, exclusive of the upper "
+                "bound. The checkpoint is deliberately not advanced: a watermark moved to the "
+                "slice's end would assert that everything before it had been read."
+            )
 
         auth = self.client.call("auth.test")
         archive.write_page("auth-test", _archive_safe_slack_body(auth), endpoint="auth.test", item_count=1)
@@ -332,6 +351,7 @@ class SlackCollector:
                 channel=channel_id,
                 ts=thread_ts,
                 oldest=oldest,
+                latest=(f"{until_ts:.6f}" if until_ts is not None else None),
                 inclusive=True,
             ):
                 for reply in reply_page["messages"]:
@@ -344,13 +364,21 @@ class SlackCollector:
 
         def collect_channel(channel_id: str) -> None:
             nonlocal parents_swept, declared_replies
-            oldest = previous_watermarks.get(channel_id) or f"{since_ts:.6f}"
+            # A slice ignores the checkpoint's watermark: that watermark records
+            # how far the *incremental* front has reached, which is ahead of any
+            # historical window and would empty the slice.
+            oldest = (
+                f"{since_ts:.6f}"
+                if until_ts is not None
+                else (previous_watermarks.get(channel_id) or f"{since_ts:.6f}")
+            )
             for page in self._pages(
                 "conversations.history",
                 "messages",
                 f"history-{channel_id}",
                 channel=channel_id,
                 oldest=oldest,
+                latest=(f"{until_ts:.6f}" if until_ts is not None else None),
                 inclusive=True,
             ):
                 for message in page["messages"]:
@@ -394,7 +422,9 @@ class SlackCollector:
         # Replies to threads whose parent predates the window are unreachable
         # through conversations.history, so watched threads are re-polled from
         # their own last observed reply. The lookback bounds the daily cost.
-        if not bounded:
+        # A slice skips it: the watch list and its lookback both track the
+        # incremental front, which is nowhere near a historical window.
+        if not bounded and until is None:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=thread_lookback_days)).timestamp()
             collected_channel_ids = {str(channel["id"]) for channel in channels}
             already_read = set(events_by_key)
@@ -425,19 +455,27 @@ class SlackCollector:
         search_kept = 0
         search_filtered = 0
         search_before_window = 0
+        search_after_window = 0
         searches_run: list[str] = []
         if use_search and not bounded and not at_limit():
+            # A slice needs an upper bound here: these searches are
+            # workspace-wide and would otherwise drag today's mentions into a
+            # window from January. Slack reads `before:` as an exclusive day,
+            # which is exactly what `until` already means.
             after_date = since.date().isoformat()
+            window = f"after:{after_date}"
+            if until is not None:
+                window += f" before:{until.date().isoformat()}"
             searches = [
-                ("direct-mentions", f'"<@{self_user_id}>" after:{after_date}'),
-                ("direct-messages-to-self", f"to:me after:{after_date}"),
-                ("messages-from-self", f"from:me after:{after_date}"),
-                ("broadcast-channel", f'"<!channel>" after:{after_date}'),
-                ("broadcast-here", f'"<!here>" after:{after_date}'),
-                ("broadcast-everyone", f'"<!everyone>" after:{after_date}'),
+                ("direct-mentions", f'"<@{self_user_id}>" {window}'),
+                ("direct-messages-to-self", f"to:me {window}"),
+                ("messages-from-self", f"from:me {window}"),
+                ("broadcast-channel", f'"<!channel>" {window}'),
+                ("broadcast-here", f'"<!here>" {window}'),
+                ("broadcast-everyone", f'"<!everyone>" {window}'),
             ]
             searches.extend(
-                (f"usergroup-{group_id}", f'"<!subteam^{group_id}>" after:{after_date}')
+                (f"usergroup-{group_id}", f'"<!subteam^{group_id}>" {window}')
                 for group_id in self_group_ids
             )
             for search_name, query in searches:
@@ -468,6 +506,12 @@ class SlackCollector:
                             continue
                         if (_as_float(timestamp) or 0.0) < since_ts:
                             search_before_window += 1
+                            continue
+                        # `before:` narrows the query, but Slack resolves that
+                        # date in the workspace's timezone rather than the
+                        # window's, so the bound is re-applied to the timestamp.
+                        if until_ts is not None and (_as_float(timestamp) or 0.0) >= until_ts:
+                            search_after_window += 1
                             continue
                         search_kept += 1
                         add_message(str(channel_id), match)
@@ -515,6 +559,7 @@ class SlackCollector:
             "search_matches_kept": search_kept,
             "search_matches_context_filtered": search_filtered,
             "search_matches_before_window": search_before_window,
+            "search_matches_after_window": search_after_window,
             "watched_threads_after_run": sum(len(value) for value in thread_watch.values()),
             # Beside rate_limit_hits, so a run that limped is distinguishable
             # from one that flew: a rising count is the signal that the next
