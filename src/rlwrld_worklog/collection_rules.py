@@ -975,7 +975,7 @@ GITHUB_V5 = replace(
 V5 = CollectionRule(
     version="V5",
     title="공식 API 원본 원장 + 슬럼 (Slurm added)",
-    status="active",
+    status="superseded",
     effective=EffectivePeriod(
         start="2026-09-02",
         end=None,
@@ -1014,11 +1014,114 @@ V5 = CollectionRule(
 )
 
 
+# Slack gained a bounded-window capture, the same shape as the Notion date
+# slice: one month per run, ending where `until` says rather than at the live
+# head. Github's mirror-freshness limitation is restated because the mtime test
+# it described was replaced -- see the note itself for why.
+SLACK_V6 = replace(
+    V5.source_rule("slack"),
+    includes=V5.source_rule("slack").includes
+    + (
+        "A bounded window (`until`), passed to conversations.history and "
+        "conversations.replies as `latest`, so one run covers one month and ends by "
+        "construction",
+    ),
+    excludes=V5.source_rule("slack").excludes
+    + (
+        "In slice mode: the checkpoint watermark, the watched-thread re-poll and the "
+        "lookback, all of which track the live front and would empty a past window",
+    ),
+    known_limitations=V5.source_rule("slack").known_limitations
+    + (
+        "slack.date_slice_capture: a bounded window run captured one month instead of the "
+        "live head. It reads from `since` and ignores the checkpoint watermark, because the "
+        "watermark tracks the incremental front and would leave the past window empty. The "
+        "watched-thread re-poll and the lookback are skipped for the same reason. "
+        "`advance_checkpoint` is forced false: a run that saw only one month must not move a "
+        "channel's watermark past it, or everything after that month is skipped forever. "
+        "Workspace search is bounded with `before:`, and the window is applied again on the "
+        "client because the server's timezone need not match ours -- anything the server "
+        "returned above the window is counted in counters.search_matches_after_window rather "
+        "than silently kept.",
+    ),
+    evidence=V5.source_rule("slack").evidence
+    + (
+        "src/rlwrld_worklog/slack_collector.py (`until` passed as `latest`, the client-side "
+        "re-filter, and counters.search_matches_after_window)",
+        "cowork/staging/roa-slack-month-backfill.py",
+    ),
+)
+
+
+GITHUB_V6 = replace(
+    V5.source_rule("github"),
+    known_limitations=tuple(
+        limitation
+        for limitation in V5.source_rule("github").known_limitations
+        if not limitation.startswith("github.commit_coverage_is_bounded_by_mirror_freshness")
+    )
+    + (
+        "github.commit_coverage_is_bounded_by_mirror_freshness: mirror coverage is decided by "
+        "the newest commit in the mirror's refs, not by the directory's mtime. A bare clone "
+        "with no fetch refspec updates FETCH_HEAD without moving refs, so mtime gives false "
+        "reassurance -- it hid 576 August commits, and three days that read 1, 0 and 1 were "
+        "actually 152, 71 and 255. A mirror holding a commit after the window's end proves "
+        "coverage; anything else is unknown. There is deliberately no False: a dormant "
+        "repository and one that never received a fetch cannot be told apart from refs alone, "
+        "and asserting either way makes one of them quietly wrong. The manifest counter is "
+        "mirrors_with_unproven_coverage.",
+    ),
+    evidence=V5.source_rule("github").evidence
+    + ("manifest counter: mirrors_with_unproven_coverage",),
+)
+
+
+V6 = CollectionRule(
+    version="V6",
+    title="공식 API 원본 원장 + 슬랙 날짜 슬라이스 (bounded Slack capture)",
+    status="active",
+    effective=EffectivePeriod(
+        start="2026-09-03",
+        end=None,
+        basis=(
+            "observed: slack_collector gained a bounded `until` window, and the github "
+            "collector replaced its mtime freshness test with a refs-based one."
+        ),
+    ),
+    summary=(
+        "V5 with two corrections. Slack can be captured one bounded window at a time, the "
+        "same shape as the Notion date slice, which is what makes a month-by-month backfill "
+        "terminate. And GitHub decides mirror coverage from refs rather than directory mtime, "
+        "which had been hiding commits behind a clone that fetched without moving its refs. "
+        "Notion, Google Calendar and Slurm are unchanged from V5."
+    ),
+    manifest_schema_version=2,
+    ledger_schema_version="1.0",
+    source_schema_version=None,
+    capture_profiles=V5.capture_profiles,
+    storage_layout=V5.storage_layout,
+    unknowns=V5.unknowns
+    + (
+        "Whether a GitHub mirror without a post-window commit is dormant or simply never "
+        "fetched. Refs cannot separate the two, so coverage there is unknown rather than "
+        "absent.",
+    ),
+    sources=(
+        SLACK_V6,
+        V5.source_rule("notion"),
+        V5.source_rule("google_calendar"),
+        GITHUB_V6,
+        V5.source_rule("slurm"),
+    ),
+    supersedes="V5",
+)
+
+
 # --------------------------------------------------------------- registry
 
-RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3, V4, V5)
+RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3, V4, V5, V6)
 
-ACTIVE_RULE_VERSION = "V5"
+ACTIVE_RULE_VERSION = "V6"
 
 # Content digests of every published version. A published rule is frozen: if
 # editing one changes its meaning, the digest moves and import fails here,
@@ -1081,6 +1184,7 @@ PUBLISHED_DIGESTS: dict[str, str] = {
     "V3": "sha256:52a5f9e46a1a1af21fa391f43be294ea87f1505a43b4eb94b3f76492205dadd8",
     "V4": "sha256:da7f50ccadb136c979097e6929af10c41b11855203bfa0eaaae6ca1355875e20",
     "V5": "sha256:ba77758f618dc29f60d48adc3a47f8b17867aa6b9683ada5e3d63a15ae213941",
+    "V6": "sha256:ddbf228989f159091e7b02f9fc6ce7acd73713e26f3fdaa39ca92d2cb637a5f3",
 }
 
 
