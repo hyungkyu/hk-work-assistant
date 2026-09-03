@@ -588,6 +588,65 @@ def test_legacy_truncation_warnings_make_a_date_partial(
     assert cell["legacy_meta"][0]["rate_limit_hits"] == 9
 
 
+def test_a_bounded_run_stops_observing_where_its_window_ends(
+    paths: status.CollectionPaths,
+) -> None:
+    """A date slice must not be attributed to the days after it.
+
+    The run's window end came from `finished_at`, so a slice covering one KST
+    day in August looked like it had observed everything from that day up to
+    the moment the process exited. The grid attributes a run to every date its
+    window touches, so a single 8/19 slice counted toward 8/20 onward and a run
+    that never looked at a date got a vote on that date's verdict.
+    """
+    write_manifest(
+        paths,
+        source="notion",
+        run_id="20260901T120000Z-51ce01",
+        started_at="2026-09-01T12:00:00+00:00",
+        finished_at="2026-09-01T13:00:00+00:00",
+        requested_window={
+            "since_effective": "2026-08-19T00:00:00+09:00",
+            "until": "2026-08-20T00:00:00+09:00",
+            "mode": "date_slice",
+        },
+    )
+    index = status.build_run_index(paths, now=NOW)
+    run = find_run(index, "20260901T120000Z-51ce01")
+    assert run["window"]["end"] == "2026-08-20T00:00:00+09:00"
+    assert run["window"]["end_is_declared"] is True
+
+    grid = status.coverage(
+        paths,
+        start=status.parse_iso_date("2026-08-19"),
+        end=status.parse_iso_date("2026-08-22"),
+        sources=["notion"],
+        now=NOW,
+        index=index,
+    )
+    runs_by_date = {row["date"]: row["cells"]["notion"]["runs"] for row in grid["rows"]}
+    assert runs_by_date["2026-08-19"] == 1
+    for iso in ("2026-08-20", "2026-08-21", "2026-08-22"):
+        assert not runs_by_date[iso], f"{iso} was never observed by this run"
+
+
+def test_an_unbounded_run_still_ends_when_it_finished(
+    paths: status.CollectionPaths,
+) -> None:
+    """Only a declared `until` moves the end; incremental runs are unchanged."""
+    write_manifest(
+        paths,
+        source="notion",
+        run_id="20260901T120000Z-51ce02",
+        started_at="2026-09-01T12:00:00+00:00",
+        finished_at="2026-09-01T13:00:00+00:00",
+        requested_window={"since_effective": "2026-09-01T00:00:00+00:00"},
+    )
+    run = find_run(status.build_run_index(paths, now=NOW), "20260901T120000Z-51ce02")
+    assert run["window"]["end"] == "2026-09-01T13:00:00+00:00"
+    assert run["window"]["end_is_declared"] is False
+
+
 def test_a_wide_range_says_it_did_not_read_the_legacy_record(
     paths: status.CollectionPaths,
 ) -> None:

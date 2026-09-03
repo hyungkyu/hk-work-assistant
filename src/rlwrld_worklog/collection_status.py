@@ -397,16 +397,35 @@ def _kind_counts(entries: Any, *, limit: int = 8) -> tuple[int, list[dict[str, A
 
 
 def _window(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """What a run actually observed, not when it ran.
+
+    A bounded run declares `requested_window.until`, and that is where its
+    observation stops -- taking `end` from `finished_at` instead would say a
+    date slice observed everything from its window up to the wall clock. The
+    coverage grid attributes a run to every date its window touches, so that
+    error made one 8/19 slice count toward 8/20 through today, letting a run
+    that never looked at a date decide that date's verdict. An unbounded
+    incremental run has no `until` and does end when it finished.
+    """
     requested = manifest.get("requested_window")
     since = None
+    until = None
     if isinstance(requested, Mapping):
         since = requested.get("since_effective") or requested.get("since")
+        until = requested.get("until")
     start = parse_instant(since) or parse_instant(manifest.get("started_at"))
-    end = parse_instant(manifest.get("finished_at")) or parse_instant(manifest.get("started_at"))
+    end = (
+        parse_instant(until)
+        or parse_instant(manifest.get("finished_at"))
+        or parse_instant(manifest.get("started_at"))
+    )
     return {
         "start": start.isoformat() if start else None,
         "end": end.isoformat() if end else None,
         "from_requested_window": since is not None,
+        # True when the run declared where its observation stops, so a consumer
+        # can tell a real boundary from "it ended when the process ended".
+        "end_is_declared": until is not None,
     }
 
 
@@ -1202,6 +1221,12 @@ def _run_intersects_day(run: Mapping[str, Any], start: datetime, end: datetime) 
         window_end = window_start
     if (window_end - window_start) > timedelta(days=MAX_COVERAGE_DAYS_PER_RUN):
         window_start = window_end - timedelta(days=MAX_COVERAGE_DAYS_PER_RUN)
+    # A declared end is the collector's exclusive upper bound: a slice with
+    # `until` at 8/20 00:00 KST collected nothing at that instant, so it has
+    # nothing to say about 8/20. An undeclared end is just when the process
+    # stopped, and that instant was inside the observation.
+    if window.get("end_is_declared"):
+        return window_start < end and window_end > start
     return window_start < end and window_end >= start
 
 
