@@ -519,3 +519,42 @@ def test_a_condition_status_is_marked_apart_from_a_queue_stage(
     stage = work_web.get_item(item["id"], authorized(owner))["roles"]["stage"]
     assert stage["kind"] == "condition"
     assert stage["terminal"] is False
+
+
+def test_the_dashboard_shows_when_each_agent_was_last_seen(
+    config_root: Path, owner: dict[str, str]
+) -> None:
+    """Condition 8: an item assigned to someone absent is not in progress."""
+    mailbox = config_root / "cowork" / "mailbox"
+    mailbox.mkdir(parents=True, exist_ok=True)
+    (mailbox / ".processed-noa").write_text("x", encoding="utf-8")
+    create(owner, assigned_to="noa", status="in_progress")
+    create(owner, assigned_to="noa", status="done")
+
+    payload = work_web.work_agents(authorized(owner))
+    rows = {row["agent"]: row for row in payload["agents"]}
+    assert rows["noa"]["verdict"] == "활동 있음"
+    # Finished work is not something the absent person still owes.
+    assert rows["noa"]["open_items"] == 1
+    assert rows["boa"]["verdict"] == "판정 불가"
+    assert rows["boa"]["basis"] == "표시 파일이 없다"
+
+
+def test_a_stale_mark_reads_as_no_trace_not_as_dead(
+    config_root: Path, owner: dict[str, str]
+) -> None:
+    """A mark moves when mail is processed, so silence is not proof of death."""
+    import os
+    from rlwrld_worklog.cowork import QUIET_AFTER_SECONDS
+
+    mailbox = config_root / "cowork" / "mailbox"
+    mailbox.mkdir(parents=True, exist_ok=True)
+    mark = mailbox / ".cursor-roa"
+    mark.write_text("x", encoding="utf-8")
+    old = mark.stat().st_mtime - QUIET_AFTER_SECONDS - 60
+    os.utime(mark, (old, old))
+
+    rows = {row["agent"]: row for row in work_web.work_agents(authorized(owner))["agents"]}
+    assert rows["roa"]["verdict"] == "활동 없음"
+    assert rows["roa"]["evidence"] == ".cursor-roa"
+    assert rows["roa"]["seconds_since"] > QUIET_AFTER_SECONDS

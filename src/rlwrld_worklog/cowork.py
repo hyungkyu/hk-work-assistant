@@ -29,7 +29,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import Any, Iterable, Mapping
+from pathlib import Path
+from typing import Any, Iterable, Mapping, Sequence
 
 COWORK_SCHEMA_VERSION = 1
 
@@ -452,3 +453,82 @@ def registry_as_dict() -> dict[str, Any]:
         "message_types": list(MESSAGE_TYPES),
         "types_carrying_authority": list(TYPES_CARRYING_AUTHORITY),
     }
+
+
+# ------------------------------------------------------------- agent liveness
+
+# The mailbox already records, per agent, the last message that agent worked
+# through. Reading those marks is enough to say when someone was last seen; no
+# new file, no heartbeat protocol, nothing for an agent to remember to do.
+ACTIVITY_MARKS = (".processed-{agent}", ".cursor-{agent}")
+
+# Beyond this, the screen says an agent has left no recent trace. The number is
+# calibrated, not promised: the five agents working when this was written had
+# marks 1, 2, 13, 15 and 1 minutes old, so an hour is four times the widest gap
+# a demonstrably working agent showed. Close enough that a half-day
+# disappearance surfaces early; far enough that an ordinary quiet stretch does
+# not cry wolf.
+#
+# What it cannot mean is "dead". A mark moves when an agent processes a
+# message, so an agent with no mail leaves no trace while being perfectly
+# alive. On 2026-09-04 a four-hour silence was reported as work having stopped,
+# and it turned out four agents had been up for thirty-three hours and simply
+# had nothing to record.
+QUIET_AFTER_SECONDS = 60 * 60
+
+ACTIVITY_ACTIVE = "활동 있음"
+ACTIVITY_QUIET = "활동 없음"
+ACTIVITY_UNDETERMINED = "판정 불가"
+
+
+def agent_activity(
+    mailbox: Path, agents: Sequence[str], *, now: datetime | None = None
+) -> list[dict[str, Any]]:
+    """When each agent was last seen working, and how sure we are of it.
+
+    Three verdicts, kept apart on purpose. `활동 없음` says a trace is missing,
+    which is not the same claim as the agent being gone, and `판정 불가` says
+    the mark could not be read at all rather than folding that into either.
+    """
+    moment = now or datetime.now(timezone.utc)
+    rows: list[dict[str, Any]] = []
+    for agent in agents:
+        latest: datetime | None = None
+        evidence: str | None = None
+        unreadable: list[str] = []
+        for template in ACTIVITY_MARKS:
+            name = template.format(agent=agent)
+            path = mailbox / name
+            try:
+                stamp = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                unreadable.append(name)
+                continue
+            if latest is None or stamp > latest:
+                latest, evidence = stamp, name
+        if latest is None:
+            rows.append({
+                "agent": agent,
+                "verdict": ACTIVITY_UNDETERMINED,
+                "last_activity_at": None,
+                "seconds_since": None,
+                "evidence": None,
+                "basis": (
+                    "표시 파일을 읽을 수 없다"
+                    if unreadable
+                    else "표시 파일이 없다"
+                ),
+            })
+            continue
+        seconds = (moment - latest).total_seconds()
+        rows.append({
+            "agent": agent,
+            "verdict": ACTIVITY_ACTIVE if seconds <= QUIET_AFTER_SECONDS else ACTIVITY_QUIET,
+            "last_activity_at": latest.isoformat(),
+            "seconds_since": int(seconds),
+            "evidence": evidence,
+            "basis": "메일함 표시 파일의 수정 시각",
+        })
+    return rows

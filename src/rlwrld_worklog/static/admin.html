@@ -242,6 +242,7 @@
           <button class="button primary" id="work-add">업무 추가</button>
         </div>
         <p class="work-state" id="work-state">불러오는 중…</p>
+        <p class="work-state" id="work-agents"></p>
         <p class="work-hint" id="work-hint"></p>
         <div class="work-board" id="work-board"></div>
       </section>
@@ -986,6 +987,22 @@
         // Say what is not on the board as well as what is. An archived item
         // that never finished is work that left the board while still being
         // work, and a count of zero is itself worth showing.
+        // Who was last seen, beside what they still owe. An item assigned to
+        // someone who has left no recent trace is not in progress, and until
+        // this row existed the only way to know was to read a hidden file.
+        api('/api/v1/admin/work/agents').then((payload) => {
+          const line = (payload.agents || []).map((row) => {
+            const mark = row.verdict === '활동 있음' ? '' : ` ${row.verdict}`;
+            const ago = row.seconds_since === null
+              ? '기록 없음'
+              : `${Math.round(row.seconds_since / 60)}분 전`;
+            return `${row.agent} ${ago}${mark} (열림 ${row.open_items})`;
+          }).join(' · ');
+          $('work-agents').textContent = line
+            ? `${line} · 기준 ${Math.round((payload.quiet_after_seconds || 0) / 60)}분`
+            : '';
+        }).catch(() => { $('work-agents').textContent = ''; });
+
         const withheld = workState.withheld;
         const hidden = withheld && !withheld.included && withheld.archived
           ? ` · 보관 ${withheld.archived}건(미완 ${withheld.archived_unfinished})`

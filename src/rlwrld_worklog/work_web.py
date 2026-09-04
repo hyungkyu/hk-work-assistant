@@ -8,6 +8,7 @@ log alongside the work store's own change history.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Annotated, Any, Iterator, Mapping
 
@@ -23,10 +24,16 @@ from .admin_web import (
     session_actor,
     store,
 )
-from .cowork import DIRECTING_PARTIES, registry_as_dict
+from .cowork import (
+    DIRECTING_PARTIES,
+    QUIET_AFTER_SECONDS,
+    agent_activity,
+    registry_as_dict,
+)
 from .work_store import (
     PHASES,
     PRIORITIES,
+    TERMINAL_STATUSES,
     describe_roles,
     STATUSES,
     status_metadata,
@@ -240,6 +247,36 @@ def work_timeline(
     require_board_session(request)
     with _translated_errors():
         return work_store().read_timeline(item_id, limit=limit)
+
+
+@router.get("/agents")
+def work_agents(request: Request) -> dict[str, Any]:
+    """When each agent was last seen, and how much is open in their name.
+
+    Condition 8 asks the dashboard to show everything in progress. An item
+    assigned to someone who has left no recent trace is not in progress, and
+    until now the only way to know that was to read a hidden file by hand.
+    """
+    require_board_session(request)
+    with _translated_errors():
+        items = work_store().list_items()["items"]
+    open_counts: dict[str, int] = {}
+    for item in items:
+        if item["status"] in TERMINAL_STATUSES:
+            continue
+        name = str(item.get("assigned_to") or "")
+        open_counts[name] = open_counts.get(name, 0) + 1
+    # The same roster the tokens are issued against, so the screen cannot end
+    # up watching a different set of agents than the one that exists.
+    admin = store()
+    rows = agent_activity(admin.root / "cowork" / "mailbox", admin.AGENT_NAMES)
+    for row in rows:
+        row["open_items"] = open_counts.get(row["agent"], 0)
+    return {
+        "agents": rows,
+        "quiet_after_seconds": QUIET_AFTER_SECONDS,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @router.get("/history")
