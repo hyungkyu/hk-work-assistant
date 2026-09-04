@@ -167,7 +167,9 @@ def build_parser() -> argparse.ArgumentParser:
     ledger_load = subparsers.add_parser(
         "ledger-load", help="Load standard ledger JSONL into the service database"
     )
-    ledger_load.add_argument("source", choices=["slack", "notion", "google-calendar"])
+    ledger_load.add_argument(
+        "source", choices=["slack", "notion", "google-calendar", "github", "slurm"]
+    )
     ledger_load.add_argument("--ledger-root", type=Path, required=True)
     ledger_load.add_argument("--database-url", default=None)
     ledger_load.add_argument("--apply", action="store_true", help="Commit; default is dry-run")
@@ -193,7 +195,9 @@ def build_parser() -> argparse.ArgumentParser:
         "ledger-live-convert",
         help="Convert one archived live capture run into standard v1 ledger JSONL",
     )
-    live_convert.add_argument("source", choices=["slack", "notion", "google-calendar"])
+    live_convert.add_argument(
+        "source", choices=["slack", "notion", "google-calendar", "github", "slurm"]
+    )
     live_convert.add_argument("--manifest", type=Path, required=True)
     live_convert.add_argument("--archive-root", type=Path, default=None)
     live_convert.add_argument("--out-root", type=Path, default=None)
@@ -685,6 +689,8 @@ SOURCE_ARG_TO_LEDGER = {
     "slack": "slack",
     "notion": "notion",
     "google-calendar": "google_calendar",
+    "github": "github",
+    "slurm": "slurm",
 }
 
 

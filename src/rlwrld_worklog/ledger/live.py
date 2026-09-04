@@ -23,15 +23,28 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from .common import content_hash, slack_ts_to_iso
-from .schema import LEDGER_SCHEMA_VERSION, LedgerRecord, ledger_id_for, validate_record
+from .schema import (
+    CAPTURE_PROFILES,
+    LEDGER_SCHEMA_VERSION,
+    LedgerRecord,
+    ledger_id_for,
+    validate_record,
+)
 
-LIVE_CONVERTER_VERSION = "live-api-converter/1.1.0"
-LIVE_SOURCES = ("slack", "notion", "google_calendar")
+LIVE_CONVERTER_VERSION = "live-api-converter/1.2.0"
+
+# Per-record profiles, taken from the registry so the collector and the
+# converter cannot drift apart on what a record's provenance is called.
+MIRROR_COMMIT_PROFILE = CAPTURE_PROFILES["github_commit"]
+REST_COMMIT_PROFILE = CAPTURE_PROFILES["github_rest"]
+REST_PROFILE = CAPTURE_PROFILES["github_rest"]
+SLURM_PROFILE = CAPTURE_PROFILES["slurm_job"]
+LIVE_SOURCES = ("slack", "notion", "google_calendar", "github", "slurm")
 
 
 @dataclass
@@ -880,6 +893,469 @@ def _calendar_records(
             )
 
 
+# ----------------------------------------------------------------- github
+
+
+# The collector files one page per repository per object kind, and a run holds
+# only the kinds it was asked for: the commit backfill and the REST backfill
+# are separate runs over the same window. Both shapes are handled here, so a
+# reader does not have to know which run produced which page -- mistaking one
+# run for the whole capture is what led to "the new collector does not fetch
+# pull requests" when the pull requests were simply in another run.
+_GITHUB_ACTIVITY_KINDS = {
+    "pull_request": ("pull_request", "updated_at"),
+    "review": ("review", "submitted_at"),
+    "review_comment": ("review_comment", "created_at"),
+    "issue_comment": ("issue_comment", "created_at"),
+    "issue": ("issue", "updated_at"),
+}
+
+_GITHUB_KST = timezone(timedelta(hours=9))
+
+
+def _github_day(value: Any) -> str | None:
+    """The KST day a timestamp belongs to, or None.
+
+    The collector keys every count on KST days, so the ledger has to agree:
+    an observation window taken from the run's finish date would file a whole
+    month of commits under the night the backfill happened to run, and the
+    coverage-by-day view would then disagree with the manifest it came from.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith(("z", "Z")):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(_GITHUB_KST).date().isoformat()
+
+
+def _github_window(day: str | None, manifest: dict[str, Any]) -> dict[str, Any]:
+    if day is None:
+        return _window(manifest)
+    return {"start": day, "end": day, "tz": "Asia/Seoul", "granularity": "day"}
+
+
+def _github_commit_times(commit: dict[str, Any]) -> tuple[str | None, str | None]:
+    """(authored_at, committed_at) from either shape.
+
+    A mirror record carries them at the top level; a REST commit nests them
+    under `commit.author.date` and `commit.committer.date`. One accessor keeps
+    the two runs' records on the same day for the same commit.
+    """
+    authored = commit.get("authored_at")
+    committed = commit.get("committed_at")
+    if authored or committed:
+        return (str(authored) if authored else None, str(committed) if committed else None)
+    inner = commit.get("commit")
+    if isinstance(inner, dict):
+        author = inner.get("author") if isinstance(inner.get("author"), dict) else {}
+        committer = inner.get("committer") if isinstance(inner.get("committer"), dict) else {}
+        return (
+            str(author.get("date")) if author.get("date") else None,
+            str(committer.get("date")) if committer.get("date") else None,
+        )
+    return (None, None)
+
+
+def _github_login(value: Any) -> str | None:
+    if isinstance(value, dict):
+        login = value.get("login")
+        return str(login) if login else None
+    return None
+
+
+def _github_records(
+    archive_root: Path, manifest: dict[str, Any], result: LiveConvertResult
+) -> Iterable[LedgerRecord]:
+    run_id = str(manifest["run_id"])
+    collected_at = str(manifest["finished_at"])
+    organization = str(manifest.get("organization") or "unknown")
+    tenant = {"workspace_id": organization, "status": "observed"}
+    repositories: dict[str, dict[str, Any]] = {}
+    loaded: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
+
+    for item in manifest.get("files", []):
+        kind = str(item.get("kind", ""))
+        body = _read_archived(archive_root, item)
+        loaded.append((item, kind, body))
+        if kind.startswith("repositories"):
+            for entry in body.get("items") or []:
+                if isinstance(entry, dict) and entry.get("name"):
+                    repositories[str(entry["name"])] = entry
+
+    seen: set[str] = set()
+    for item, kind, body in loaded:
+        if kind.startswith("repositories"):
+            objects = body.get("items") or []
+            entity_type = "repository"
+            profile = "live-github-repository-list/v1"
+            repository = ""
+        elif kind.startswith("commits-rest-"):
+            objects = body.get("commits") or []
+            entity_type = "commit"
+            profile = REST_COMMIT_PROFILE
+            repository = kind.removeprefix("commits-rest-")
+        elif kind.startswith("commits-"):
+            objects = body.get("commits") or []
+            entity_type = "commit"
+            profile = MIRROR_COMMIT_PROFILE
+            repository = kind.removeprefix("commits-")
+        else:
+            matched = None
+            for prefix, (candidate, _) in _GITHUB_ACTIVITY_KINDS.items():
+                if kind.startswith(f"{prefix}-"):
+                    matched = (prefix, candidate)
+                    break
+            if matched is None:
+                if kind:
+                    result.unhandled_kinds[kind] = result.unhandled_kinds.get(kind, 0) + 1
+                continue
+            prefix, entity_type = matched
+            objects = body.get("items") or []
+            profile = REST_PROFILE
+            repository = kind.removeprefix(f"{prefix}-")
+        if not isinstance(objects, list):
+            continue
+        repository = str(body.get("repository") or repository)
+
+        for index, original in enumerate(objects):
+            if not isinstance(original, dict):
+                continue
+            obj = dict(original)
+            record_hash = content_hash(obj)
+            entry = repositories.get(repository, {})
+
+            if entity_type == "repository":
+                name = str(obj.get("name") or "")
+                if not name:
+                    continue
+                scope_key = ""
+                source_entity_id = f"{organization}/{name}"
+                source_entity_key = {"organization": organization, "repository": name}
+                created = obj.get("created_at")
+                updated = obj.get("updated_at") or obj.get("pushed_at")
+                day = _github_day(updated) or _github_day(created)
+                scope = {"kind": "github_organization", "organization": organization}
+                relations = {
+                    "archived": obj.get("archived"),
+                    "visibility": obj.get("visibility"),
+                    "default_branch": obj.get("default_branch"),
+                    "pushed_at": obj.get("pushed_at"),
+                    "fork": obj.get("fork"),
+                    "listed_from": obj.get("listed_from"),
+                }
+                labels = {"name": name, "observed_at": collected_at}
+                container = str(obj.get("visibility") or "unknown")
+                revision = None
+            elif entity_type == "commit":
+                sha = str(obj.get("sha") or "")
+                if not sha:
+                    continue
+                authored, committed = _github_commit_times(obj)
+                scope_key = repository
+                source_entity_id = f"{repository}:{sha}"
+                source_entity_key = {"repository": repository, "sha": sha}
+                created = authored or committed
+                updated = committed or authored
+                day = _github_day(updated)
+                scope = {
+                    "kind": "github_repository",
+                    "organization": organization,
+                    "repository": repository,
+                    "read_from": str(body.get("source") or "unknown"),
+                }
+                parents = obj.get("parents")
+                relations = {
+                    "repository": repository,
+                    "parents": parents,
+                    "parent_count": obj.get("parent_count")
+                    if obj.get("parent_count") is not None
+                    else (len(parents) if isinstance(parents, list) else None),
+                    "is_merge": obj.get("is_merge"),
+                    "author_email": obj.get("author_email"),
+                    "committer_email": obj.get("committer_email"),
+                    "files_changed": obj.get("files_changed"),
+                    "insertions": obj.get("insertions"),
+                    "deletions": obj.get("deletions"),
+                    "diffstat_status": obj.get("diffstat_status"),
+                }
+                labels = {
+                    "repository": repository,
+                    "subject": obj.get("subject")
+                    or (obj.get("commit") or {}).get("message", "").splitlines()[0]
+                    if isinstance(obj.get("commit"), dict)
+                    else obj.get("subject"),
+                    "observed_at": collected_at,
+                }
+                container = str(entry.get("visibility") or "unknown")
+                revision = sha
+            else:
+                _, date_field = _GITHUB_ACTIVITY_KINDS[
+                    entity_type if entity_type in _GITHUB_ACTIVITY_KINDS else "pull_request"
+                ]
+                identifier = obj.get("number") if entity_type in {"pull_request", "issue"} else obj.get("id")
+                if identifier is None:
+                    continue
+                scope_key = repository
+                source_entity_id = f"{repository}:{entity_type}:{identifier}"
+                source_entity_key = {"repository": repository, entity_type: identifier}
+                created = obj.get("created_at") or obj.get("submitted_at")
+                updated = obj.get(date_field) or obj.get("updated_at") or created
+                day = _github_day(updated)
+                scope = {
+                    "kind": "github_repository",
+                    "organization": organization,
+                    "repository": repository,
+                }
+                labels = {
+                    "repository": repository,
+                    "title": obj.get("title"),
+                    "observed_at": collected_at,
+                }
+                relations = {
+                    "repository": repository,
+                    "author": _github_login(obj.get("user")),
+                    "state": obj.get("state"),
+                    "merged_at": obj.get("merged_at"),
+                    "closed_at": obj.get("closed_at"),
+                    "labels": [
+                        label.get("name")
+                        for label in (obj.get("labels") or [])
+                        if isinstance(label, dict)
+                    ]
+                    if isinstance(obj.get("labels"), list)
+                    else None,
+                    "pull_request_url": obj.get("pull_request_url"),
+                    "issue_url": obj.get("issue_url"),
+                    "path": obj.get("path"),
+                }
+                container = str(entry.get("visibility") or "unknown")
+                revision = str(obj.get("node_id")) if obj.get("node_id") else None
+
+            window = _github_window(day, manifest)
+            ledger_id = ledger_id_for(
+                source="github",
+                entity_type=entity_type,
+                tenant_id=organization,
+                scope_key=scope_key,
+                source_entity_id=source_entity_id,
+                window_start=window["start"],
+                content_hash=record_hash,
+            )
+            if ledger_id in seen:
+                # The same commit arrives twice when a renamed repository is
+                # mirrored under both names. One commit, one row; the raw
+                # pages keep both observations.
+                continue
+            seen.add(ledger_id)
+            provenance = _provenance(item, kind=kind, run_id=run_id, endpoint=str(item.get("endpoint") or ""))
+            provenance["record_pointer"] = f"/commits/{index}" if entity_type == "commit" else f"/items/{index}"
+            yield LedgerRecord(
+                ledger_id=ledger_id,
+                schema_version=LEDGER_SCHEMA_VERSION,
+                capture_profile=profile,
+                source="github",
+                tenant=dict(tenant),
+                scope=scope,
+                entity_type=entity_type,
+                source_entity_id=source_entity_id,
+                source_entity_key=source_entity_key,
+                source_revision_id=revision,
+                source_created_at=str(created) if created else None,
+                source_updated_at=str(updated) if updated else None,
+                source_updated_at_status="observed" if updated else "unknown",
+                collected_at=collected_at,
+                # These listings never report a deletion: a deleted commit or
+                # pull request simply stops appearing. Absence is not an
+                # observation of deletion, so it is not recorded as one.
+                deleted_state={"is_deleted": False, "kind": None, "status": "unknown"},
+                raw_payload=obj,
+                content_hash=record_hash,
+                relations=relations,
+                provenance=provenance,
+                coverage=_coverage(len(objects), manifest),
+                observation_window=window,
+                capture_completeness=_completeness(
+                    manifest,
+                    notes="commit read from a local bare mirror"
+                    if profile == MIRROR_COMMIT_PROFILE
+                    else "official GitHub REST response",
+                    lossy_fields={"diffstat": str(obj.get("diffstat_status"))}
+                    if obj.get("diffstat_status") and obj.get("diffstat_status") != "recorded"
+                    else None,
+                ),
+                supplement_provenance=_supplement(
+                    is_supplement=False, kind=None, schema_variant="official_github_v3"
+                ),
+                visibility_routing=_visibility(
+                    container=container,
+                    visibility=str(entry.get("visibility") or obj.get("visibility") or "unknown"),
+                    collected_by=organization,
+                    schema_version="github-v3",
+                ),
+                denormalized_label_snapshot=labels,
+            )
+
+
+# ------------------------------------------------------------------ slurm
+
+
+def _slurm_records(
+    archive_root: Path, manifest: dict[str, Any], result: LiveConvertResult
+) -> Iterable[LedgerRecord]:
+    """One record per finished parent job, on the KST day it ended.
+
+    Step rows (`.batch`, `.extern`) are archived but not converted. They are
+    sub-resources of a job rather than activities, and giving them an
+    entity_type needs a third category alongside activity and dimension --
+    that is a schema decision, not a conversion detail. They stay in the raw
+    archive with all 117 columns, so nothing is lost by waiting; the count of
+    skipped step rows is reported so the gap is visible rather than implied.
+    """
+    run_id = str(manifest["run_id"])
+    collected_at = str(manifest["finished_at"])
+    seen: set[str] = set()
+    step_rows_skipped = 0
+
+    for item in manifest.get("files", []):
+        kind = str(item.get("kind", ""))
+        if not kind.startswith("jobs-"):
+            if kind:
+                result.unhandled_kinds[kind] = result.unhandled_kinds.get(kind, 0) + 1
+            continue
+        body = _read_archived(archive_root, item)
+        columns = body.get("columns")
+        rows = body.get("rows")
+        if not isinstance(columns, list) or not isinstance(rows, list):
+            continue
+        cloud = str(body.get("cloud") or "unknown")
+        day = str(body.get("day") or "")
+        index_of = {str(name): position for position, name in enumerate(columns)}
+        for position in ("JobID", "State", "End", "Cluster"):
+            if position not in index_of:
+                raise ValueError(f"archived slurm page lacks the {position} column: {item['path']}")
+        window = {
+            "start": day,
+            "end": day,
+            "tz": str(body.get("timezone") or "Asia/Seoul"),
+            "granularity": "day",
+        }
+        tenant = {"workspace_id": cloud, "status": "observed"}
+
+        for row_index, row in enumerate(rows):
+            if not isinstance(row, list) or len(row) != len(columns):
+                continue
+            values = {name: row[offset] for name, offset in index_of.items()}
+            job_id = str(values.get("JobID") or "")
+            if not job_id:
+                continue
+            if "." in job_id:
+                step_rows_skipped += 1
+                continue
+            obj = {str(name): row[offset] for offset, name in enumerate(columns)}
+            record_hash = content_hash(obj)
+            # The cluster name is used exactly as sacct reported it. The
+            # collector's CLUSTER_MAP exists to name output folders, and
+            # importing it here would both couple the ledger to the collector
+            # and put a derived value in a row that is supposed to hold what
+            # the source said. A consumer that wants the folder name can map
+            # it; a row that has already been renamed cannot be un-renamed.
+            cluster = str(values.get("Cluster") or "unknown")
+            source_entity_id = f"{cloud}:{job_id}"
+            ledger_id = ledger_id_for(
+                source="slurm",
+                entity_type="job",
+                tenant_id=cloud,
+                scope_key=cluster,
+                source_entity_id=source_entity_id,
+                window_start=day,
+                content_hash=record_hash,
+            )
+            if ledger_id in seen:
+                continue
+            seen.add(ledger_id)
+            state = str(values.get("State") or "")
+            ended = str(values.get("End") or "") or None
+            submitted = str(values.get("Submit") or "") or None
+            started = str(values.get("Start") or "") or None
+            provenance = _provenance(
+                item, kind=kind, run_id=run_id, endpoint=str(item.get("endpoint") or "")
+            )
+            provenance["record_pointer"] = f"/rows/{row_index}"
+            yield LedgerRecord(
+                ledger_id=ledger_id,
+                schema_version=LEDGER_SCHEMA_VERSION,
+                capture_profile=SLURM_PROFILE,
+                source="slurm",
+                tenant=dict(tenant),
+                scope={
+                    "kind": "slurm_cluster",
+                    "cloud": cloud,
+                    "cluster": cluster,
+                    "cluster_naming": "as_reported_by_sacct",
+                },
+                entity_type="job",
+                source_entity_id=source_entity_id,
+                source_entity_key={"cloud": cloud, "job_id": job_id, "cluster": cluster},
+                source_revision_id=None,
+                # sacct reports no Submit for the naver cluster, so the
+                # created time is genuinely absent there rather than unknown
+                # by omission. End is what every cluster reports.
+                source_created_at=submitted or started or ended,
+                source_updated_at=ended,
+                source_updated_at_status="observed" if ended else "unknown",
+                collected_at=collected_at,
+                deleted_state={"is_deleted": False, "kind": None, "status": "unknown"},
+                raw_payload=obj,
+                content_hash=record_hash,
+                relations={
+                    "cluster": cluster,
+                    "state": state,
+                    "user": values.get("User"),
+                    "account": values.get("Account"),
+                    "partition": values.get("Partition"),
+                    "alloc_tres": values.get("AllocTRES"),
+                    "elapsed": values.get("Elapsed"),
+                    "exit_code": values.get("ExitCode"),
+                    "node_list": values.get("NodeList"),
+                    "submit": submitted,
+                    "start": started,
+                    "end": ended,
+                },
+                provenance=provenance,
+                coverage=_coverage(len(rows), manifest),
+                observation_window=window,
+                capture_completeness=_completeness(
+                    manifest,
+                    notes="sacct export, all 117 columns preserved; step rows archived but not converted",
+                    lossy_fields={"submit_time": "absent for this cluster"} if not submitted else None,
+                ),
+                supplement_provenance=_supplement(
+                    is_supplement=False, kind=None, schema_variant="sacct_117_column_export"
+                ),
+                visibility_routing=_visibility(
+                    container=cluster,
+                    visibility="internal",
+                    collected_by=cloud,
+                    schema_version="sacct-117",
+                ),
+                denormalized_label_snapshot={
+                    "job_name": values.get("JobName"),
+                    "cluster": cluster,
+                    "state": state,
+                    "observed_at": collected_at,
+                },
+            )
+    if step_rows_skipped:
+        result.unhandled_kinds["slurm_step_rows_not_converted"] = step_rows_skipped
+
+
 # ------------------------------------------------------------------ api
 
 
@@ -887,6 +1363,8 @@ _STREAMS = {
     "slack": _slack_records,
     "notion": _notion_records,
     "google_calendar": _calendar_records,
+    "github": _github_records,
+    "slurm": _slurm_records,
 }
 
 
