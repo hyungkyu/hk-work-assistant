@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from functools import lru_cache
 from importlib.resources import files
 from typing import Any, Mapping
@@ -18,6 +19,11 @@ from .google_auth import CALENDAR_READONLY_SCOPE, DRIVE_FILE_SCOPE, DRIVE_READON
 router = APIRouter()
 LOGGER = logging.getLogger(__name__)
 SESSION_COOKIE = "hk_work_assistant_session"
+# The name a break-glass session carries when nobody declared one. Kept as a
+# constant because it is written into the audit trail and read back by
+# cowork.resolve_actor, which knows this party by exactly this spelling.
+EMERGENCY_ACTOR = "local-emergency"
+EMERGENCY_ACTOR_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,62}[A-Za-z0-9])?$")
 GOOGLE_LOGIN_SCOPES = ["openid", "email", "profile"]
 GOOGLE_DATA_SCOPES = [
     *GOOGLE_LOGIN_SCOPES,
@@ -38,6 +44,48 @@ def emergency_login_enabled() -> bool:
 
 def _session(request: Request) -> dict[str, Any] | None:
     return store().read_session(request.cookies.get(SESSION_COOKIE))
+
+
+def session_actor(current: Mapping[str, Any]) -> str:
+    """The name to record for whoever is acting.
+
+    A Google session carries an email and that is the best name it has. A
+    break-glass session carries only the subject it declared at the door.
+    Reading `email` alone recorded every local edit as `local-emergency`, so a
+    board written by several parties read as though one party wrote it.
+    """
+    return str(current.get("email") or current.get("sub") or EMERGENCY_ACTOR)
+
+
+def _emergency_subject(body: Mapping[str, Any]) -> str:
+    """Who a break-glass session says it is.
+
+    The name is self-declared: this door asks for a password, not for proof of
+    identity. Recording it is still worth doing - an edit signed `hk` is more
+    use than one signed `local-emergency` - but it must never be mistakable for
+    an authenticated name, so an address-shaped one is refused rather than
+    minted here. With no name the session stays anonymous and the trail reads
+    exactly as it did before.
+    """
+    declared = body.get("actor")
+    if declared is None:
+        return EMERGENCY_ACTOR
+    if not isinstance(declared, str):
+        raise HTTPException(status_code=400, detail="actor must be a string")
+    name = declared.strip()
+    if not name:
+        return EMERGENCY_ACTOR
+    if "@" in name:
+        raise HTTPException(
+            status_code=400,
+            detail="actor cannot be an email address: this login proves no identity",
+        )
+    if not EMERGENCY_ACTOR_PATTERN.match(name):
+        raise HTTPException(
+            status_code=400,
+            detail="actor may contain letters, digits and . _ : - only, up to 64 characters",
+        )
+    return name
 
 
 def require_company_session(request: Request) -> dict[str, Any]:
@@ -191,7 +239,7 @@ async def bootstrap(request: Request, response: Response) -> dict[str, bool]:
         store().set_admin_password(str(body.get("password", "")))
     except (ValueError, RuntimeError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    token, _ = store().create_session()
+    token, _ = store().create_session(subject=_emergency_subject(body))
     _set_session_cookie(response, token)
     return {"ok": True}
 
@@ -203,9 +251,14 @@ async def emergency_login(request: Request, response: Response) -> dict[str, boo
     body = await _json_object(request)
     if not store().verify_admin_password(str(body.get("password", ""))):
         raise HTTPException(status_code=401, detail="invalid administrator password")
-    token, _ = store().create_session()
+    subject = _emergency_subject(body)
+    token, _ = store().create_session(subject=subject)
     _set_session_cookie(response, token)
-    store().audit("admin.login", actor="local-emergency", details={"method": "local_emergency"})
+    store().audit(
+        "admin.login",
+        actor=subject,
+        details={"method": "local_emergency", "actor_declared": subject != EMERGENCY_ACTOR},
+    )
     return {"ok": True}
 
 
@@ -367,7 +420,7 @@ async def put_settings(request: Request) -> dict[str, Any]:
     _require_csrf(request, current)
     body = await _json_object(request)
     try:
-        settings = store().update_settings(body, actor=str(current.get("email") or "local-emergency"))
+        settings = store().update_settings(body, actor=session_actor(current))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return {"settings": settings, "secrets": store().secret_status()}
@@ -379,7 +432,7 @@ async def put_secret(name: str, request: Request) -> dict[str, Any]:
     _require_csrf(request, current)
     body = await _json_object(request)
     try:
-        store().save_secret(name, str(body.get("value", "")), actor=str(current.get("email") or "local-emergency"))
+        store().save_secret(name, str(body.get("value", "")), actor=session_actor(current))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return {"name": name, "configured": True}
@@ -413,13 +466,13 @@ def test_connection(name: str, request: Request) -> dict[str, Any]:
     except Exception as error:
         store().audit(
             "connection.test_failed",
-            actor=str(current.get("email") or "local-emergency"),
+            actor=session_actor(current),
             details={"name": name, "error_type": type(error).__name__},
         )
         raise HTTPException(status_code=400, detail=str(error)) from error
     store().audit(
         "connection.tested",
-        actor=str(current.get("email") or "local-emergency"),
+        actor=session_actor(current),
         details={"name": name, "ok": bool(result.get("ok"))},
     )
     return {"name": name, "result": result}

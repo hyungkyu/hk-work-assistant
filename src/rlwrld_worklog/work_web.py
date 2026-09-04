@@ -15,7 +15,7 @@ from contextlib import contextmanager
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from .admin_web import _require_csrf, require_super_admin_session, store
+from .admin_web import _require_csrf, require_super_admin_session, session_actor, store
 from .cowork import registry_as_dict
 from .work_store import (
     PHASES,
@@ -67,7 +67,10 @@ async def _json_object(request: Request) -> dict[str, Any]:
 
 
 def _actor(current: Mapping[str, Any]) -> str:
-    return str(current.get("email") or "local-emergency")
+    # One reading of "who is acting", shared with the admin routes. Two
+    # readings would drift, and this one is written into history where a
+    # wrong name is not correctable afterwards.
+    return session_actor(current)
 
 
 def _concurrency(body: Mapping[str, Any]) -> dict[str, Any]:

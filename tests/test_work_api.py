@@ -282,3 +282,85 @@ def test_the_timeline_limit_is_bounded(config_root: Path, owner: dict[str, str])
     item = create(owner)
     payload = work_web.work_timeline(item["id"], authorized(owner), limit=1)
     assert len(payload["entries"]) <= 1
+
+
+def _emergency(config_root: Path, monkeypatch: pytest.MonkeyPatch, **body: Any) -> dict[str, Any]:
+    """Go through the break-glass door and hand back the session it minted."""
+    monkeypatch.setenv("EMERGENCY_LOGIN_ENABLED", "true")
+    admin_web.store().set_admin_password("a-long-enough-password")
+    response = FakeResponse()
+    asyncio.run(
+        admin_web.emergency_login(
+            FakeRequest(body={"password": "a-long-enough-password", **body}), response
+        )
+    )
+    session = admin_web.store().read_session(response.cookie)
+    assert session is not None
+    return session
+
+
+class FakeResponse:
+    """Only what the login routes touch: one cookie."""
+
+    def __init__(self) -> None:
+        self.cookie: str | None = None
+
+    def set_cookie(self, *args: Any, **kwargs: Any) -> None:
+        self.cookie = kwargs.get("value", args[1] if len(args) > 1 else None)
+
+
+def test_a_break_glass_session_without_a_name_records_what_it_did_before(
+    config_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Naming yourself is optional; declining leaves the trail as it was."""
+    session = _emergency(config_root, monkeypatch)
+    assert admin_web.session_actor(session) == "local-emergency"
+
+
+def test_a_break_glass_session_can_name_itself_and_the_board_records_that_name(
+    config_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole point of step A: an edit made at 8081 stops reading as nobody."""
+    session = _emergency(config_root, monkeypatch, actor="hk")
+    assert session["sub"] == "hk"
+    assert admin_web.session_actor(session) == "hk"
+
+    token, csrf = admin_web.store().create_session(subject="hk")
+    request = FakeRequest(
+        cookies={SESSION_COOKIE: token},
+        headers={"x-csrf-token": csrf},
+        body={"fields": {"title": "비상문으로 만든 항목", "assigned_to": "noa"}},
+    )
+    item = asyncio.run(work_web.create_item(request))["item"]
+
+    history = work_web.work_history(FakeRequest(cookies={SESSION_COOKIE: token}), item_id=item["id"])
+    actors = {entry["actor"] for entry in history["items"]}
+    assert actors == {"hk"}, actors
+
+
+def test_a_declared_name_cannot_be_shaped_like_an_authenticated_one(
+    config_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A password proves no identity, so it must not mint a Google-looking actor."""
+    with pytest.raises(HTTPException) as error:
+        _emergency(config_root, monkeypatch, actor="hyungkyu.ryu@rlwrld.ai")
+    assert error.value.status_code == 400
+
+
+@pytest.mark.parametrize("declared", ["../../etc/passwd", "a b", "x" * 65, "*", 7])
+def test_a_declared_name_that_is_not_a_name_is_refused(
+    config_root: Path, monkeypatch: pytest.MonkeyPatch, declared: Any
+) -> None:
+    with pytest.raises(HTTPException) as error:
+        _emergency(config_root, monkeypatch, actor=declared)
+    assert error.value.status_code == 400
+
+
+def test_a_google_session_still_records_the_email_not_the_subject(
+    config_root: Path, owner: dict[str, str]
+) -> None:
+    """The email is the better name, so step A must not have displaced it."""
+    session = admin_web.store().read_session(owner["token"])
+    assert session is not None
+    assert session["sub"] == "owner"
+    assert admin_web.session_actor(session) == "hyungkyu.ryu@rlwrld.ai"
