@@ -471,3 +471,51 @@ def test_the_password_door_cannot_claim_an_agents_name(
     with pytest.raises(HTTPException) as error:
         _emergency(config_root, monkeypatch, actor="noa")
     assert error.value.status_code == 400
+
+
+def test_the_detail_names_who_directed_carried_and_checks_it(
+    config_root: Path, owner: dict[str, str]
+) -> None:
+    """Condition 4. All four read off what is already there, so none can drift."""
+    item = create(owner, assigned_to="noa", requested_by="hk", status="in_progress")
+    payload = work_web.get_item(item["id"], authorized(owner))
+    roles = payload["roles"]
+    assert roles["directed_by"] == "hk"
+    assert roles["performed_by"] == "noa"
+    assert roles["stage"] == {
+        "status": "in_progress", "label": "진행 중", "kind": "queue", "terminal": False,
+    }
+
+
+def test_a_reviewer_is_read_off_the_review_item_not_stored_twice(
+    config_root: Path, owner: dict[str, str]
+) -> None:
+    item = create(owner, assigned_to="noa")
+    assert work_web.get_item(item["id"], authorized(owner))["roles"]["reviewed_by"] == []
+
+    create(owner, assigned_to="roa", parent_id=item["id"], source_ref="review:permissions")
+    payload = work_web.get_item(item["id"], authorized(owner))
+    assert payload["roles"]["reviewed_by"] == ["roa"]
+    assert "names this one as its parent" in payload["roles"]["reviewed_by_basis"]
+
+
+def test_no_reviewer_says_why_rather_than_reading_as_nobody_checks_it(
+    config_root: Path, owner: dict[str, str]
+) -> None:
+    """An empty list and "no review item points here" are different claims."""
+    item = create(owner, assigned_to="noa")
+    # A child that is not a review does not make its assignee the reviewer.
+    create(owner, assigned_to="boa", parent_id=item["id"], source_ref="defect:something")
+    roles = work_web.get_item(item["id"], authorized(owner))["roles"]
+    assert roles["reviewed_by"] == []
+    assert roles["reviewed_by_basis"] == "no open review item names this one as its parent"
+
+
+def test_a_condition_status_is_marked_apart_from_a_queue_stage(
+    config_root: Path, owner: dict[str, str]
+) -> None:
+    """`blocked` says why the work is not moving, not where it is."""
+    item = create(owner, assigned_to="noa", status="blocked")
+    stage = work_web.get_item(item["id"], authorized(owner))["roles"]["stage"]
+    assert stage["kind"] == "condition"
+    assert stage["terminal"] is False

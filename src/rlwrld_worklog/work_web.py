@@ -27,6 +27,7 @@ from .cowork import DIRECTING_PARTIES, registry_as_dict
 from .work_store import (
     PHASES,
     PRIORITIES,
+    describe_roles,
     STATUSES,
     status_metadata,
     WorkConflictError,
@@ -169,7 +170,12 @@ def list_items(
 def get_item(item_id: str, request: Request) -> dict[str, Any]:
     require_board_session(request)
     with _translated_errors():
-        return {"item": work_store().get_item(item_id)}
+        store = work_store()
+        item = store.get_item(item_id)
+        # Beside the item, never inside it: who directed, carried and checks
+        # this, and where it stands. All four are read off what is already
+        # there, so none of them can contradict it.
+        return {"item": item, "roles": describe_roles(item, store.list_items()["items"])}
 
 
 @router.post("/items", status_code=201)

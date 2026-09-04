@@ -1166,6 +1166,53 @@ class WorkStore:
             handle.close()
 
 
+# A review is itself work, so it is a work item, and the reviewer is whoever
+# carries it. Reading the reviewer off the review item keeps one answer to
+# "who checks this": a `reviewed_by` field on the reviewed item would be a
+# second place saying the same thing, free to disagree with the first.
+REVIEW_SOURCE_PREFIX = "review:"
+
+
+def describe_roles(item: Mapping[str, Any], items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Who asked, who is carrying it, who checks it, and where it stands.
+
+    Nothing here is stored. `requested_by` and `assigned_to` already answer the
+    first two, the stage is the status itself, and the reviewer is derived - so
+    none of it can drift from the item it describes.
+    """
+    reviewers = sorted(
+        {
+            str(other["assigned_to"])
+            for other in items
+            if other.get("parent_id") == item["id"]
+            and str(other.get("source_ref") or "").startswith(REVIEW_SOURCE_PREFIX)
+            and other.get("archived_at") is None
+            and other.get("assigned_to")
+        }
+    )
+    status = str(item.get("status") or "")
+    return {
+        "directed_by": item.get("requested_by"),
+        "performed_by": item.get("assigned_to"),
+        "reviewed_by": reviewers,
+        # Said out loud, because an empty list reads as "nobody reviews this"
+        # and the truth is "no review item points here".
+        "reviewed_by_basis": (
+            "a review item names this one as its parent"
+            if reviewers
+            else "no open review item names this one as its parent"
+        ),
+        "stage": {
+            "status": status,
+            "label": STATUS_LABELS.get(status, status),
+            # A queue stage says where the work is; a supporting status says
+            # why it is not moving. Collapsing them would lose the difference.
+            "kind": "queue" if status in QUEUE_STAGES else "condition",
+            "terminal": status in TERMINAL_STATUSES,
+        },
+    }
+
+
 def status_metadata() -> dict[str, Any]:
     """Everything a client needs to lay out the board without hard-coding it.
 

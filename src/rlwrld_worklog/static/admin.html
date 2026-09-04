@@ -1208,7 +1208,26 @@
     async function openTimeline(item) {
       $('timeline-overlay').classList.remove('hidden');
       $('timeline-title').textContent = item.title;
-      $('timeline-subtitle').textContent = `${item.id} · 요청 ${item.requested_by} · 담당 ${item.assigned_to}`;
+      // Who directed it, who is carrying it, who checks it, and where it
+      // stands. The reviewer is read off the review item rather than stored
+      // here, so it says plainly when no review item points at this one.
+      $('timeline-subtitle').textContent = `${item.id} · 불러오는 중…`;
+      api(`/api/v1/admin/work/items/${encodeURIComponent(item.id)}`).then((detail) => {
+        const roles = detail.roles || {};
+        const reviewers = (roles.reviewed_by || []).length
+          ? (roles.reviewed_by || []).join(', ')
+          : '없음';
+        const stage = roles.stage
+          ? `${roles.stage.label}${roles.stage.kind === 'condition' ? ' (조건)' : ''}`
+          : item.status;
+        $('timeline-subtitle').textContent =
+          `${item.id} · 지시 ${roles.directed_by || '-'} · 수행 ${roles.performed_by || '-'}`
+          + ` · 검수 ${reviewers} · 단계 ${stage}`;
+        $('timeline-subtitle').title = roles.reviewed_by_basis || '';
+      }).catch(() => {
+        $('timeline-subtitle').textContent =
+          `${item.id} · 요청 ${item.requested_by} · 담당 ${item.assigned_to}`;
+      });
       $('timeline-list').textContent = '';
       $('timeline-state').textContent = '불러오는 중…';
       $('timeline-state').className = 'work-state';

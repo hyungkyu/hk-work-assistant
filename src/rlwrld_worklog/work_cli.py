@@ -21,6 +21,7 @@ from typing import Any, Mapping, Sequence
 
 from .work_store import (
     PRIORITIES,
+    describe_roles,
     STATUSES,
     WorkConflictError,
     WorkCorruptionError,
@@ -469,7 +470,12 @@ def _dispatch(args: argparse.Namespace) -> int:
         _emit({"ok": True, **status_metadata()})
         return 0
     if command == "show":
-        _emit({"ok": True, "item": store.get_item(args.item_id)})
+        item = store.get_item(args.item_id)
+        _emit({
+            "ok": True,
+            "item": item,
+            "roles": describe_roles(item, store.list_items()["items"]),
+        })
         return 0
     if command == "history":
         limit = max(1, min(int(args.limit), 500))
