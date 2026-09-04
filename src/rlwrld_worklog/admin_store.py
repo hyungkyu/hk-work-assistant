@@ -235,7 +235,22 @@ class AdminStore:
             if isinstance(value, int) and not isinstance(value, bool)
         }
 
-    def revoke_agent(self, subject: str) -> int:
+    def agent_subject(self, name_or_subject: str) -> str:
+        """The one spelling of an agent's session subject.
+
+        Callers arrive with either form: the CLI prefixes, a direct caller often
+        does not. Accepting both and validating once means a generation can no
+        longer be raised on a key no token was ever signed with, which reads as a
+        successful revocation and is not one.
+        """
+        name = str(name_or_subject or "").strip()
+        if name.startswith(self.AGENT_SUBJECT_PREFIX):
+            name = name[len(self.AGENT_SUBJECT_PREFIX):]
+        if name not in self.AGENT_NAMES:
+            raise ValueError(f"unknown agent: {name_or_subject}")
+        return f"{self.AGENT_SUBJECT_PREFIX}{name}"
+
+    def revoke_agent(self, subject: str, *, actor: str = "owner") -> int:
         """Cut off one agent, and only that one.
 
         A session token is a signed envelope that the server does not keep a
@@ -245,20 +260,19 @@ class AdminStore:
         token records the generation it was issued under, and raising one
         subject's generation leaves every other token untouched.
         """
+        subject = self.agent_subject(subject)
         generations = self.agent_generations()
         generations[subject] = generations.get(subject, 0) + 1
         _atomic_private_write(
             self.agent_generations_path,
             json.dumps(generations, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         )
-        self.audit("agent.revoked", actor="owner", details={"subject": subject})
+        self.audit("agent.revoked", actor=actor, details={"subject": subject})
         return generations[subject]
 
-    def issue_agent_session(self, name: str) -> tuple[str, str]:
+    def issue_agent_session(self, name: str, *, actor: str = "owner") -> tuple[str, str]:
         """A long-lived session for one agent. The caller must not log it."""
-        if name not in self.AGENT_NAMES:
-            raise ValueError(f"unknown agent: {name}")
-        subject = f"{self.AGENT_SUBJECT_PREFIX}{name}"
+        subject = self.agent_subject(name)
         token, csrf = self.create_session(
             subject=subject,
             role="agent",
@@ -267,7 +281,10 @@ class AdminStore:
         )
         # The token itself is never recorded - only that one was made, which is
         # what an audit trail needs to show.
-        self.audit("agent.session_issued", actor="owner", details={"subject": subject})
+        # Who asked for it, not a fixed "owner": issuing another principal's
+        # session is the one CLI operation that crosses the web boundary rather
+        # than sitting beside it, so the trail has to name a person.
+        self.audit("agent.session_issued", actor=actor, details={"subject": subject})
         return token, csrf
 
     def create_session(

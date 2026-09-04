@@ -287,7 +287,13 @@ def test_the_timeline_limit_is_bounded(config_root: Path, owner: dict[str, str])
 def _emergency(config_root: Path, monkeypatch: pytest.MonkeyPatch, **body: Any) -> dict[str, Any]:
     """Go through the break-glass door and hand back the session it minted."""
     monkeypatch.setenv("EMERGENCY_LOGIN_ENABLED", "true")
-    admin_web.store().set_admin_password("a-long-enough-password")
+    # Only on the first pass. `set_admin_password` refuses to replace a
+    # password that already exists, which is right, so a test that goes
+    # through this door twice -- checking that two different spellings are
+    # both refused -- used to die on the second call for a reason that had
+    # nothing to do with what it was testing.
+    if admin_web.store().setup_required():
+        admin_web.store().set_admin_password("a-long-enough-password")
     response = FakeResponse()
     asyncio.run(
         admin_web.emergency_login(
@@ -558,3 +564,202 @@ def test_a_stale_mark_reads_as_no_trace_not_as_dead(
     assert rows["roa"]["verdict"] == "활동 없음"
     assert rows["roa"]["evidence"] == ".cursor-roa"
     assert rows["roa"]["seconds_since"] > QUIET_AFTER_SECONDS
+
+
+# ------------------------------------------------- T-1204: the four review defects
+#
+# roa audited the suite before these existed and found that 869 green tests saw
+# none of the four defects: defect 1 had a test for the update guard but none for
+# either path that bypassed it, defect 2 had an issue-side test with no revoke
+# counterpart, defect 3 had a green test asserting a weaker property than the one
+# that mattered, and defect 4 had nothing. Each test below names the measurement
+# that found the hole, so that raising a cap or relaxing a rule later has to
+# argue with a specific observation rather than with a number.
+
+
+def test_an_agent_cannot_open_an_item_on_someone_elses_plate(
+    config_root: Path,
+) -> None:
+    """Measured open: POST with assigned_to noa returned 201 from roa's session.
+
+    Worse than it first read. The item became noa's the moment it existed, so the
+    creator could not then cancel it - an action nobody could undo from the
+    screen sat behind a door that was not locked.
+    """
+    roa = _agent("roa")
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            work_web.create_item(
+                authorized(roa, body={"fields": {"title": "남의 접시", "assigned_to": "noa"}})
+            )
+        )
+    assert error.value.status_code == 403
+
+
+def test_an_agent_cannot_move_its_own_item_onto_another_agent(
+    config_root: Path,
+) -> None:
+    """Measured open: create own 201, then PATCH assigned_to noa returned 200.
+
+    This is why blocking the create path alone does not close defect 1. The guard
+    that was there asked who owns the row now, and on this request the field being
+    changed is the ownership itself.
+    """
+    roa = _agent("roa")
+    mine = asyncio.run(
+        work_web.create_item(
+            authorized(roa, body={"fields": {"title": "내 항목", "assigned_to": "roa"}})
+        )
+    )["item"]
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            work_web.update_item(
+                mine["id"], authorized(roa, body={"fields": {"assigned_to": "noa"}})
+            )
+        )
+    assert error.value.status_code == 403
+
+    # Still its own, and still writable by its owner. Closing the hole must not
+    # take away the one thing an agent is supposed to be able to do.
+    assert work_web.get_item(mine["id"], authorized(roa))["item"]["assigned_to"] == "roa"
+    assert asyncio.run(
+        work_web.update_item(
+            mine["id"], authorized(roa, body={"fields": {"progress_summary": "계속한다"}})
+        )
+    )["item"]["progress_summary"] == "계속한다"
+
+
+def test_an_agent_cannot_sign_a_direction_with_another_partys_name(
+    config_root: Path,
+) -> None:
+    """Defect 4, measured: created with requested_by mori from roa's session, 201.
+
+    requested_by is the field that says who directed the work. Accepting it from
+    the request body is the same defect commit 9a21719 closed for actor, one
+    field over: a self-reported name in the place a boundary is read from.
+    """
+    roa = _agent("roa")
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            work_web.create_item(
+                authorized(
+                    roa,
+                    body={"fields": {"title": "지시자 위조", "assigned_to": "roa", "requested_by": "mori"}},
+                )
+            )
+        )
+    assert error.value.status_code == 403
+
+    # Its own name in the same field is fine, and is what recording your own
+    # work means.
+    opened = asyncio.run(
+        work_web.create_item(
+            authorized(
+                roa,
+                body={"fields": {"title": "내가 연 항목", "assigned_to": "roa", "requested_by": "roa"}},
+            )
+        )
+    )["item"]
+    assert opened["requested_by"] == "roa"
+
+
+def test_a_judgement_role_may_still_direct(config_root: Path, owner: dict[str, str]) -> None:
+    """The invariant is about executors, not about everyone.
+
+    If this fails the fix has closed the board to the party whose job is to
+    assign work, and every assignment would have to go through the CLI - the
+    door that does no checking at all.
+    """
+    directed = create(owner, assigned_to="noa", requested_by="hk")
+    assert directed["assigned_to"] == "noa"
+    assert directed["requested_by"] == "hk"
+
+
+def test_revoking_by_bare_name_actually_ends_the_session(
+    config_root: Path,
+) -> None:
+    """Measured: revoke_agent('roa') returned 1 and revoked nothing.
+
+    Tokens are signed with the prefixed subject, so raising a generation on the
+    bare key ended no session while returning a number that reads like success.
+    The test asserts the effect, not the return value - that distinction is the
+    whole defect.
+    """
+    roa = _agent("roa")
+    assert work_web.list_items(authorized(roa))["items"] is not None
+
+    admin_web.store().revoke_agent("roa")
+
+    with pytest.raises(HTTPException) as error:
+        work_web.list_items(authorized(roa))
+    assert error.value.status_code == 401
+
+
+def test_revoking_an_unknown_agent_is_refused_not_counted(config_root: Path) -> None:
+    """Measured: revoke_agent('agent:nope') returned 1 for a name nobody holds."""
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError):
+        admin_web.store().revoke_agent("agent:nope")
+    with _pytest.raises(ValueError):
+        admin_web.store().revoke_agent("nope")
+
+
+def test_revoking_by_prefixed_subject_still_works(config_root: Path) -> None:
+    """The spelling the CLI has always used must keep working."""
+    boa = _agent("boa")
+    assert work_web.list_items(authorized(boa))["items"] is not None
+    admin_web.store().revoke_agent("agent:boa")
+    with pytest.raises(HTTPException) as error:
+        work_web.list_items(authorized(boa))
+    assert error.value.status_code == 401
+
+
+def test_issuing_and_revoking_record_who_asked(config_root: Path) -> None:
+    """Issuing another principal's session is the one act that needs a name.
+
+    It was recorded as "owner" whoever ran it, so the trail could not say who
+    minted a ninety-day session for someone else.
+    """
+    store = admin_web.store()
+    store.issue_agent_session("noa", actor="hk")
+    store.revoke_agent("agent:noa", actor="hk")
+
+    actions = {
+        entry["action"]: entry
+        for entry in store.read_audit(limit=50)
+        if entry["action"].startswith("agent.")
+    }
+    assert actions["agent.session_issued"]["actor"] == "hk"
+    assert actions["agent.revoked"]["actor"] == "hk"
+
+
+def test_the_password_door_cannot_claim_an_agents_subject(
+    config_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Measured: the bare name was refused and "agent:noa" was not.
+
+    The actor pattern permits a colon, so the prefixed spelling walked past a
+    check that only knew the five bare names. The namespace is refused now, not
+    an enumeration of it - "agent:whoever" has no business coming from a door
+    that asks for a password rather than for proof.
+    """
+    for claimed in ("agent:noa", "agent:nope"):
+        with pytest.raises(HTTPException) as error:
+            _emergency(config_root, monkeypatch, actor=claimed)
+        assert error.value.status_code == 400, claimed
+
+
+def test_a_void_history_line_says_which_line_is_void(
+    config_root: Path, owner: dict[str, str]
+) -> None:
+    """The screen said something failed without saying what.
+
+    did_not_land was written into history by the ordering fix but was not a
+    timeline field, so the reader dropped it and the operator was told a failure
+    happened with no way to see which entry it invalidated.
+    """
+    from rlwrld_worklog.work_store import WorkStore
+
+    assert "did_not_land" in WorkStore.TIMELINE_FIELDS

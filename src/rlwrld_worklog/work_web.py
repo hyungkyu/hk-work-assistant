@@ -106,6 +106,41 @@ def _require_may_write(current: Mapping[str, Any], item: Mapping[str, Any]) -> N
         )
 
 
+def _require_may_name_only_self(
+    current: Mapping[str, Any], fields: Mapping[str, Any]
+) -> None:
+    """An agent may put its own name in an ownership field, and no other.
+
+    ``_require_may_write`` asks who owns the item *now*, which is the wrong
+    question at two moments: at creation there is no owner yet, and on update the
+    field being changed may be the ownership itself. Both were measured open —
+    creating an item assigned to someone else returned 201, and moving one's own
+    item onto another agent by PATCHing ``assigned_to`` returned 200. So the rule
+    is stated about the value, not about the row: rule 8 says an executor does not
+    hand work to another executor, and naming them is how that would be done.
+
+    ``requested_by`` is here for the same reason. It is the field that says who
+    directed the work, and it was accepted from the request body, so an agent
+    could sign a direction with a judgement role's name. That is the same defect
+    commit 9a21719 closed for ``actor``, one field over.
+    """
+    name = agent_name(current)
+    if name is None or name in DIRECTING_PARTIES:
+        return
+    for field in ("assigned_to", "requested_by"):
+        if field not in fields:
+            continue
+        declared = str(fields.get(field) or "").strip()
+        if declared and declared != name:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"an agent may name only itself in {field}; "
+                    "directing another is a judgement role"
+                ),
+            )
+
+
 def _concurrency(body: Mapping[str, Any]) -> dict[str, Any]:
     expected_revision = body.get("expected_revision")
     if expected_revision is not None and (
@@ -194,6 +229,7 @@ async def create_item(request: Request) -> dict[str, Any]:
     fields = dict(body.get("fields") if isinstance(body.get("fields"), dict) else body)
     fields.pop("expected_revision", None)
     fields.pop("expected_updated_at", None)
+    _require_may_name_only_self(current, fields)
     fields.setdefault("requested_by", actor)
     with _translated_errors():
         item = work_store().create_item(fields, actor=actor)
@@ -211,6 +247,7 @@ async def update_item(item_id: str, request: Request) -> dict[str, Any]:
     fields = dict(body.get("fields") if isinstance(body.get("fields"), dict) else body)
     fields.pop("expected_revision", None)
     fields.pop("expected_updated_at", None)
+    _require_may_name_only_self(current, fields)
     with _translated_errors():
         _require_may_write(current, work_store().get_item(item_id))
         item = work_store().update_item(item_id, fields, actor=actor, **expectations)

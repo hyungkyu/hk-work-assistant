@@ -95,10 +95,12 @@ def _emergency_subject(body: Mapping[str, Any]) -> str:
             status_code=400,
             detail="actor cannot be an email address: this login proves no identity",
         )
-    if name in store().AGENT_NAMES:
+    if name.startswith(store().AGENT_SUBJECT_PREFIX) or name in store().AGENT_NAMES:
         # An agent's name belongs to the door that can prove it. Letting the
         # password door claim it would put two different authorities behind one
-        # spelling in the history.
+        # spelling in the history. The whole subject namespace is refused, not
+        # the five bare names: the actor pattern permits a colon, so "agent:noa"
+        # walked past a check that only knew "noa".
         raise HTTPException(
             status_code=400,
             detail="actor is an agent name: agents sign in with their own session",

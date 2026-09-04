@@ -240,6 +240,19 @@ def run_work(args: argparse.Namespace) -> int:
                 return code
         _emit({"ok": False, "error": {"kind": "store", "message": str(error)}})
         return 1
+    except ValueError as error:
+        # An unknown agent name is a refusal, not a crash. It used to be
+        # neither: revoke_agent returned a generation number for a name no
+        # token carried, which reads as success.
+        #
+        # Below WorkStoreError, never above it: WorkValidationError is also a
+        # ValueError, so an arm here first swallowed every validated field in
+        # the CLI and relabelled it "argument". The store's errors carry their
+        # own kinds and exit codes; this arm is only for the refusals that
+        # reach us as a plain ValueError, which today means AdminStore's
+        # unknown-agent guard.
+        _emit({"ok": False, "error": {"kind": "argument", "message": str(error)}})
+        return 2
 
 
 # Only these two fields are taken from a queued file. The others are the
@@ -361,7 +374,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         return _apply_outbox(args)
     if command == "agent-token":
         admin = _admin_store(args)
-        token, csrf = admin.issue_agent_session(args.name)
+        token, csrf = admin.issue_agent_session(args.name, actor=_actor(args))
         # Printed once, here, and nowhere else. It is not written to the audit
         # trail, the manifests or the handoff records - only the fact that a
         # session was issued is.
@@ -376,8 +389,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return 0
     if command == "agent-revoke":
         admin = _admin_store(args)
-        subject = f"{admin.AGENT_SUBJECT_PREFIX}{args.name}"
-        generation = admin.revoke_agent(subject)
+        subject = admin.agent_subject(args.name)
+        generation = admin.revoke_agent(subject, actor=_actor(args))
         _emit({"ok": True, "subject": subject, "generation": generation})
         return 0
     if command == "agent-list":

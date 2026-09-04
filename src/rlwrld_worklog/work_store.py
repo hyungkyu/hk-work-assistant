@@ -745,7 +745,7 @@ class WorkStore:
     # existed. An older entry does not have them, and the reader says so
     # instead of rendering an empty value as if it were an observed one.
     TIMELINE_FIELDS = ("requested_by", "assigned_to", "directed_by", "phase",
-                       "session_id", "summary", "receipt")
+                       "session_id", "summary", "receipt", "did_not_land")
 
     def read_timeline(self, item_id: str, *, limit: int = 200) -> dict[str, Any]:
         """One work item's activity, oldest first, with actors resolved.
