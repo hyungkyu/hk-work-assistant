@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import json
 import stat
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
-from rlwrld_worklog.admin_store import AdminStore
+from rlwrld_worklog.admin_store import AdminStore, _b64decode
 from rlwrld_worklog.admin_web import _fetch_google_token, role_for_google_claims
 
 
@@ -169,3 +170,73 @@ def test_google_token_accepts_only_additional_scopes() -> None:
             code="one-use-code",
             required_scopes=["openid", "email", "profile"],
         )
+
+
+# ------------------------------------------------------------- agent sessions
+
+
+def test_an_agent_session_outlives_a_person_session_by_design(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "config")
+    token, _ = store.issue_agent_session("noa")
+    session = store.read_session(token)
+    assert session is not None
+    assert session["sub"] == "agent:noa"
+    assert session["role"] == "agent"
+    assert session["exp"] - session["iat"] == store.AGENT_SESSION_SECONDS
+
+
+def test_revoking_one_agent_leaves_the_others_working(tmp_path: Path) -> None:
+    """The price of a long life. Rotating the key would end everyone's."""
+    store = AdminStore(tmp_path / "config")
+    noa, _ = store.issue_agent_session("noa")
+    boa, _ = store.issue_agent_session("boa")
+
+    store.revoke_agent("agent:noa")
+
+    assert store.read_session(noa) is None
+    assert store.read_session(boa) is not None
+
+
+def test_a_revoked_agent_can_be_given_a_working_session_again(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "config")
+    first, _ = store.issue_agent_session("roa")
+    store.revoke_agent("agent:roa")
+    second, _ = store.issue_agent_session("roa")
+
+    assert store.read_session(first) is None
+    assert store.read_session(second) is not None
+
+
+def test_a_revoked_token_is_still_correctly_signed_and_still_dead(tmp_path: Path) -> None:
+    """What kills it is the generation, not the signature or the clock."""
+    store = AdminStore(tmp_path / "config")
+    token, _ = store.issue_agent_session("doa")
+    payload = json.loads(_b64decode(token.split(".", 1)[0]))
+    assert payload["exp"] > int(datetime.now(timezone.utc).timestamp())
+
+    store.revoke_agent("agent:doa")
+    assert store.read_session(token) is None
+
+
+def test_an_unknown_agent_cannot_be_given_a_session(tmp_path: Path) -> None:
+    """A typo must not mint an identity nobody recognises or thinks to revoke."""
+    store = AdminStore(tmp_path / "config")
+    with pytest.raises(ValueError):
+        store.issue_agent_session("nobody")
+
+
+def test_a_person_session_carries_no_generation_and_is_unaffected(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "config")
+    person, _ = store.create_session(subject="owner", email="hk@example.test", role="super_admin")
+    store.revoke_agent("agent:noa")
+    session = store.read_session(person)
+    assert session is not None
+    assert "gen" not in session
+
+
+def test_the_token_is_never_written_into_the_audit_trail(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "config")
+    token, _ = store.issue_agent_session("soa")
+    trail = store.audit_path.read_text(encoding="utf-8")
+    assert "agent.session_issued" in trail
+    assert token not in trail

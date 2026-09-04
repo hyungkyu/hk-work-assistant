@@ -227,3 +227,34 @@ def test_cli_uses_the_environment_config_root_when_no_override(
     store = WorkStore(tmp_path / "environment")
     assert store.get_item(payload["item"]["id"])["title"] == "T"
     assert store.read_history()[0]["actor"] == "claude-code"
+
+
+def test_a_token_can_be_issued_and_that_agent_alone_cut_off(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """B's whole point: a ninety-day session is only safe if one can be ended."""
+    from rlwrld_worklog.admin_store import AdminStore
+
+    config = tmp_path / "config"
+    _, issued = run(capsys, config, "agent-token", "noa")
+    _, other = run(capsys, config, "agent-token", "boa")
+    assert issued["subject"] == "agent:noa"
+    assert issued["expires_in_seconds"] == AdminStore.AGENT_SESSION_SECONDS
+
+    store = AdminStore(config)
+    assert store.read_session(issued["token"]) is not None
+
+    _, revoked = run(capsys, config, "agent-revoke", "noa")
+    assert revoked["generation"] == 1
+    assert store.read_session(issued["token"]) is None
+    assert store.read_session(other["token"]) is not None
+
+
+def test_the_roster_is_listed_with_how_often_each_was_cut_off(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / "config"
+    run(capsys, config, "agent-revoke", "roa")
+    _, listed = run(capsys, config, "agent-list")
+    counts = {entry["name"]: entry["revocations"] for entry in listed["agents"]}
+    assert counts == {"noa": 0, "boa": 0, "doa": 0, "roa": 1, "soa": 0}

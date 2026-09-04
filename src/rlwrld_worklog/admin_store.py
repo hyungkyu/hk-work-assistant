@@ -85,6 +85,7 @@ class AdminStore:
         self.settings_path = root / "settings.json"
         self.password_path = self.credentials / "admin-password.json"
         self.session_key_path = self.credentials / "admin-session-key"
+        self.agent_generations_path = self.credentials / "agent-session-generations.json"
         self.oauth_pkce_dir = self.credentials / "oauth-pkce"
         self.audit_path = root / "audit.jsonl"
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -206,6 +207,69 @@ class AdminStore:
             _atomic_private_write(self.session_key_path, _b64encode(secrets.token_bytes(32)) + "\n")
         return _b64decode(self.session_key_path.read_text(encoding="utf-8").strip())
 
+    # An agent session is long-lived on purpose: the person who has to create it
+    # should not be interrupted for it four times a year, let alone monthly. The
+    # length is a judgement about someone's attention, not a security boundary -
+    # a leaked cookie is as bad at thirty days as at ninety. What bounds it is
+    # that the server is loopback-only, the cookie is httponly, and a single
+    # agent can be cut off without touching the others.
+    AGENT_SESSION_SECONDS = 90 * 24 * 60 * 60
+    AGENT_SUBJECT_PREFIX = "agent:"
+    # A closed roster, so a typo cannot quietly mint a sixth identity that
+    # nobody recognises and nobody thinks to revoke. Judgement roles are absent
+    # deliberately: they direct work rather than run it, and one of them cannot
+    # hold a token at all.
+    AGENT_NAMES = ("noa", "boa", "doa", "roa", "soa")
+
+    def agent_generations(self) -> dict[str, int]:
+        """How many times each agent's sessions have been revoked."""
+        try:
+            loaded = json.loads(self.agent_generations_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(loaded, dict):
+            return {}
+        return {
+            str(name): int(value)
+            for name, value in loaded.items()
+            if isinstance(value, int) and not isinstance(value, bool)
+        }
+
+    def revoke_agent(self, subject: str) -> int:
+        """Cut off one agent, and only that one.
+
+        A session token is a signed envelope that the server does not keep a
+        copy of, so there is nothing to delete. Rotating the signing key would
+        end every session at once, which makes a long life unsafe for everyone
+        because of one agent. Instead each subject carries a generation: the
+        token records the generation it was issued under, and raising one
+        subject's generation leaves every other token untouched.
+        """
+        generations = self.agent_generations()
+        generations[subject] = generations.get(subject, 0) + 1
+        _atomic_private_write(
+            self.agent_generations_path,
+            json.dumps(generations, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        )
+        self.audit("agent.revoked", actor="owner", details={"subject": subject})
+        return generations[subject]
+
+    def issue_agent_session(self, name: str) -> tuple[str, str]:
+        """A long-lived session for one agent. The caller must not log it."""
+        if name not in self.AGENT_NAMES:
+            raise ValueError(f"unknown agent: {name}")
+        subject = f"{self.AGENT_SUBJECT_PREFIX}{name}"
+        token, csrf = self.create_session(
+            subject=subject,
+            role="agent",
+            auth_method="agent_token",
+            lifetime_seconds=self.AGENT_SESSION_SECONDS,
+        )
+        # The token itself is never recorded - only that one was made, which is
+        # what an audit trail needs to show.
+        self.audit("agent.session_issued", actor="owner", details={"subject": subject})
+        return token, csrf
+
     def create_session(
         self,
         *,
@@ -226,6 +290,8 @@ class AdminStore:
             "exp": now + lifetime_seconds,
             "csrf": csrf,
         }
+        if subject.startswith(self.AGENT_SUBJECT_PREFIX):
+            payload["gen"] = self.agent_generations().get(subject, 0)
         encoded = _b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
         signature = _b64encode(hmac.new(self._session_key(), encoded.encode("ascii"), hashlib.sha256).digest())
         return f"{encoded}.{signature}", csrf
@@ -240,8 +306,14 @@ class AdminStore:
         try:
             payload = json.loads(_b64decode(encoded))
             now = int(datetime.now(timezone.utc).timestamp())
-            if not payload.get("sub") or int(payload.get("exp", 0)) < now:
+            subject = payload.get("sub")
+            if not subject or int(payload.get("exp", 0)) < now:
                 return None
+            if str(subject).startswith(self.AGENT_SUBJECT_PREFIX):
+                # A revoked agent's tokens are still correctly signed and still
+                # unexpired. The generation is what makes them dead.
+                if int(payload.get("gen", -1)) != self.agent_generations().get(str(subject), 0):
+                    return None
             return payload
         except (ValueError, TypeError, json.JSONDecodeError):
             return None

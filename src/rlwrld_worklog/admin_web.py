@@ -121,10 +121,17 @@ async def _json_object(request: Request) -> dict[str, Any]:
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
+    # The cookie's life is read from the token rather than written here a second
+    # time. Two copies of "twelve hours" that do not know about each other would
+    # drift the moment one session type got a different length: the token would
+    # still be valid while the browser had already dropped it, and the symptom
+    # would appear nowhere near the cause.
+    session = store().read_session(token) or {}
+    lifetime = int(session.get("exp", 0)) - int(session.get("iat", 0))
     response.set_cookie(
         SESSION_COOKIE,
         token,
-        max_age=43_200,
+        max_age=lifetime if lifetime > 0 else 43_200,
         httponly=True,
         secure=os.environ.get("ADMIN_SESSION_SECURE", "false").lower() == "true",
         samesite="lax",

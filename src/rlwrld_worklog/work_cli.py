@@ -119,6 +119,23 @@ def add_work_parser(subparsers: Any) -> None:
     meta = commands.add_parser("meta", help="Show the status schema and board layout")
     _add_common(meta)
 
+    agent_token = commands.add_parser(
+        "agent-token", help="Issue a long-lived board session for one agent"
+    )
+    agent_token.add_argument("name", help="Agent name, one of the known roster")
+    _add_common(agent_token)
+
+    agent_revoke = commands.add_parser(
+        "agent-revoke", help="End one agent's sessions without touching the others"
+    )
+    agent_revoke.add_argument("name", help="Agent name, one of the known roster")
+    _add_common(agent_revoke)
+
+    agent_list = commands.add_parser(
+        "agent-list", help="Show the agent roster and how often each was revoked"
+    )
+    _add_common(agent_list)
+
     show = commands.add_parser("show", help="Show one work item")
     _add_common(show)
     show.add_argument("item_id")
@@ -214,9 +231,55 @@ def run_work(args: argparse.Namespace) -> int:
         return 1
 
 
+def _admin_store(args: argparse.Namespace) -> Any:
+    from .admin_store import AdminStore
+
+    if args.config_root is not None:
+        return AdminStore(Path(args.config_root))
+    return AdminStore.from_environment()
+
+
 def _dispatch(args: argparse.Namespace) -> int:
-    store = _store(args)
     command = args.work_command
+    if command == "agent-token":
+        admin = _admin_store(args)
+        token, csrf = admin.issue_agent_session(args.name)
+        # Printed once, here, and nowhere else. It is not written to the audit
+        # trail, the manifests or the handoff records - only the fact that a
+        # session was issued is.
+        _emit({
+            "ok": True,
+            "subject": f"{admin.AGENT_SUBJECT_PREFIX}{args.name}",
+            "token": token,
+            "csrf": csrf,
+            "expires_in_seconds": admin.AGENT_SESSION_SECONDS,
+            "note": "Put this in the agent's environment. Do not write it to a log or a receipt.",
+        })
+        return 0
+    if command == "agent-revoke":
+        admin = _admin_store(args)
+        subject = f"{admin.AGENT_SUBJECT_PREFIX}{args.name}"
+        generation = admin.revoke_agent(subject)
+        _emit({"ok": True, "subject": subject, "generation": generation})
+        return 0
+    if command == "agent-list":
+        admin = _admin_store(args)
+        generations = admin.agent_generations()
+        _emit({
+            "ok": True,
+            "agents": [
+                {
+                    "name": name,
+                    "subject": f"{admin.AGENT_SUBJECT_PREFIX}{name}",
+                    "revocations": generations.get(f"{admin.AGENT_SUBJECT_PREFIX}{name}", 0),
+                }
+                for name in admin.AGENT_NAMES
+            ],
+            "session_seconds": admin.AGENT_SESSION_SECONDS,
+        })
+        return 0
+
+    store = _store(args)
     if command == "create":
         item = store.create_item(_fields(args), actor=_actor(args))
         _emit({"ok": True, "created": True, "item": item})
