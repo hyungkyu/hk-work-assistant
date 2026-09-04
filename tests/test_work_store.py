@@ -819,3 +819,20 @@ def test_entries_written_before_values_existed_are_reported_empty(tmp_path: Path
     store.history_path.write_text(json.dumps(line, ensure_ascii=False) + "\n", encoding="utf-8")
 
     assert store.read_history(item_id=item["id"])[0]["values"] == {}
+
+
+def test_the_board_says_what_it_is_not_showing(tmp_path: Path) -> None:
+    """An archived item leaves every view at once, whatever state it was in."""
+    store = make_store(tmp_path)
+    finished = seed(store)
+    store.update_item(finished["id"], {"status": "done"}, actor="codex")
+    store.archive_item(finished["id"], actor="codex")
+
+    unfinished = seed(store)
+    store.update_item(unfinished["id"], {"status": "in_progress"}, actor="codex")
+    store.archive_item(unfinished["id"], actor="codex")
+
+    withheld = store.list_items()["withheld"]
+    assert withheld == {"archived": 2, "archived_unfinished": 1, "included": False}
+    # Asking for them says so, so the number cannot be read as a live count.
+    assert store.list_items(include_archived=True)["withheld"]["included"] is True

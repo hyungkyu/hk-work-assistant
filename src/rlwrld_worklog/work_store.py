@@ -680,6 +680,20 @@ class WorkStore:
                 for status in STATUSES
                 if any(item["status"] == status for item in available)
             },
+            # Archiving hides an item from every view at once, whatever state
+            # it was in. An archived `done` is the ordinary case; an archived
+            # `in_progress` is work that vanished from the board while still
+            # being work, and a dashboard that cannot say so is exactly the
+            # kind of silence this board exists to remove.
+            "withheld": {
+                "archived": sum(1 for item in document["items"] if item["archived_at"]),
+                "archived_unfinished": sum(
+                    1
+                    for item in document["items"]
+                    if item["archived_at"] and item["status"] not in TERMINAL_STATUSES
+                ),
+                "included": include_archived,
+            },
             "items": selected,
         }
 

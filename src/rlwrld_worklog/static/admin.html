@@ -979,10 +979,18 @@
         workState.total = typeof body.total === 'number' ? body.total : workState.items.length;
         workState.statusCounts = body.status_counts || {};
         workState.migratedFrom = body.migrated_from || null;
+        workState.withheld = body.withheld || null;
         workState.loaded = true;
         if (workState.editing || workState.busy) return;
         renderWork();
-        setWorkState(`업무 ${workVisibleItems().length}건 표시 · 전체 ${workState.total}건 · 마지막 확인 ${new Date().toLocaleTimeString()}`);
+        // Say what is not on the board as well as what is. An archived item
+        // that never finished is work that left the board while still being
+        // work, and a count of zero is itself worth showing.
+        const withheld = workState.withheld;
+        const hidden = withheld && !withheld.included && withheld.archived
+          ? ` · 보관 ${withheld.archived}건(미완 ${withheld.archived_unfinished})`
+          : '';
+        setWorkState(`업무 ${workVisibleItems().length}건 표시 · 전체 ${workState.total}건${hidden} · 마지막 확인 ${new Date().toLocaleTimeString()}`);
       } catch (error) {
         setWorkState(`업무 정보를 불러오지 못했습니다: ${error.message}`, true);
       }
