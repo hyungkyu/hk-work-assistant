@@ -119,6 +119,16 @@ def add_work_parser(subparsers: Any) -> None:
     meta = commands.add_parser("meta", help="Show the status schema and board layout")
     _add_common(meta)
 
+    apply_outbox = commands.add_parser(
+        "apply-outbox",
+        help="Apply queued ticket edits dropped as JSON files, and file the results",
+    )
+    apply_outbox.add_argument("--outbox", required=True, help="Directory holding the queued files")
+    apply_outbox.add_argument(
+        "--limit", type=int, default=50, help="Most files to apply in one pass"
+    )
+    _add_common(apply_outbox)
+
     agent_token = commands.add_parser(
         "agent-token", help="Issue a long-lived board session for one agent"
     )
@@ -231,6 +241,111 @@ def run_work(args: argparse.Namespace) -> int:
         return 1
 
 
+# Only these two fields are taken from a queued file. The others are the
+# executor's own account of the work: a queue that could set `status` or
+# `progress_summary` would let the requester write the report as well as the
+# request, and the board would no longer say who observed what.
+OUTBOX_FIELDS = ("next_action", "detail")
+
+
+def _outbox_result(name: str, ok: bool, reason: str, **extra: Any) -> dict[str, Any]:
+    return {"file": name, "ok": ok, "reason": reason, **extra}
+
+
+def _apply_one_outbox(store: WorkStore, path: Path, actor: str) -> dict[str, Any]:
+    """Apply one queued file. Never raises: every outcome is a filed reason."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as error:
+        return _outbox_result(path.name, False, f"unreadable: {error.__class__.__name__}")
+    if len(raw.encode("utf-8")) > 64_000:
+        return _outbox_result(path.name, False, "file is larger than 64000 bytes")
+    try:
+        payload = json.loads(raw)
+    except ValueError as error:
+        # The file is data, never a command. A malformed one is refused, not
+        # interpreted and not executed.
+        return _outbox_result(path.name, False, f"not JSON: {error}")
+    if not isinstance(payload, dict):
+        return _outbox_result(path.name, False, "top level must be a JSON object")
+
+    work_id = payload.get("work_id")
+    if not isinstance(work_id, str) or not work_id:
+        return _outbox_result(path.name, False, "work_id is required")
+
+    fields = {key: payload[key] for key in OUTBOX_FIELDS if key in payload}
+    ignored = sorted(set(payload) - set(OUTBOX_FIELDS) - {"work_id", "expected_revision"})
+    if not fields:
+        return _outbox_result(
+            path.name, False, f"nothing to apply: only {', '.join(OUTBOX_FIELDS)} are read",
+            ignored=ignored,
+        )
+    for key, value in fields.items():
+        if not isinstance(value, str):
+            return _outbox_result(path.name, False, f"{key} must be a string", ignored=ignored)
+
+    expected = payload.get("expected_revision")
+    if expected is not None and (not isinstance(expected, int) or isinstance(expected, bool)):
+        return _outbox_result(path.name, False, "expected_revision must be an integer or absent")
+
+    try:
+        item = store.update_item(work_id, fields, actor=actor, expected_revision=expected)
+    except WorkConflictError as error:
+        # Deliberately not merged. Merging here would silently overwrite a
+        # change the requester never saw, and deciding that is theirs.
+        return _outbox_result(
+            path.name, False, f"revision conflict, not merged: {error}", ignored=ignored
+        )
+    except WorkStoreError as error:
+        return _outbox_result(
+            path.name, False, f"{error.__class__.__name__}: {error}", ignored=ignored
+        )
+    return _outbox_result(
+        path.name, True, "applied", work_id=work_id,
+        revision=item["revision"], applied=sorted(fields), ignored=ignored,
+    )
+
+
+def _apply_outbox(args: argparse.Namespace) -> int:
+    """Drain a queue of ticket edits, filing every outcome where it can be seen.
+
+    Nothing here fails quietly. A file that cannot be applied moves to
+    `rejected/` beside a `.reason.json`, because the worst state is the one
+    where someone drops a file and nothing happens anywhere.
+    """
+    outbox = Path(args.outbox)
+    applied_dir = outbox / "applied"
+    rejected_dir = outbox / "rejected"
+    for directory in (applied_dir, rejected_dir):
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    store = _store(args)
+    actor = _actor(args)
+    results: list[dict[str, Any]] = []
+    queued = sorted(path for path in outbox.glob("*.json") if path.is_file())
+    for path in queued[: max(1, args.limit)]:
+        result = _apply_one_outbox(store, path, actor)
+        destination = (applied_dir if result["ok"] else rejected_dir) / path.name
+        reason_path = destination.with_suffix(destination.suffix + ".reason.json")
+        reason_path.write_text(
+            json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(reason_path, 0o600)
+        path.replace(destination)
+        results.append(result)
+
+    _emit({
+        "ok": True,
+        "actor": actor,
+        "queued": len(queued),
+        "applied": sum(1 for result in results if result["ok"]),
+        "rejected": sum(1 for result in results if not result["ok"]),
+        "results": results,
+    })
+    return 0
+
+
 def _admin_store(args: argparse.Namespace) -> Any:
     from .admin_store import AdminStore
 
@@ -241,6 +356,8 @@ def _admin_store(args: argparse.Namespace) -> Any:
 
 def _dispatch(args: argparse.Namespace) -> int:
     command = args.work_command
+    if command == "apply-outbox":
+        return _apply_outbox(args)
     if command == "agent-token":
         admin = _admin_store(args)
         token, csrf = admin.issue_agent_session(args.name)

@@ -258,3 +258,124 @@ def test_the_roster_is_listed_with_how_often_each_was_cut_off(
     _, listed = run(capsys, config, "agent-list")
     counts = {entry["name"]: entry["revocations"] for entry in listed["agents"]}
     assert counts == {"noa": 0, "boa": 0, "doa": 0, "roa": 1, "soa": 0}
+
+
+def _queue(outbox: Path, name: str, payload: dict) -> Path:
+    outbox.mkdir(parents=True, exist_ok=True)
+    path = outbox / name
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_a_queued_edit_reaches_the_board_and_is_filed_as_applied(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    _, created = run(capsys, config, "create", "--title", "티켓", "--assigned-to", "soa",
+                     "--requested-by", "mori")
+    item_id = created["item"]["id"]
+    _queue(outbox, "a.json", {"work_id": item_id, "next_action": "이걸 해라"})
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (1, 0)
+
+    _, shown = run(capsys, config, "show", item_id)
+    assert shown["item"]["next_action"] == "이걸 해라"
+    assert (outbox / "applied" / "a.json").exists()
+    assert (outbox / "applied" / "a.json.reason.json").exists()
+
+
+def test_the_queue_writes_only_the_two_fields_it_is_allowed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The requester writes the request; the executor writes the report."""
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    _, created = run(capsys, config, "create", "--title", "티켓", "--assigned-to", "soa",
+                     "--requested-by", "mori")
+    item_id = created["item"]["id"]
+    _queue(outbox, "b.json", {
+        "work_id": item_id,
+        "next_action": "허용",
+        "detail": "허용",
+        "progress_summary": "남의 보고를 대신 쓰려는 것",
+        "status": "done",
+        "blocker": "막혔다고 대신 말하려는 것",
+    })
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    entry = result["results"][0]
+    assert entry["applied"] == ["detail", "next_action"]
+    assert entry["ignored"] == ["blocker", "progress_summary", "status"]
+
+    _, shown = run(capsys, config, "show", item_id)
+    assert shown["item"]["status"] != "done"
+    assert shown["item"]["progress_summary"] == ""
+
+
+def test_a_stale_revision_is_refused_and_never_merged(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Merging would overwrite a change the requester never saw."""
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    _, created = run(capsys, config, "create", "--title", "티켓", "--assigned-to", "soa",
+                     "--requested-by", "mori")
+    item_id = created["item"]["id"]
+    run(capsys, config, "update", item_id, "--progress", "그 사이 소아가 적었다")
+    _queue(outbox, "c.json", {"work_id": item_id, "next_action": "낡은 개정판", "expected_revision": 1})
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert result["rejected"] == 1
+    assert "not merged" in result["results"][0]["reason"]
+
+    _, shown = run(capsys, config, "show", item_id)
+    assert shown["item"]["progress_summary"] == "그 사이 소아가 적었다"
+    assert (outbox / "rejected" / "c.json").exists()
+
+
+@pytest.mark.parametrize(
+    "name,payload,fragment",
+    [
+        ("no-id.json", {"next_action": "x"}, "work_id is required"),
+        ("nothing.json", {"work_id": "wi_x"}, "nothing to apply"),
+        ("bad-type.json", {"work_id": "wi_x", "next_action": 7}, "must be a string"),
+        ("missing.json", {"work_id": "wi_nope", "next_action": "x"}, "WorkNotFoundError"),
+    ],
+)
+def test_every_refusal_is_filed_with_a_reason(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], name: str, payload: dict, fragment: str
+) -> None:
+    """The worst outcome is a file dropped and nothing happening anywhere."""
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    _queue(outbox, name, payload)
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert result["rejected"] == 1
+    assert fragment in result["results"][0]["reason"]
+    reason = json.loads((outbox / "rejected" / f"{name}.reason.json").read_text(encoding="utf-8"))
+    assert reason["ok"] is False
+
+
+def test_a_file_that_is_not_json_is_refused_not_interpreted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    outbox.mkdir(parents=True, exist_ok=True)
+    (outbox / "d.json").write_text("rm -rf /", encoding="utf-8")
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert result["rejected"] == 1
+    assert "not JSON" in result["results"][0]["reason"]
+
+
+def test_the_edit_is_recorded_under_the_name_the_board_knows(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    _, created = run(capsys, config, "create", "--title", "티켓", "--assigned-to", "soa",
+                     "--requested-by", "mori")
+    item_id = created["item"]["id"]
+    _queue(outbox, "e.json", {"work_id": item_id, "next_action": "x"})
+    run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+
+    _, history = run(capsys, config, "history", "--item-id", item_id)
+    assert history["items"][0]["actor"] == "mori"
