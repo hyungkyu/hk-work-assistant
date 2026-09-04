@@ -16,6 +16,7 @@ from rlwrld_worklog import archive, collection_rules
 from rlwrld_worklog.collection_rules import (
     ACTIVE_RULE_VERSION,
     PUBLISHED_DIGESTS,
+    RULE_STATUSES,
     RULES,
     SOURCES,
     CollectionRule,
@@ -46,7 +47,7 @@ def test_every_published_version_is_declared_once_and_defines_known_sources() ->
         assert declared and declared <= set(SOURCES)
         assert len(declared) == len(rule.sources), "a source is defined twice"
         assert rule.title and rule.summary
-        assert rule.status in {"active", "superseded"}
+        assert rule.status in RULE_STATUSES
         assert rule.effective.basis
 
 
@@ -93,6 +94,11 @@ def test_digest_is_stable_and_matches_what_was_published() -> None:
     for rule in RULES:
         assert rule.digest == rule.digest, "a digest must not depend on when it is taken"
         assert rule.digest.startswith("sha256:")
+        if rule.status == "pending":
+            # Not yet frozen: it is pinned by the same change that activates
+            # it, so what gets pinned is what was in force from day one.
+            assert rule.version not in PUBLISHED_DIGESTS
+            continue
         assert PUBLISHED_DIGESTS[rule.version] == rule.digest
     assert rule_digest_mismatches() == []
     assert registry_as_dict()["digests_pinned"] is True
@@ -157,7 +163,7 @@ def test_a_versions_end_is_derived_from_its_successor_not_stored() -> None:
 
 
 def test_the_derived_window_closes_a_retired_version_at_its_successors_start() -> None:
-    superseded = [rule for rule in RULES if rule.status != "active"]
+    superseded = [rule for rule in RULES if rule.status == "superseded"]
     assert superseded, "this only means something once a version is retired"
     for rule in superseded:
         successor = next(
@@ -173,6 +179,56 @@ def test_the_derived_window_closes_a_retired_version_at_its_successors_start() -
             assert window["end"] == successor.effective.start
             assert window["superseded_by"] == successor.version
         assert window["is_current"] is False
+
+
+def test_a_pending_version_does_not_close_the_version_it_will_supersede() -> None:
+    """Publishing ahead of the code must not retire anything.
+
+    A pending version names its predecessor so the repair has somewhere to
+    land, but no run has followed it, so the predecessor has not stopped
+    applying. Deriving an end from a start that does not exist yet would
+    close the active version's window against `None` and leave the registry
+    claiming nothing is current.
+    """
+    pending = [rule for rule in RULES if rule.status == "pending"]
+    assert pending, "this invariant only means something while a version is pending"
+    for rule in pending:
+        assert rule.effective.start is None
+        assert rule.version not in PUBLISHED_DIGESTS, "a rule freezes when it takes effect"
+        window = effective_window(rule.version)
+        assert window == {
+            "start": None,
+            "end": None,
+            "superseded_by": None,
+            "is_current": False,
+        }
+        predecessor = rule.supersedes
+        if predecessor is not None:
+            still_open = effective_window(predecessor)
+            assert still_open["end"] is None
+            assert still_open["superseded_by"] is None
+
+
+def test_a_pending_version_stamps_nothing_and_activating_it_is_a_status_flip() -> None:
+    """The reason `status` is outside the digest, exercised end to end."""
+    pending = [rule for rule in RULES if rule.status == "pending"]
+    assert pending
+    for rule in pending:
+        assert rule.version != ACTIVE_RULE_VERSION
+        assert active_rule_stamp()["collection_rule_version"] != rule.version
+        # Activation must not move the content hash, or the freeze that gets
+        # pinned on the way in would differ from what was reviewed.
+        assert replace(rule, status="active").digest == rule.digest
+
+
+def test_the_registry_refuses_a_pending_version_that_claims_a_start() -> None:
+    pending = next(rule for rule in RULES if rule.status == "pending")
+    others = tuple(other for other in RULES if other.version != pending.version)
+    started = replace(
+        pending, effective=replace(pending.effective, start="2026-09-04")
+    )
+    with pytest.raises(RuleRegistryError, match="stores an effective start"):
+        _validate_registry(others + (started,))
 
 
 def test_the_derived_window_marks_only_the_active_version_current() -> None:

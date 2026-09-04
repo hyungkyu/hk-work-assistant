@@ -37,6 +37,21 @@ from typing import Any, Mapping
 
 RULE_REGISTRY_SCHEMA_VERSION = 2
 
+# Where a version sits in the registry's lifecycle. Not part of any digest --
+# see `CollectionRule.content` for why.
+#
+# `pending` exists because publishing a rule and running under it are two
+# different days, and collapsing them forces a lie in one direction or the
+# other. A repair to a collector cannot land while the active rule describes
+# the behaviour being repaired -- the rule would keep asserting what the code
+# no longer does -- but activating the new rule first makes every run in
+# between stamp a rule it does not follow. A pending version is published,
+# readable and digest-checkable, and names the coverage notes the repair will
+# record, so the repair has something to land against; it stamps nothing, and
+# it does not close its predecessor's window. Activating it is a status flip,
+# which the digest deliberately does not cover.
+RULE_STATUSES = ("pending", "active", "superseded")
+
 # Canonical ledger source names, as used by the ledger and the service DB.
 #
 # This list and the active rule move together, always in one commit. The
@@ -132,7 +147,7 @@ class EffectivePeriod:
 class CollectionRule:
     version: str
     title: str
-    status: str  # active | superseded
+    status: str  # one of RULE_STATUSES: pending | active | superseded
     effective: EffectivePeriod
     summary: str
     # Schema versions a run under this rule writes. Literal, not imported: a
@@ -1117,9 +1132,135 @@ V6 = CollectionRule(
 )
 
 
+# --------------------------------------------------------------------- V7
+
+# V6 wrote the slice's shortcuts down as facts: in a bounded window the
+# watched-thread re-poll and the lookback are skipped. Measurement says those
+# shortcuts are why a whole class of message never arrives. The production
+# checkpoint holds 356 watched threads spanning four days, because the list
+# only grows at the incremental front and the 30-day lookback keeps trimming
+# it, so a run reading August has almost nothing to re-poll no matter where
+# the boundary is moved. And the 622 replies the legacy ledger has and the new
+# one does not all hang off parents older than the window's own start.
+#
+# A thread's parent is therefore not reachable from inside the window at all.
+# `conversations.history` returns a reply only when it was also broadcast to
+# the channel, so for an ordinary reply there is never a message in the window
+# that names its parent -- the slice cannot discover what to ask for. Closing
+# that needs a pass that reads backwards from the window's start looking for
+# parents, which is a change in what gets collected, so it is a new version
+# rather than an edit to V6.
+SLACK_V7 = replace(
+    V6.source_rule("slack"),
+    includes=V6.source_rule("slack").includes
+    + (
+        "In slice mode: replies under threads whose parent sits before the window, found "
+        "by reading the channel backwards from the window's start for parents rather than "
+        "by re-polling the watched-thread list, which only ever holds the live front",
+    ),
+    excludes=tuple(
+        exclude
+        for exclude in V6.source_rule("slack").excludes
+        if not exclude.startswith("In slice mode: the checkpoint watermark")
+    )
+    + (
+        "In slice mode: the checkpoint watermark and the 30-day lookback, both of which "
+        "track the live front and would empty a past window. The watched-thread re-poll is "
+        "no longer in this list -- see slack.date_slice_capture",
+    ),
+    known_limitations=tuple(
+        limitation
+        for limitation in V6.source_rule("slack").known_limitations
+        if not limitation.startswith("slack.date_slice_capture")
+    )
+    + (
+        "slack.date_slice_capture: a bounded window run captures one month instead of the "
+        "live head. It reads from `since` and ignores the checkpoint watermark, because the "
+        "watermark tracks the incremental front and would leave the past window empty. "
+        "`advance_checkpoint` is forced false: a run that saw only one month must not move a "
+        "channel's watermark past it, or everything after that month is skipped forever. "
+        "Workspace search is bounded with `before:`, and the window is applied again on the "
+        "client because the server's timezone need not match ours -- anything the server "
+        "returned above the window is counted in counters.search_matches_after_window rather "
+        "than silently kept. V6 also said the watched-thread re-poll was skipped here. It is "
+        "not, from this version: the re-poll runs inside the window, selecting the threads "
+        "whose in-window activity proves they were active in it and resuming each from "
+        "`since` rather than from the watermark, which is a destination and not a starting "
+        "point. The 30-day lookback stays out -- it is measured from the live head and means "
+        "nothing to a run reading a past month.",
+        "slack.prewindow_parent_discovery: replies whose parent predates the window are "
+        "reachable only by looking for the parent before the window opens, so a slice reads "
+        "backwards from `since` for thread parents. The watched-thread list cannot stand in "
+        "for that pass: it is written when a reply names its parent, and an ordinary reply "
+        "is not returned by conversations.history at all, so for most threads no message "
+        "inside the window ever names the parent. Measured: the production checkpoint held "
+        "86 channels and 356 watched threads whose oldest last-reply was 2026-08-30, four "
+        "days wide, while the 622 replies missing from the new ledger all hang off parents "
+        "before 2026-08-01. How far back the pass reads bounds what it can recover, and a "
+        "parent older than that is still missed; the reach used by a run is recorded rather "
+        "than assumed.",
+    ),
+    evidence=V6.source_rule("slack").evidence
+    + (
+        "checkpoint measurement: manifests/slack/production/checkpoint.json, 86 channels and "
+        "356 watched threads spanning 2026-08-30 to 2026-09-03",
+        "cowork/logs/roa-legacy-vs-new-202608-recon.md (the 622 replies and their parents)",
+    ),
+)
+
+
+V7 = CollectionRule(
+    version="V7",
+    title="공식 API 원본 원장 + 창 앞 부모 탐색 (slice recovers pre-window parents)",
+    # Pending, not active. The repair this version describes is being written
+    # by another hand; publishing it as active would make every run between
+    # now and then stamp a rule it does not follow, which is the same lie V6
+    # tells about the re-poll and the reason this version exists at all. It is
+    # published so the repair has a rule to land against, and it takes effect
+    # when the collector does. See PENDING_RULE_STATUS.
+    status="pending",
+    effective=EffectivePeriod(
+        start=None,
+        end=None,
+        basis=(
+            "pending: a version's start is the day collection actually began following it, "
+            "which is not knowable until the collector does. Written in when this version "
+            "is activated, which is also when its digest is pinned."
+        ),
+    ),
+    summary=(
+        "V6 with the Slack slice corrected. A bounded window run now recovers replies whose "
+        "parent predates it, by reading backwards from the window's start for thread "
+        "parents and by re-polling watched threads inside the window instead of skipping "
+        "the re-poll. V6 described the skips as deliberate; measurement showed they are why "
+        "a month-by-month backfill silently misses replies to older threads. Notion, Google "
+        "Calendar, GitHub and Slurm are unchanged from V6."
+    ),
+    manifest_schema_version=2,
+    ledger_schema_version="1.0",
+    source_schema_version=None,
+    capture_profiles=V6.capture_profiles,
+    storage_layout=V6.storage_layout,
+    unknowns=V6.unknowns
+    + (
+        "How far before a window a parent can sit and still be recovered. The backward pass "
+        "has to stop somewhere, and a thread whose parent is older than it reaches is missed "
+        "the same way it is missed today -- less often, but not never.",
+    ),
+    sources=(
+        SLACK_V7,
+        V6.source_rule("notion"),
+        V6.source_rule("google_calendar"),
+        V6.source_rule("github"),
+        V6.source_rule("slurm"),
+    ),
+    supersedes="V6",
+)
+
+
 # --------------------------------------------------------------- registry
 
-RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3, V4, V5, V6)
+RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3, V4, V5, V6, V7)
 
 ACTIVE_RULE_VERSION = "V6"
 
@@ -1151,7 +1292,14 @@ def effective_window(
         return {"start": None, "end": None, "superseded_by": None, "is_current": False}
     rule = catalogue[position]
     successor = next(
-        (later for later in catalogue[position + 1 :] if later.supersedes == version),
+        (
+            later
+            for later in catalogue[position + 1 :]
+            # A pending version already names what it will supersede, but no
+            # run has followed it yet, so there is no day on which this
+            # version stopped applying. Only a version in force closes one.
+            if later.supersedes == version and later.status != "pending"
+        ),
         None,
     )
     return {
@@ -1197,10 +1345,25 @@ def _validate_registry(rules: tuple[CollectionRule, ...]) -> None:
                 f"collection rule {rule.version} is declared twice; the registry is append-only"
             )
         seen.add(rule.version)
-        if rule.status not in {"active", "superseded"}:
+        if rule.status not in RULE_STATUSES:
             raise RuleRegistryError(f"collection rule {rule.version} has an unknown status")
         if rule.status == "active":
             active.append(rule.version)
+        if rule.status == "pending":
+            # A pending rule is not frozen and has not started. Both follow
+            # from the same fact -- nothing has run under it -- and both are
+            # written in by the same change that activates it, so enforcing
+            # them here keeps that flip from being half done.
+            if rule.effective.start is not None:
+                raise RuleRegistryError(
+                    f"collection rule {rule.version} is pending but stores an effective "
+                    "start; a version starts on the day a run first follows it"
+                )
+            if rule.version in PUBLISHED_DIGESTS:
+                raise RuleRegistryError(
+                    f"collection rule {rule.version} is pending but its digest is pinned; "
+                    "a rule is frozen when it takes effect, not before"
+                )
         declared: set[str] = set()
         for source_rule in rule.sources:
             if source_rule.source not in SOURCES:

@@ -211,11 +211,28 @@ PHASES = (
 # history can tell an absent field from one holding null.
 _MISSING = object()
 
-# How much of a changed value the history keeps verbatim. The cap exists to
-# stop an append-only stream from growing without bound, and a cap that hides
-# its own effect would be a lie, so a clipped value says so and carries the
-# original length and digest.
-MAX_HISTORY_VALUE = 2_000
+# How much of a changed value the history keeps verbatim.
+#
+# Derived from the board's own limits, not chosen. This was a flat 2,000 while
+# `detail` is allowed 8,000, so condition 5 -- keep what each field was and
+# what it became -- quietly did not hold for the one field long enough to need
+# it: a 3,615-character detail edit on 2026-09-04 reached the stream clipped,
+# and a full-length one would lose 6,000 characters recoverable from nowhere.
+# The number was picked without reading TEXT_FIELDS, and nothing connected the
+# two, so the promise and the limit could drift apart in silence.
+#
+# The bound is now the largest value the board can hold. That is why this
+# length and not another one, and it still bounds the stream: every field is
+# capped on the way in, so an entry is bounded by construction rather than by
+# a second number that has to be kept in step by hand. `tests/test_work_store`
+# asserts the relation rather than the value, so the day a field's cap rises
+# past this one is the day the test fails instead of the history.
+#
+# The clip below stays. It covers what TEXT_FIELDS does not -- a string
+# reaching the history from somewhere with no length of its own -- and a cap
+# that hid its own effect would be a lie, so a clipped value says so and
+# carries the original length and digest.
+MAX_HISTORY_VALUE = max(maximum for _, maximum in TEXT_FIELDS.values())
 
 
 def _history_value(value: Any) -> dict[str, Any]:
@@ -1002,8 +1019,9 @@ class WorkStore:
             item["archived_at"] = now
             item["updated_at"] = now
             item["revision"] = int(item["revision"]) + 1
-            self._commit(document, now)
-            self._append_history(
+            self._record(
+                document,
+                now,
                 "work.archived",
                 item,
                 actor=actor_name,
@@ -1035,8 +1053,9 @@ class WorkStore:
         _apply_status_timestamps(item, previous_status=None, explicit=set(changes), now=now)
         _check_parent(document["items"], item)
         document["items"].append(item)
-        self._commit(document, now)
-        self._append_history(
+        self._record(
+            document,
+            now,
             "work.created",
             item,
             actor=actor,
@@ -1072,8 +1091,9 @@ class WorkStore:
         _check_parent(document["items"], item)
         item["updated_at"] = now
         item["revision"] = int(item["revision"]) + 1
-        self._commit(document, now)
-        self._append_history(
+        self._record(
+            document,
+            now,
             "work.updated",
             item,
             actor=actor,
@@ -1083,6 +1103,62 @@ class WorkStore:
             values=_field_changes(before, changes),
         )
         return item
+
+    def _record(
+        self,
+        document: Mapping[str, Any],
+        now: str,
+        action: str,
+        item: Mapping[str, Any],
+        **entry: Any,
+    ) -> None:
+        """Write the history entry, then the item document.  In that order.
+
+        The two live in different files and there is no transaction across
+        them, so one has to go first and a crash in between has to be
+        survivable. Which one goes first decides what a crash destroys.
+
+        Committing first destroys the record. The item lands, the history
+        append fails, and the change exists with nothing saying who made it or
+        what it replaced -- and the caller sees a traceback, so a person reads
+        it as "that failed" and does it again. That is not hypothetical: on
+        2026-09-04 the window was open from 08:35:36Z to 08:36:06Z and two
+        `work create` calls came through it. Both raised. Both had already
+        written their item. One of the two duplicates now has to be archived.
+
+        History first inverts that. If the append fails nothing is committed,
+        the caller's traceback means exactly what it says, and doing it again
+        is the right response. What is left is the mirror risk -- the entry
+        lands and the commit fails, so the stream claims a change the document
+        never took. That is over-recording rather than loss, and the reader is
+        told: a `work.commit_failed` entry follows saying the entry above did
+        not land. A history that admits an extra line is repairable; a change
+        with no history is not.
+        """
+        self._append_history(action, item, **entry)
+        try:
+            self._commit(document, now)
+        except Exception as error:
+            self._write_history_entry(
+                {
+                    "at": _utc_now(),
+                    "action": "work.commit_failed",
+                    "actor": entry.get("actor"),
+                    "item_id": item["id"],
+                    "revision": item["revision"],
+                    "fields": [],
+                    "values": {},
+                    "status": item["status"],
+                    "requested_by": item.get("requested_by"),
+                    "assigned_to": item.get("assigned_to"),
+                    # Which entry is void, and only the exception's type: the
+                    # message can carry a path, and a history line is not the
+                    # place to widen what this file holds.
+                    "did_not_land": action,
+                    "reason": type(error).__name__,
+                }
+            )
+            raise
 
     def _commit(self, document: Mapping[str, Any], now: str) -> None:
         payload = {
@@ -1141,6 +1217,11 @@ class WorkStore:
         if status_from is not None and status_from != item["status"]:
             entry["status_from"] = status_from
         entry.update(context or {})
+        self._write_history_entry(entry)
+
+    def _write_history_entry(self, entry: Mapping[str, Any]) -> None:
+        """Append one line, durably.  Separate so a compensating entry -- which
+        has no item change behind it -- can be written the same way."""
         descriptor = os.open(self.history_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         try:
             with os.fdopen(descriptor, "a", encoding="utf-8") as stream:

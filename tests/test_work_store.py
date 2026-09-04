@@ -12,11 +12,14 @@ import pytest
 
 from rlwrld_worklog.work_store import (
     DOCUMENT_VERSION,
+    MAX_HISTORY_VALUE,
+    TEXT_FIELDS,
     WorkConflictError,
     WorkCorruptionError,
     WorkNotFoundError,
     WorkStore,
     WorkValidationError,
+    _history_value,
 )
 
 
@@ -796,18 +799,52 @@ def test_a_field_that_was_absent_is_not_reported_as_empty(tmp_path: Path) -> Non
     assert created["values"]["title"]["before"] == {"present": False}
 
 
-def test_a_long_value_is_clipped_and_says_so(tmp_path: Path) -> None:
-    """A cap that hides its own effect would be a lie."""
+def test_the_history_can_hold_anything_the_board_can_hold() -> None:
+    """Condition 5 is a promise about every field, so the cap has to clear them all.
+
+    It did not. The history kept 2,000 characters while `detail` accepts
+    8,000, so the longest field -- the only one long enough for the promise to
+    matter -- was the one it silently broke. The two numbers are now related
+    rather than coincidentally close, and this asserts the relation, so a
+    field whose cap is raised past the history's fails here instead of losing
+    six thousand characters in production.
+    """
+    for field, (_, maximum) in TEXT_FIELDS.items():
+        assert MAX_HISTORY_VALUE >= maximum, (
+            f"{field} accepts {maximum} characters but the history keeps "
+            f"{MAX_HISTORY_VALUE}; a change to it cannot be preserved"
+        )
+
+
+def test_a_detail_at_its_full_length_survives_the_history_intact(tmp_path: Path) -> None:
+    """The regression itself: 3,615 characters reached the stream clipped."""
     store = make_store(tmp_path)
-    item = seed(store)
-    long_detail = "가" * 3_000
-    store.update_item(item["id"], {"detail": long_detail}, actor="codex")
+    item = seed(store, detail="처음")
+    full = "가" * TEXT_FIELDS["detail"][1]
+    store.update_item(item["id"], {"detail": full}, actor="codex")
 
     after = store.read_history(item_id=item["id"])[0]["values"]["detail"]["after"]
-    assert after["truncated"] is True
-    assert after["length"] == 3_000
-    assert len(after["value"]) == 2_000
-    assert after["sha256"] == hashlib.sha256(long_detail.encode("utf-8")).hexdigest()
+    assert after == {"present": True, "value": full}
+    assert "truncated" not in after
+
+
+def test_a_long_value_is_clipped_and_says_so() -> None:
+    """A cap that hides its own effect would be a lie.
+
+    No board field can reach this any more -- that is the point of deriving
+    the cap from TEXT_FIELDS -- so it is exercised directly. The clip stays as
+    the floor under a string that arrives with no length of its own.
+    """
+    long_value = "가" * (MAX_HISTORY_VALUE + 1_000)
+
+    clipped = _history_value(long_value)
+    assert clipped["truncated"] is True
+    assert clipped["length"] == MAX_HISTORY_VALUE + 1_000
+    assert len(clipped["value"]) == MAX_HISTORY_VALUE
+    assert clipped["sha256"] == hashlib.sha256(long_value.encode("utf-8")).hexdigest()
+
+    at_the_limit = _history_value("가" * MAX_HISTORY_VALUE)
+    assert "truncated" not in at_the_limit
 
 
 def test_entries_written_before_values_existed_are_reported_empty(tmp_path: Path) -> None:
@@ -836,3 +873,86 @@ def test_the_board_says_what_it_is_not_showing(tmp_path: Path) -> None:
     assert withheld == {"archived": 2, "archived_unfinished": 1, "included": False}
     # Asking for them says so, so the number cannot be read as a live count.
     assert store.list_items(include_archived=True)["withheld"]["included"] is True
+
+
+def _break_the_commit(store: WorkStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the document write fail the way a full or read-only disk would."""
+
+    def refuse(*_args: object, **_kwargs: object) -> None:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(store, "_commit", refuse)
+
+
+def test_a_failed_write_leaves_no_change_without_a_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The order is the fix: the history goes first, so a crash cannot skip it.
+
+    Committing first opened a real window on 2026-09-04, 08:35:36Z-08:36:06Z.
+    Two `work create` calls raised after their item had already been written,
+    so both items existed with no history at all, and the traceback told the
+    operator they had failed. One of the duplicates has to be archived.
+    """
+    store = make_store(tmp_path)
+    item = seed(store)
+    before = store.get_item(item["id"])
+    entries_before = len(store.read_history(item_id=item["id"]))
+
+    _break_the_commit(store, monkeypatch)
+    with pytest.raises(OSError):
+        store.update_item(item["id"], {"next_action": "안 써진다"}, actor="codex")
+
+    # The failure is a failure: nothing landed, and doing it again is right.
+    assert store.get_item(item["id"]) == before
+    assert store.get_item(item["id"])["next_action"] != "안 써진다"
+
+    # And the stream says so, rather than leaving a line claiming a change the
+    # document never took.
+    entries = store.read_history(item_id=item["id"])
+    assert len(entries) == entries_before + 2
+    void, attempted = entries[0], entries[1]
+    assert attempted["action"] == "work.updated"
+    assert attempted["values"]["next_action"]["after"]["value"] == "안 써진다"
+    assert void["action"] == "work.commit_failed"
+
+
+def test_the_compensating_entry_names_the_entry_it_voids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Over-recording is recoverable; a change with no history is not."""
+    store = make_store(tmp_path)
+    item = seed(store)
+    _break_the_commit(store, monkeypatch)
+    with pytest.raises(OSError):
+        store.update_item(item["id"], {"status": "in_progress"}, actor="roa")
+
+    void = json.loads(store.history_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert void["action"] == "work.commit_failed"
+    assert void["did_not_land"] == "work.updated"
+    assert void["item_id"] == item["id"]
+    assert void["actor"] == "roa"
+    # The exception's type, never its message: that can carry a path, and the
+    # history is not the place to widen what this file holds.
+    assert void["reason"] == "OSError"
+    assert "no space left" not in json.dumps(void, ensure_ascii=False)
+
+
+def test_a_history_that_cannot_be_written_stops_the_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing is committed when the record cannot be kept."""
+    store = make_store(tmp_path)
+
+    def refuse(*_args: object, **_kwargs: object) -> None:
+        raise OSError("history is unwritable")
+
+    monkeypatch.setattr(store, "_append_history", refuse)
+    with pytest.raises(OSError):
+        store.create_item(
+            {"title": "기록 없이는 안 만든다", "requested_by": "hk", "assigned_to": "noa"},
+            actor="hk",
+        )
+
+    assert store.list_items()["items"] == []
+    assert store.read_history() == []
