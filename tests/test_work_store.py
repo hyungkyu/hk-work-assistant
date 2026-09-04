@@ -816,6 +816,33 @@ def test_the_history_can_hold_anything_the_board_can_hold() -> None:
         )
 
 
+def test_every_text_field_at_its_own_maximum_survives_the_history_intact(
+    tmp_path: Path,
+) -> None:
+    """The guarantee, asserted per field rather than on the constant.
+
+    The constant test above cannot fail by raising a field's cap -- the cap is
+    derived from those very limits, so raising one raises it too, and mutating
+    `detail` to 12,000 leaves the suite green. That is the derivation working,
+    not the test hiding: the drift it used to guard against can no longer
+    happen. What can still happen is someone writing a number back in, and both
+    tests go red on that -- measured, by putting `MAX_HISTORY_VALUE = 2_000`
+    back and watching them fail.
+
+    This one is the behaviour rather than the arithmetic, and it covers every
+    field instead of the one that was caught. A field added later with a limit
+    of its own is included the day it is added.
+    """
+    store = make_store(tmp_path)
+    item = seed(store)
+    for field, (_, maximum) in TEXT_FIELDS.items():
+        full = "가" * maximum
+        store.update_item(item["id"], {field: full}, actor="codex")
+        after = store.read_history(item_id=item["id"])[0]["values"][field]["after"]
+        assert after == {"present": True, "value": full}, field
+        assert "truncated" not in after, field
+
+
 def test_a_detail_at_its_full_length_survives_the_history_intact(tmp_path: Path) -> None:
     """The regression itself: 3,615 characters reached the stream clipped."""
     store = make_store(tmp_path)
