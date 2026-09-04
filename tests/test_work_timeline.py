@@ -124,20 +124,27 @@ def test_a_summary_is_bounded(store: WorkStore) -> None:
         )
 
 
-def test_the_items_own_free_text_never_reaches_the_history_stream(
+def test_the_history_stream_keeps_what_each_field_became(
     store: WorkStore, tmp_path: Path
 ) -> None:
-    item = seed(store, detail="비공개 상세 내용", progress_summary="비공개 진행")
+    """Reversed on 2026-09-04 (HK P0 condition 5); it read the other way before.
+
+    Keeping only field names was the right balance while `progress_summary`
+    carried the running account. That field is being cut to three lines, so
+    names alone would leave no account anywhere. Fields the update did not
+    touch still stay out: the entry records the change, not the item.
+    """
+    item = seed(store, detail="상세 내용", progress_summary="진행")
     store.update_item(
         item["id"],
-        {"blocker": "비공개 막힘", "next_action": "비공개 다음"},
+        {"blocker": "막힘", "next_action": "다음"},
         actor="moa",
         expected_revision=1,
     )
-    raw = (tmp_path / "work" / "history.jsonl").read_text(encoding="utf-8")
-    for secret in ("비공개 상세 내용", "비공개 진행", "비공개 막힘", "비공개 다음"):
-        assert secret not in raw
-    assert "blocker" in raw  # the field name is recorded, the value is not
+    entry = store.read_history(item_id=item["id"])[0]
+    assert entry["values"]["blocker"]["after"] == {"present": True, "value": "막힘"}
+    assert entry["values"]["next_action"]["after"] == {"present": True, "value": "다음"}
+    assert set(entry["values"]) == {"blocker", "next_action"}
 
 
 # ---------------------------------------------------- legacy preservation

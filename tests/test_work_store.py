@@ -1,6 +1,7 @@
 # hook-allow: synthetic-credentials
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
@@ -272,16 +273,25 @@ def test_an_unsupported_document_version_is_not_downgraded(tmp_path: Path) -> No
     assert store.items_path.read_text(encoding="utf-8") == future
 
 
-def test_history_is_append_only_and_carries_no_free_text(tmp_path: Path) -> None:
+def test_history_is_append_only_and_keeps_what_a_field_became(tmp_path: Path) -> None:
+    """Values are kept from 2026-09-04 (HK P0 condition 5). What that costs.
+
+    Until now this test asserted the opposite: that a token-shaped string in
+    `detail` never reached the history. It does now, and the trade is worth
+    stating rather than quietly dropping. The confidentiality boundary is
+    unchanged -- both files are 0600 in the same directory, so anyone who can
+    read one can read the other. What is new is permanence: a secret pasted
+    into an item could previously be edited out, and now it stays in an
+    append-only stream. That is a reason to keep secrets off the board, not a
+    reason to keep the board's history blind.
+    """
     store = make_store(tmp_path)
     item = seed(store, detail="xoxp-not-a-real-token-but-sensitive-looking")
     store.update_item(item["id"], {"status": "in_progress", "progress_summary": "비밀 요약"}, actor="codex")
     store.update_item(item["id"], {"status": "done"}, actor="codex")
 
     raw = store.history_path.read_text(encoding="utf-8")
-    assert "xoxp-" not in raw
-    assert "비밀 요약" not in raw
-    assert "위임 작업" not in raw
+    assert "비밀 요약" in raw
     assert stat.S_IMODE(store.history_path.stat().st_mode) == 0o600
 
     entries = store.read_history()
@@ -758,3 +768,54 @@ def test_an_unknown_version_is_reported_before_any_field_validation(tmp_path: Pa
         write_document(store, {"version": version, "revision": 0, "updated_at": None, "items": []})
         with pytest.raises(WorkCorruptionError, match="unsupported work store version"):
             store.read_document()
+
+
+def test_history_keeps_both_sides_of_a_change(tmp_path: Path) -> None:
+    """A record that says what changed but not what it became is a notification."""
+    store = make_store(tmp_path)
+    item = seed(store, detail="처음")
+    store.update_item(item["id"], {"detail": "다음"}, actor="codex")
+
+    entry = store.read_history(item_id=item["id"])[0]
+    assert entry["values"]["detail"]["before"] == {"present": True, "value": "처음"}
+    assert entry["values"]["detail"]["after"] == {"present": True, "value": "다음"}
+
+
+def test_a_field_that_was_absent_is_not_reported_as_empty(tmp_path: Path) -> None:
+    """"There was no field" and "the field held nothing" are different facts."""
+    store = make_store(tmp_path)
+    item = seed(store)
+    store.update_item(item["id"], {"blocker": "막혔다"}, actor="codex")
+
+    entry = store.read_history(item_id=item["id"])[0]
+    # The item carried `blocker` from creation, holding null. That is a value.
+    assert entry["values"]["blocker"]["before"] == {"present": True, "value": None}
+
+    # `title` did not exist before the item did. That is not the same thing.
+    created = store.read_history(item_id=item["id"])[-1]
+    assert created["values"]["title"]["before"] == {"present": False}
+
+
+def test_a_long_value_is_clipped_and_says_so(tmp_path: Path) -> None:
+    """A cap that hides its own effect would be a lie."""
+    store = make_store(tmp_path)
+    item = seed(store)
+    long_detail = "가" * 3_000
+    store.update_item(item["id"], {"detail": long_detail}, actor="codex")
+
+    after = store.read_history(item_id=item["id"])[0]["values"]["detail"]["after"]
+    assert after["truncated"] is True
+    assert after["length"] == 3_000
+    assert len(after["value"]) == 2_000
+    assert after["sha256"] == hashlib.sha256(long_detail.encode("utf-8")).hexdigest()
+
+
+def test_entries_written_before_values_existed_are_reported_empty(tmp_path: Path) -> None:
+    """Not reconstructed from the item as it stands: that would be a guess."""
+    store = make_store(tmp_path)
+    item = seed(store)
+    line = json.loads(store.history_path.read_text(encoding="utf-8").splitlines()[0])
+    line.pop("values")
+    store.history_path.write_text(json.dumps(line, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    assert store.read_history(item_id=item["id"])[0]["values"] == {}

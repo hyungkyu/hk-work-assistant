@@ -12,6 +12,7 @@ repaired, or silently defaulted.
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -205,6 +206,44 @@ PHASES = (
     "assigned", "started", "progress", "review",
     "build", "deploy", "verified", "failed",
 )
+
+# A sentinel for "this field was not there", kept apart from None so the
+# history can tell an absent field from one holding null.
+_MISSING = object()
+
+# How much of a changed value the history keeps verbatim. The cap exists to
+# stop an append-only stream from growing without bound, and a cap that hides
+# its own effect would be a lie, so a clipped value says so and carries the
+# original length and digest.
+MAX_HISTORY_VALUE = 2_000
+
+
+def _history_value(value: Any) -> dict[str, Any]:
+    """One side of a change, small enough to keep forever."""
+    if value is _MISSING:
+        return {"present": False}
+    if not isinstance(value, str):
+        return {"present": True, "value": value}
+    if len(value) <= MAX_HISTORY_VALUE:
+        return {"present": True, "value": value}
+    return {
+        "present": True,
+        "value": value[:MAX_HISTORY_VALUE],
+        "truncated": True,
+        "length": len(value),
+        "sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+    }
+
+
+def _field_changes(
+    before: Mapping[str, Any], after: Mapping[str, Any]
+) -> dict[str, dict[str, Any]]:
+    """What each changed field was and what it became."""
+    return {
+        key: {"before": _history_value(before.get(key, _MISSING)), "after": _history_value(value)}
+        for key, value in after.items()
+    }
+
 
 # An operational note written by the caller for the timeline. It is not the
 # item's own text: `detail` and `progress_summary` still never reach the
@@ -662,6 +701,10 @@ class WorkStore:
             except json.JSONDecodeError:
                 continue
             if item_id is None or entry.get("item_id") == item_id:
+                # Entries written before values were kept carry none. Reported
+                # empty rather than reconstructed from the item as it stands
+                # now, which would be a guess wearing a record's clothes.
+                entry.setdefault("values", {})
                 entries.append(entry)
         return entries[-limit:][::-1]
 
@@ -696,6 +739,10 @@ class WorkStore:
                 "status": raw.get("status"),
                 "status_from": raw.get("status_from"),
                 "fields": raw.get("fields") or [],
+                # Entries written before values were kept carry none, and are
+                # reported empty rather than reconstructed from the item as it
+                # stands now -- that would be a guess wearing a record's clothes.
+                "values": raw.get("values") or {},
                 "actor": resolve_actor(raw.get("actor"), at=at),
                 "directed_by": (
                     resolve_actor(raw.get("directed_by"), at=at)
@@ -976,7 +1023,12 @@ class WorkStore:
         document["items"].append(item)
         self._commit(document, now)
         self._append_history(
-            "work.created", item, actor=actor, fields=sorted(changes), context=context
+            "work.created",
+            item,
+            actor=actor,
+            fields=sorted(changes),
+            context=context,
+            values=_field_changes({key: _MISSING for key in changes}, changes),
         )
         return item
 
@@ -993,6 +1045,11 @@ class WorkStore:
         if item["archived_at"] is not None:
             raise WorkConflictError(f"work item is archived: {item['id']}")
         previous_status = item["status"]
+        # Read before the update, or there is nothing left to compare against.
+        # `_MISSING` rather than None: a field that was absent and a field that
+        # held an empty string are different facts, and the history has to be
+        # able to say which.
+        before = {key: item.get(key, _MISSING) for key in changes}
         now = _utc_now()
         item.update(changes)
         _apply_status_timestamps(
@@ -1009,6 +1066,7 @@ class WorkStore:
             fields=sorted(changes),
             status_from=previous_status,
             context=context,
+            values=_field_changes(before, changes),
         )
         return item
 
@@ -1033,13 +1091,24 @@ class WorkStore:
         fields: Sequence[str],
         status_from: str | None = None,
         context: Mapping[str, Any] | None = None,
+        values: Mapping[str, Any] | None = None,
     ) -> None:
-        """Record that a change happened.
+        """Record that a change happened, and what it changed from and to.
 
         Identifiers, field names, status enum values, and the caller's own
         timeline context. The item's free text -- `detail`, `progress_summary`,
         `blocker`, `next_action` -- is still never written here, so the history
         stream cannot become a copy of the board.
+
+        [HK P0 조건 5 로 뒤집힘, 2026-09-04] The paragraph above was the right
+        balance while `progress_summary` was allowed to carry the running
+        account of the work. It no longer is: that field is being cut to three
+        lines, so if the history keeps only field *names* the account is lost
+        entirely -- a record that says what changed but not what it became is a
+        notification, not a history. Values are therefore kept, clipped at
+        MAX_HISTORY_VALUE and marked when clipped. The original concern was
+        size, not secrecy; nothing here was ever a secrets boundary, and the
+        board's text is capped per field, so the stream stays bounded.
         """
         entry = {
             "at": _utc_now(),
@@ -1048,6 +1117,7 @@ class WorkStore:
             "item_id": item["id"],
             "revision": item["revision"],
             "fields": sorted(fields),
+            "values": dict(values) if values else {},
             "status": item["status"],
             # Who asked and who is carrying it, taken from the item itself so
             # a timeline never has to join back to the document to be read.
