@@ -364,3 +364,110 @@ def test_a_google_session_still_records_the_email_not_the_subject(
     assert session is not None
     assert session["sub"] == "owner"
     assert admin_web.session_actor(session) == "hyungkyu.ryu@rlwrld.ai"
+
+
+# ------------------------------------------------- what an agent may and may not do
+
+
+def _agent(name: str) -> dict[str, str]:
+    token, csrf = admin_web.store().issue_agent_session(name)
+    return {"token": token, "csrf": csrf}
+
+
+def test_an_agent_can_see_every_screen(config_root: Path, owner: dict[str, str]) -> None:
+    """Reads are open. Not seeing a screen is how several wrong calls got made."""
+    item = create(owner)
+    noa = _agent("noa")
+
+    assert work_web.list_items(authorized(noa))["items"]
+    assert work_web.get_item(item["id"], authorized(noa))["item"]["id"] == item["id"]
+    assert work_web.work_meta(authorized(noa))["statuses"]
+    assert "entries" in work_web.work_timeline(item["id"], authorized(noa))
+    assert "items" in work_web.work_history(authorized(noa))
+
+
+def test_an_agent_can_write_its_own_item(config_root: Path, owner: dict[str, str]) -> None:
+    item = create(owner, assigned_to="noa")
+    noa = _agent("noa")
+
+    updated = asyncio.run(
+        work_web.update_item(
+            item["id"], authorized(noa, body={"fields": {"progress_summary": "진행했다"}})
+        )
+    )["item"]
+    assert updated["progress_summary"] == "진행했다"
+    # Recorded as the board already knows this party, not as a second spelling.
+    assert work_web.work_history(authorized(noa), item_id=item["id"])["items"][0]["actor"] == "noa"
+
+
+def test_an_agent_cannot_write_another_agents_item(
+    config_root: Path, owner: dict[str, str]
+) -> None:
+    """Handing work to another executor is directing them, which is a role."""
+    item = create(owner, assigned_to="boa")
+    noa = _agent("noa")
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            work_web.update_item(
+                item["id"], authorized(noa, body={"fields": {"progress_summary": "남의 것"}})
+            )
+        )
+    assert error.value.status_code == 403
+
+
+def test_an_agent_may_open_an_item(config_root: Path) -> None:
+    """Recording work that exists is never the dangerous direction."""
+    noa = _agent("noa")
+    created = asyncio.run(
+        work_web.create_item(
+            authorized(noa, body={"fields": {"title": "내가 연 항목", "assigned_to": "noa"}})
+        )
+    )["item"]
+    assert created["requested_by"] == "noa"
+
+
+def test_an_agent_cannot_archive_anything(config_root: Path, owner: dict[str, str]) -> None:
+    """Archiving is the one board action that cannot be undone by its author."""
+    item = create(owner, assigned_to="noa")
+    noa = _agent("noa")
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(work_web.archive_item(item["id"], authorized(noa, body={})))
+    assert error.value.status_code == 403
+
+
+def test_an_agent_cannot_reach_settings_or_credentials(config_root: Path) -> None:
+    """If an agent could change super_admin_google_email the boundary means nothing."""
+    noa = _agent("noa")
+    for call in (
+        lambda: admin_web.get_settings(authorized(noa)),
+        lambda: asyncio.run(admin_web.put_settings(authorized(noa, body={"a": 1}))),
+        lambda: asyncio.run(
+            admin_web.put_secret("slack_token", authorized(noa, body={"value": "xoxp-x"}))
+        ),
+    ):
+        with pytest.raises(HTTPException) as error:
+            call()
+        assert error.value.status_code == 403
+
+
+def test_a_revoked_agent_loses_the_board_immediately(
+    config_root: Path, owner: dict[str, str]
+) -> None:
+    noa = _agent("noa")
+    assert work_web.list_items(authorized(noa))["items"] is not None
+
+    admin_web.store().revoke_agent("agent:noa")
+    with pytest.raises(HTTPException) as error:
+        work_web.list_items(authorized(noa))
+    assert error.value.status_code == 401
+
+
+def test_the_password_door_cannot_claim_an_agents_name(
+    config_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One spelling, one authority. Otherwise history cannot tell them apart."""
+    with pytest.raises(HTTPException) as error:
+        _emergency(config_root, monkeypatch, actor="noa")
+    assert error.value.status_code == 400

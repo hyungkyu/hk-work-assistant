@@ -46,6 +46,14 @@ def _session(request: Request) -> dict[str, Any] | None:
     return store().read_session(request.cookies.get(SESSION_COOKIE))
 
 
+def agent_name(current: Mapping[str, Any]) -> str | None:
+    """The agent behind a session, or None when a person is behind it."""
+    subject = str(current.get("sub") or "")
+    if current.get("role") != "agent" or not subject.startswith("agent:"):
+        return None
+    return subject[len("agent:") :] or None
+
+
 def session_actor(current: Mapping[str, Any]) -> str:
     """The name to record for whoever is acting.
 
@@ -54,6 +62,13 @@ def session_actor(current: Mapping[str, Any]) -> str:
     Reading `email` alone recorded every local edit as `local-emergency`, so a
     board written by several parties read as though one party wrote it.
     """
+    name = agent_name(current)
+    if name is not None:
+        # The board already knows this party as `noa`, and cowork.resolve_actor
+        # resolves that spelling. Recording `agent:noa` beside it would give one
+        # party two names in the same history, which is the drift that makes a
+        # trail unreadable. The subject keeps the prefix; the record does not.
+        return name
     return str(current.get("email") or current.get("sub") or EMERGENCY_ACTOR)
 
 
@@ -80,6 +95,14 @@ def _emergency_subject(body: Mapping[str, Any]) -> str:
             status_code=400,
             detail="actor cannot be an email address: this login proves no identity",
         )
+    if name in store().AGENT_NAMES:
+        # An agent's name belongs to the door that can prove it. Letting the
+        # password door claim it would put two different authorities behind one
+        # spelling in the history.
+        raise HTTPException(
+            status_code=400,
+            detail="actor is an agent name: agents sign in with their own session",
+        )
     if not EMERGENCY_ACTOR_PATTERN.match(name):
         raise HTTPException(
             status_code=400,
@@ -92,6 +115,22 @@ def require_company_session(request: Request) -> dict[str, Any]:
     current = _session(request)
     if current is None or current.get("role") not in {"company_user", "super_admin"}:
         raise HTTPException(status_code=401, detail="company Google login required")
+    return current
+
+
+def require_board_session(request: Request) -> dict[str, Any]:
+    """A session allowed to read the board: the owner, or any agent.
+
+    Reading is opened to everyone who works here. Several of this week's wrong
+    calls were made by someone who could not see a screen and reasoned from the
+    clock instead, so withholding a view costs more than it protects. What stays
+    shut is the small set of things that cannot be undone.
+    """
+    current = _session(request)
+    if current is None:
+        raise HTTPException(status_code=401, detail="board session required")
+    if current.get("role") not in {"super_admin", "agent"}:
+        raise HTTPException(status_code=403, detail="board access required")
     return current
 
 

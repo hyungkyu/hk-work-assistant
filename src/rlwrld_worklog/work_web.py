@@ -15,8 +15,15 @@ from contextlib import contextmanager
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from .admin_web import _require_csrf, require_super_admin_session, session_actor, store
-from .cowork import registry_as_dict
+from .admin_web import (
+    _require_csrf,
+    agent_name,
+    require_board_session,
+    require_super_admin_session,
+    session_actor,
+    store,
+)
+from .cowork import DIRECTING_PARTIES, registry_as_dict
 from .work_store import (
     PHASES,
     PRIORITIES,
@@ -73,6 +80,24 @@ def _actor(current: Mapping[str, Any]) -> str:
     return session_actor(current)
 
 
+def _require_may_write(current: Mapping[str, Any], item: Mapping[str, Any]) -> None:
+    """Writing someone else's item is directing them, and that is a role.
+
+    Rule 8 says an executor does not hand work to another executor; the same
+    sentence expressed as a permission. A person, and an agent standing in for a
+    judgement role, may write any item. Everyone else may write their own, which
+    is what recording your own progress means.
+    """
+    name = agent_name(current)
+    if name is None or name in DIRECTING_PARTIES:
+        return
+    if str(item.get("assigned_to") or "") != name:
+        raise HTTPException(
+            status_code=403,
+            detail="an agent may write its own items; issuing work to another is a judgement role",
+        )
+
+
 def _concurrency(body: Mapping[str, Any]) -> dict[str, Any]:
     expected_revision = body.get("expected_revision")
     if expected_revision is not None and (
@@ -110,7 +135,7 @@ def work_meta(request: Request) -> dict[str, Any]:
     client written against the earlier response keeps working; everything the
     four-stage board needs is added beside them.
     """
-    require_super_admin_session(request)
+    require_board_session(request)
     payload = status_metadata()
     payload["statuses"] = list(STATUSES)
     payload["priorities"] = list(PRIORITIES)
@@ -129,7 +154,7 @@ def list_items(
     assigned_to: str | None = None,
     limit: Annotated[int, Query(ge=1, le=2_000)] = 500,
 ) -> dict[str, Any]:
-    require_super_admin_session(request)
+    require_board_session(request)
     with _translated_errors():
         payload = work_store().list_items(
             include_archived=include_archived,
@@ -142,14 +167,14 @@ def list_items(
 
 @router.get("/items/{item_id}")
 def get_item(item_id: str, request: Request) -> dict[str, Any]:
-    require_super_admin_session(request)
+    require_board_session(request)
     with _translated_errors():
         return {"item": work_store().get_item(item_id)}
 
 
 @router.post("/items", status_code=201)
 async def create_item(request: Request) -> dict[str, Any]:
-    current = require_super_admin_session(request)
+    current = require_board_session(request)
     _require_csrf(request, current)
     body = await _json_object(request)
     actor = _actor(current)
@@ -165,7 +190,7 @@ async def create_item(request: Request) -> dict[str, Any]:
 
 @router.patch("/items/{item_id}")
 async def update_item(item_id: str, request: Request) -> dict[str, Any]:
-    current = require_super_admin_session(request)
+    current = require_board_session(request)
     _require_csrf(request, current)
     body = await _json_object(request)
     expectations = _concurrency(body)
@@ -174,6 +199,7 @@ async def update_item(item_id: str, request: Request) -> dict[str, Any]:
     fields.pop("expected_revision", None)
     fields.pop("expected_updated_at", None)
     with _translated_errors():
+        _require_may_write(current, work_store().get_item(item_id))
         item = work_store().update_item(item_id, fields, actor=actor, **expectations)
     _audit("work.updated", actor=actor, item=item)
     return {"item": item}
@@ -205,7 +231,7 @@ def work_timeline(
     fields existed come back marked ``legacy`` with their unknown fields
     named, rather than back-filled with a guess.
     """
-    require_super_admin_session(request)
+    require_board_session(request)
     with _translated_errors():
         return work_store().read_timeline(item_id, limit=limit)
 
@@ -216,6 +242,6 @@ def work_history(
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     item_id: str | None = None,
 ) -> dict[str, Any]:
-    require_super_admin_session(request)
+    require_board_session(request)
     with _translated_errors():
         return {"items": work_store().read_history(limit=limit, item_id=item_id)}
