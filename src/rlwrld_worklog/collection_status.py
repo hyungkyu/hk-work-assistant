@@ -167,6 +167,15 @@ class CollectionPaths:
     ledger_root: Path
     config_root: Path
     legacy_root: Path
+    # Every archive this view reads, the live one first. A backfill writes its
+    # own root rather than merging into the live one, because a raw archive is
+    # the immutable record of what a run saw; so a view that reads only the
+    # live root reports the months held elsewhere as never collected.
+    extra_archive_roots: tuple[Path, ...] = ()
+
+    @property
+    def archive_roots(self) -> tuple[Path, ...]:
+        return (self.archive_root, *self.extra_archive_roots)
 
     @property
     def raw_root(self) -> Path:
@@ -177,13 +186,35 @@ class CollectionPaths:
         return self.archive_root / "manifests"
 
     def relative(self, path: Path) -> str:
-        """A local identifier: relative to the archive root where possible."""
-        for root in (self.archive_root, self.config_root):
+        """A local identifier: relative to whichever root holds it."""
+        for root in (*self.archive_roots, self.config_root):
             try:
                 return str(path.relative_to(root))
             except ValueError:
                 continue
         return path.name
+
+
+def discover_backfill_roots(archive_root: Path) -> tuple[Path, ...]:
+    """Backfill archives sitting beside the live one.
+
+    Found rather than configured, and the reasoning is worth keeping: a backfill
+    root appears when a person runs a backfill, and a list that has to be edited
+    separately would leave the next one invisible until somebody remembered.
+    The screen would then be wrong in exactly the way it is wrong today. What
+    bounds the guessing is that a candidate must carry a `manifests` directory,
+    and that every root actually read is named in the payload - a root taken by
+    mistake is visible rather than silent.
+    """
+    try:
+        candidates = sorted(archive_root.iterdir())
+    except OSError:
+        return ()
+    return tuple(
+        path
+        for path in candidates
+        if path.is_dir() and path.name.startswith("backfill-") and (path / "manifests").is_dir()
+    )
 
 
 def paths_from_environment() -> CollectionPaths:
@@ -194,11 +225,19 @@ def paths_from_environment() -> CollectionPaths:
         Path(configured_config) if configured_config else Path.home() / ".config/hk-work-assistant"
     )
     legacy_root = Path(os.environ.get("LEGACY_ROOT") or archive_root / "legacy" / "claude" / "weekly")
+    configured_extra = os.environ.get("BACKFILL_ARCHIVE_ROOTS")
+    if configured_extra is not None:
+        # An explicit setting wins, including an empty one: "read only the live
+        # root" has to remain sayable.
+        extra = tuple(Path(part) for part in configured_extra.split(os.pathsep) if part.strip())
+    else:
+        extra = discover_backfill_roots(archive_root)
     return CollectionPaths(
         archive_root=archive_root,
         ledger_root=ledger_root,
         config_root=config_root,
         legacy_root=legacy_root,
+        extra_archive_roots=tuple(root for root in extra if root != archive_root),
     )
 
 
@@ -306,9 +345,21 @@ def classify_rule(
     stamp = stamp_from_manifest(manifest or {})
     if stamp is not None:
         known = rule_for_version(stamp["version"])
+        # A run stamps the rule that was active when it started, which is the
+        # honest thing to record even when that rule says nothing about the
+        # source being captured - the August GitHub runs stamped V2, and V2
+        # does not name GitHub. The manifest is not wrong and must not be
+        # rewritten; the view has to be able to say so instead of either
+        # failing or quietly filling the gap in with the current rule.
+        declares_source = (
+            None
+            if known is None
+            else known.source_rule(COLLECTOR_TO_SOURCE.get(source, source)) is not None
+        )
         return {
             "version": stamp["version"],
             "attribution": "declared",
+            "declares_source": declares_source,
             "digest": stamp["digest"],
             "schema_version": stamp["schema_version"],
             "known_version": known is not None,
@@ -733,6 +784,8 @@ class RunIndex:
     runs: dict[tuple[str, str, str], dict[str, Any]] = field(default_factory=dict)
     environments: dict[str, set[str]] = field(default_factory=dict)
     manifest_errors: list[dict[str, Any]] = field(default_factory=list)
+    # Named so a reader can tell "no run here" from "we never looked here".
+    archive_roots: list[str] = field(default_factory=list)
 
     def upsert(self, source: str, environment: str, run_id: str, values: Mapping[str, Any]) -> None:
         key = (source, environment, run_id)
@@ -788,109 +841,117 @@ def build_run_index(
     wanted = tuple(sources) if sources is not None else COLLECTOR_SOURCES
     index = RunIndex()
 
-    for source in wanted:
-        if source not in COLLECTOR_SOURCES:
-            continue
-        manifest_source = safe_child(paths.manifest_root, source, root=paths.archive_root)
-        if manifest_source is not None:
-            for env in _dir_names(manifest_source):
+    # Each root is validated against itself. Sharing one root for the path
+    # checks would let a path under the live archive pass while being read from
+    # a backfill one, which is the guard's whole job.
+    for archive_root in paths.archive_roots:
+        index.archive_roots.append(str(archive_root))
+        for source in wanted:
+            if source not in COLLECTOR_SOURCES:
+                continue
+            manifest_source = safe_child(archive_root / "manifests", source, root=archive_root)
+            if manifest_source is not None:
+                for env in _dir_names(manifest_source):
+                    if environment is not None and env != environment:
+                        index.environments.setdefault(source, set()).add(env)
+                        continue
+                    env_dir = safe_child(manifest_source, env, root=archive_root)
+                    if env_dir is None:
+                        continue
+                    index.environments.setdefault(source, set()).add(env)
+                    for run_id, names in _manifest_entries(env_dir, archive_root).items():
+                        latest = names[-1]
+                        path = env_dir / latest
+                        summary = load_manifest_summary(
+                            path,
+                            source=source,
+                            environment=env,
+                            run_id=run_id,
+                            relative_path=paths.relative(path),
+                        )
+                        summary["manifest_revisions"] = len(names)
+                        summary["manifest_names"] = names
+                        summary["archive_root"] = str(archive_root)
+                        index.upsert(source, env, run_id, summary)
+                        if summary.get("malformed"):
+                            index.manifest_errors.append(
+                                {
+                                    "source": source,
+                                    "environment": env,
+                                    "run_id": run_id,
+                                    "manifest_path": summary.get("manifest_path"),
+                                    "archive_root": str(archive_root),
+                                    "reason": summary.get("malformed_reason"),
+                                }
+                            )
+
+            if not include_active:
+                continue
+            raw_source = safe_child(archive_root / "raw", source, root=archive_root)
+            if raw_source is None:
+                continue
+            for env in _dir_names(raw_source):
                 if environment is not None and env != environment:
                     index.environments.setdefault(source, set()).add(env)
                     continue
-                env_dir = safe_child(manifest_source, env, root=paths.archive_root)
+                env_dir = safe_child(raw_source, env, root=archive_root)
                 if env_dir is None:
                     continue
                 index.environments.setdefault(source, set()).add(env)
-                for run_id, names in _manifest_entries(env_dir, paths.archive_root).items():
-                    latest = names[-1]
-                    path = env_dir / latest
-                    summary = load_manifest_summary(
-                        path,
-                        source=source,
-                        environment=env,
-                        run_id=run_id,
-                        relative_path=paths.relative(path),
-                    )
-                    summary["manifest_revisions"] = len(names)
-                    summary["manifest_names"] = names
-                    index.upsert(source, env, run_id, summary)
-                    if summary.get("malformed"):
-                        index.manifest_errors.append(
+                for day_dir in _recent_day_dirs(
+                    env_dir, root=archive_root, limit=MAX_ACTIVE_DAY_DIRS
+                ):
+                    for run_id in _dir_names(day_dir):
+                        run_dir = safe_child(day_dir, run_id, root=archive_root)
+                        if run_dir is None:
+                            continue
+                        key = (source, env, run_id)
+                        if key in index.runs:
+                            # The run finished: its manifest is the authority and
+                            # already carries the file list, so the directory is
+                            # not walked at all.
+                            index.runs[key].setdefault("raw_run_dir", paths.relative(run_dir))
+                            continue
+                        scan = scan_raw_run(run_dir)
+                        last_mtime = parse_instant(scan.get("last_mtime"))
+                        age = (moment - last_mtime).total_seconds() if last_mtime else None
+                        state = "running"
+                        reason = None
+                        if age is None:
+                            state = "unknown"
+                            reason = "the run directory has no readable modification time"
+                        elif age > stale_after_seconds:
+                            state = "stale"
+                            reason = (
+                                f"no raw page written for {int(age)}s and no manifest exists"
+                            )
+                        index.upsert(
+                            source,
+                            env,
+                            run_id,
                             {
-                                "source": source,
-                                "environment": env,
-                                "run_id": run_id,
-                                "manifest_path": summary.get("manifest_path"),
-                                "reason": summary.get("malformed_reason"),
-                            }
+                                "state": state,
+                                "state_reason": reason,
+                                "manifest_path": None,
+                                "manifest_status": None,
+                                "raw_run_dir": paths.relative(run_dir),
+                                "raw_file_count": scan.get("file_count"),
+                                "raw_bytes": scan.get("bytes"),
+                                "raw_last_mtime": scan.get("last_mtime"),
+                                "raw_scan_truncated": scan.get("scan_truncated", False),
+                                "raw_from_manifest": False,
+                                "archive_root": str(archive_root),
+                                "last_activity_at": scan.get("last_mtime"),
+                                "started_at": _run_id_instant(run_id),
+                                "rule": classify_rule(
+                                    None,
+                                    manifest_relative_path=None,
+                                    source=source,
+                                    started_at=parse_instant(_run_id_instant(run_id)),
+                                    run_id=run_id,
+                                ),
+                            },
                         )
-
-        if not include_active:
-            continue
-        raw_source = safe_child(paths.raw_root, source, root=paths.archive_root)
-        if raw_source is None:
-            continue
-        for env in _dir_names(raw_source):
-            if environment is not None and env != environment:
-                index.environments.setdefault(source, set()).add(env)
-                continue
-            env_dir = safe_child(raw_source, env, root=paths.archive_root)
-            if env_dir is None:
-                continue
-            index.environments.setdefault(source, set()).add(env)
-            for day_dir in _recent_day_dirs(
-                env_dir, root=paths.archive_root, limit=MAX_ACTIVE_DAY_DIRS
-            ):
-                for run_id in _dir_names(day_dir):
-                    run_dir = safe_child(day_dir, run_id, root=paths.archive_root)
-                    if run_dir is None:
-                        continue
-                    key = (source, env, run_id)
-                    if key in index.runs:
-                        # The run finished: its manifest is the authority and
-                        # already carries the file list, so the directory is
-                        # not walked at all.
-                        index.runs[key].setdefault("raw_run_dir", paths.relative(run_dir))
-                        continue
-                    scan = scan_raw_run(run_dir)
-                    last_mtime = parse_instant(scan.get("last_mtime"))
-                    age = (moment - last_mtime).total_seconds() if last_mtime else None
-                    state = "running"
-                    reason = None
-                    if age is None:
-                        state = "unknown"
-                        reason = "the run directory has no readable modification time"
-                    elif age > stale_after_seconds:
-                        state = "stale"
-                        reason = (
-                            f"no raw page written for {int(age)}s and no manifest exists"
-                        )
-                    index.upsert(
-                        source,
-                        env,
-                        run_id,
-                        {
-                            "state": state,
-                            "state_reason": reason,
-                            "manifest_path": None,
-                            "manifest_status": None,
-                            "raw_run_dir": paths.relative(run_dir),
-                            "raw_file_count": scan.get("file_count"),
-                            "raw_bytes": scan.get("bytes"),
-                            "raw_last_mtime": scan.get("last_mtime"),
-                            "raw_scan_truncated": scan.get("scan_truncated", False),
-                            "raw_from_manifest": False,
-                            "last_activity_at": scan.get("last_mtime"),
-                            "started_at": _run_id_instant(run_id),
-                            "rule": classify_rule(
-                                None,
-                                manifest_relative_path=None,
-                                source=source,
-                                started_at=parse_instant(_run_id_instant(run_id)),
-                                run_id=run_id,
-                            ),
-                        },
-                    )
 
     _merge_snapshots(
         index,
@@ -1787,6 +1848,7 @@ def list_runs(
             key: sorted(value) for key, value in sorted(run_index.environments.items())
         },
         "manifest_errors": run_index.manifest_errors[:50],
+        "archive_roots": list(run_index.archive_roots) or [str(paths.archive_root)],
     }
 
 
@@ -1837,6 +1899,9 @@ def overview(
         "manifest_errors": index.manifest_errors[:50],
         "roots": {
             "archive_root": str(paths.archive_root),
+            # Every archive actually read, so "nothing here" can be told apart
+            # from "we never looked here".
+            "archive_roots": list(index.archive_roots) or [str(paths.archive_root)],
             "ledger_root": str(paths.ledger_root),
             "legacy_root": str(paths.legacy_root),
             "progress_root": str(progress_dir),

@@ -1380,3 +1380,138 @@ def test_quality_verdicts_are_not_disturbed_by_the_time_axis(
     assert cell["coverage"] == "partial"
     assert cell["completeness"] == "incomplete"
     assert cell["time_coverage"] == "complete"
+
+
+# ------------------------------------------------- archives beside the live one
+
+
+def _backfill_manifest(root: Path, *, source: str, run_id: str, **overrides: Any) -> Path:
+    """A manifest in a backfill archive, written the way a backfill writes one."""
+    payload: dict[str, Any] = {
+        "schema_version": 2,
+        "source": source,
+        "environment": "production",
+        "run_id": run_id,
+        "status": "success",
+        "capture_profile": "live-slack-web-api/v1",
+        "capture_density": "day_slice",
+        "dry_run": False,
+        "started_at": "2026-08-05T00:00:00+00:00",
+        "finished_at": "2026-08-05T00:30:00+00:00",
+        "requested_window": {"since": "2026-08-01T00:00:00+00:00"},
+        "files": [],
+        **active_rule_stamp(),
+    }
+    payload.update(overrides)
+    directory = root / "manifests" / source / "production"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{run_id}.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def test_a_backfill_archive_beside_the_live_one_is_read_too(
+    paths: status.CollectionPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """August lives in its own root, and a view that reads one root calls it missing."""
+    write_manifest(paths, run_id="20260901T000000Z-aaaaaa")
+    _backfill_manifest(
+        paths.archive_root / "backfill-2026-08", source="slack", run_id="20260805T000000Z-bbbbbb"
+    )
+    status.clear_caches()
+    rescanned = status.paths_from_environment()
+
+    index = status.build_run_index(rescanned, include_active=False)
+    assert {run["run_id"] for run in index.runs.values()} == {
+        "20260901T000000Z-aaaaaa",
+        "20260805T000000Z-bbbbbb",
+    }
+
+
+def test_the_view_names_every_archive_it_read(
+    paths: status.CollectionPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """So "nothing here" can be told apart from "we never looked here"."""
+    _backfill_manifest(
+        paths.archive_root / "backfill-2026-08", source="slack", run_id="20260805T000000Z-bbbbbb"
+    )
+    status.clear_caches()
+    rescanned = status.paths_from_environment()
+
+    payload = status.overview(rescanned)
+    assert payload["roots"]["archive_roots"] == [
+        str(rescanned.archive_root),
+        str(rescanned.archive_root / "backfill-2026-08"),
+    ]
+
+
+def test_a_directory_without_manifests_is_not_taken_for_an_archive(
+    paths: status.CollectionPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Discovery has to be bounded, or any stray directory becomes evidence."""
+    (paths.archive_root / "backfill-nothing-here").mkdir(parents=True, exist_ok=True)
+    (paths.archive_root / "not-a-backfill" / "manifests").mkdir(parents=True, exist_ok=True)
+    status.clear_caches()
+    rescanned = status.paths_from_environment()
+
+    assert rescanned.extra_archive_roots == ()
+
+
+def test_the_archive_list_can_be_set_and_can_be_set_to_nothing(
+    paths: status.CollectionPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """"Read only the live root" has to stay sayable, so an empty setting wins."""
+    _backfill_manifest(
+        paths.archive_root / "backfill-2026-08", source="slack", run_id="20260805T000000Z-bbbbbb"
+    )
+    monkeypatch.setenv("BACKFILL_ARCHIVE_ROOTS", "")
+    status.clear_caches()
+    assert status.paths_from_environment().extra_archive_roots == ()
+
+    elsewhere = paths.archive_root.parent / "elsewhere"
+    monkeypatch.setenv("BACKFILL_ARCHIVE_ROOTS", str(elsewhere))
+    status.clear_caches()
+    assert status.paths_from_environment().extra_archive_roots == (elsewhere,)
+
+
+def test_a_run_says_which_archive_it_came_from(
+    paths: status.CollectionPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backfill = paths.archive_root / "backfill-2026-08"
+    _backfill_manifest(backfill, source="slack", run_id="20260805T000000Z-bbbbbb")
+    status.clear_caches()
+    rescanned = status.paths_from_environment()
+
+    index = status.build_run_index(rescanned, include_active=False)
+    roots = {run["run_id"]: run.get("archive_root") for run in index.runs.values()}
+    assert roots["20260805T000000Z-bbbbbb"] == str(backfill)
+
+
+def test_a_stamped_rule_that_does_not_name_the_source_is_said_so_not_filled_in(
+    paths: status.CollectionPaths,
+) -> None:
+    """The August GitHub runs stamped V2, and V2 does not name GitHub.
+
+    The manifest is honest and must not be rewritten, so the view has to be able
+    to report the gap rather than failing on it or quietly substituting the
+    current rule.
+    """
+    stamped = status.classify_rule(
+        {"collection_rule_version": "V2", "collection_rule_digest": None},
+        manifest_relative_path="manifests/github/production/x.json",
+        source="github",
+        started_at=None,
+        run_id="20260902T140337Z-0aa0aa98d8ce",
+    )
+    assert stamped["attribution"] == "declared"
+    assert stamped["version"] == "V2"
+    assert stamped["declares_source"] is False
+
+    slack = status.classify_rule(
+        {"collection_rule_version": "V2", "collection_rule_digest": None},
+        manifest_relative_path="manifests/slack/production/x.json",
+        source="slack",
+        started_at=None,
+        run_id="20260902T140337Z-0aa0aa98d8ce",
+    )
+    assert slack["declares_source"] is True

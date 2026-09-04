@@ -1342,7 +1342,12 @@
     function collectionRuleLabel(rule) {
       if (!rule || !rule.version) return '불명';
       const attribution = RULE_ATTRIBUTION_LABELS[rule.attribution] || rule.attribution || '불명';
-      return `${rule.version} · ${attribution}`;
+      // A run stamps whatever rule was active when it started, and that rule
+      // may say nothing about the source it captured. Saying so is the point:
+      // the manifest is honest, and neither failing on it nor filling the gap
+      // in with the current rule would be.
+      const undeclared = rule.declares_source === false ? ' · 규칙이 이 소스를 선언 안 함' : '';
+      return `${rule.version} · ${attribution}${undeclared}`;
     }
 
     function setCollectionState(message, isError = false) {
@@ -1694,7 +1699,11 @@
         fillCollectionEnvironments(overview.environments);
         renderCollectionCards(overview);
         renderCollectionRuns(overview);
-        $('collection-rule-badge').textContent = `원본 루트 ${overview.roots.archive_root}`;
+        const scanned = overview.roots.archive_roots || [overview.roots.archive_root];
+        $('collection-rule-badge').textContent = scanned.length > 1
+          ? `원본 루트 ${scanned.length}곳 · ${overview.roots.archive_root} 외 ${scanned.length - 1}`
+          : `원본 루트 ${overview.roots.archive_root}`;
+        $('collection-rule-badge').title = scanned.join('\n');
         collectionState.overviewAt = overview.generated_at;
         collectionState.scope = overview.environment_scope || 'production';
         renderFreshness(collectionState.overviewAt, collectionState.coverageAt);
@@ -1942,6 +1951,12 @@
       try {
         const overview = await api('/api/v1/admin/collection/overview?limit=1');
         rows.push(['외부 원본 루트', overview.roots.archive_root]);
+        // Naming every archive that was read, so a month held in a backfill
+        // root is not reported as never collected, and a root nobody scanned
+        // is visible by its absence from this list.
+        (overview.roots.archive_roots || []).slice(1).forEach((root, index) => {
+          rows.push([`백필 아카이브 ${index + 1}`, root]);
+        });
         rows.push(['원장 staging 루트', overview.roots.ledger_root]);
         rows.push(['레거시 루트', overview.roots.legacy_root]);
         rows.push(['진행 스냅숏', overview.roots.progress_available ? `사용 가능 · ${overview.roots.progress_root}` : `미생성 · ${overview.roots.progress_root}`]);
