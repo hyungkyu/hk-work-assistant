@@ -1,0 +1,14 @@
+[Unit]
+Description=Check whether the running image is still the committed one
+
+[Timer]
+# Offset from the carrier so a deploy tick reads a tree the carrier has
+# finished moving, rather than one it is halfway through.
+OnBootSec=6min
+OnUnitInactiveSec=10min
+Persistent=true
+AccuracySec=30s
+Unit=hkwa-deploy.service
+
+[Install]
+WantedBy=timers.target

@@ -326,3 +326,26 @@ follows them:
 
 Editing this file changes what an unattended session on the production machine
 will do, with no code change and no test covering it.
+
+## `deploy-tick.sh`
+
+**What it does.** One deploy tick. Refuses a dirty worktree, fast-forwards to
+`origin/main` if it moved, hashes the modules the running container actually
+imports, and stops there if they already match `HEAD`. Otherwise
+`docker compose build`, `docker compose up -d`, and hash again — reporting
+`deployed` only when the running image is byte-identical to the commit.
+
+**Who invokes it.** `hkwa-deploy.service`, driven by `hkwa-deploy.timer` every
+ten minutes. Also runnable by hand: `systemctl --user start hkwa-deploy.service`.
+
+**What it refuses and why.** It will not build from a dirty tree, because an
+image built from uncommitted work cannot be named afterwards. It will not
+report `deployed` on a build it could not verify: `unverified` and
+`image-stale` exist precisely so that "the build command succeeded" is never
+allowed to stand in for "this is what is running".
+
+**Safe to re-run.** Yes. A tick whose image already matches records `current`
+and does nothing.
+
+**State.** `incoming/last-deploy.json`, written on every path. Outcome table in
+[dev-prod-split.md](dev-prod-split.md).

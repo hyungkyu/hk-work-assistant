@@ -12,13 +12,14 @@ units="$HOME/.config/systemd/user"
 mkdir -p "$units"
 
 for u in hkwa-incoming.service hkwa-incoming.timer \
+         hkwa-deploy.service hkwa-deploy.timer \
          hkwa-wake.service hkwa-wake.timer; do
   [ -f "$root/deploy/systemd/$u" ] || continue
   sed "s#%h/Documents/ChatGPT/RLWRLD workspace#$root#g" \
     "$root/deploy/systemd/$u" > "$units/$u"
 done
 
-chmod +x "$root/scripts/incoming-tick.sh" "$root/scripts/wake-local.sh" 2>/dev/null || true
+chmod +x "$root"/scripts/*.sh 2>/dev/null || true
 mkdir -p "$root/incoming/applied" "$root/incoming/failed"
 
 # A systemd user service does not inherit the interactive shell's environment.
@@ -42,7 +43,7 @@ else
 fi
 
 systemctl --user daemon-reload
-for t in hkwa-incoming.timer hkwa-wake.timer; do
+for t in hkwa-incoming.timer hkwa-deploy.timer hkwa-wake.timer; do
   [ -f "$units/$t" ] || continue
   systemctl --user enable --now "$t"
   systemctl --user restart "$t"

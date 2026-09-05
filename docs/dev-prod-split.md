@@ -272,3 +272,34 @@ worklog work update {{ITEM_ID}} --actor {{EXECUTOR}} --status in_progress
 `docs/cowork-mailbox.md` Part 3 에 기록돼 있다. 여기서 다시 판정하지 않는다.
 
 스크립트 하나하나의 설명은 `docs/scripts.md` 에 있다.
+
+## 배포도 배치다 — `hkwa-deploy`
+
+`scripts/deploy-tick.sh`, 10분마다. 사람도 세션도 기다리지 않는다.
+
+```
+1  더러운 워크트리면 거부           빌드한 이미지를 아무도 이름 붙일 수 없다
+2  origin/main 이 앞서면 ff-only
+3  도는 이미지의 모듈 해시를 읽는다   앱이 실제로 import 하는 경로에서
+4  HEAD 와 같으면 current, 끝
+5  다르면 build → up -d
+6  다시 해시를 읽어 HEAD 와 대조
+```
+
+**요점은 6번이다.** "빌드했다"는 확인이 아니다. 2026-09-04 에 세 번 연속으로
+"배포됐다"고 보고됐는데, 대조한 것이 앱이 import 하지 않는 `/app/src` 사본이었다.
+이 스크립트는 `rlwrld_worklog.__file__` 이 가리키는 경로에서 해시한다.
+
+| `outcome` | 뜻 | 남은 상태 |
+|---|---|---|
+| `current` | 도는 이미지가 이미 HEAD 다 | 아무것도 안 함 |
+| `deployed` | 빌드·재시작 후 해시가 HEAD 와 일치 | 배포 완료, 증명됨 |
+| `image-stale` | 빌드·재시작했는데 여전히 HEAD 가 아니다 | **컨테이너는 재시작됐다.** 무엇이 도는지 `detail` 이 파일명으로 말한다 |
+| `unverified` | 빌드·재시작했으나 컨테이너가 응답하지 않았다 | 재시작됨. 도는 것 불명 |
+| `build-failed` / `up-failed` | 그 단계에서 실패 | 이전 이미지가 계속 돈다 |
+| `refused` | 더러운 워크트리, 또는 ff 불가 | 아무것도 안 함 |
+| `no-docker` | 사용자 매니저 PATH 에 docker 없음 | 아무것도 안 함 |
+| `busy` | 앞 틱이 아직 돈다 | 아무것도 안 함 |
+
+`image-stale` 과 `unverified` 는 둘 다 "재시작은 했다"는 점에서 위험하다.
+이 둘이 나오면 사람이 봐야 한다.
