@@ -25,6 +25,12 @@ Slack, Calendar and Notion are given a `since` instant. GitHub and Slurm are
 given a window of KST calendar days instead, because that is the key their
 records are filed under; `_kst_window` makes that conversion and is the only
 place in the codebase that makes it.
+
+A run may also carry an exclusive `until`, which turns it from "resume from
+each checkpoint" into "capture this one historical window". Such a run moves no
+checkpoint — see `_advance_checkpoint` — and is refused outright for a source
+that cannot express an upper bound, rather than quietly collecting the live
+head instead.
 """
 
 from __future__ import annotations
@@ -33,7 +39,7 @@ import fcntl
 import json
 import os
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -43,6 +49,17 @@ if TYPE_CHECKING:  # collectors are imported lazily, inside each capture
     from .github_collector import Window
 
 SOURCE_ORDER = ("slack", "google-calendar", "github", "slurm", "notion")
+
+# Sources whose collectors accept an exclusive upper bound, and can therefore
+# capture one historical slice instead of resuming from a checkpoint.
+#
+# Calendar is the one that cannot. Its incremental read is a per-calendar sync
+# token and Google offers no way to ask for "events changed before X", so a
+# bound cannot be expressed at all -- only ignored. A run given `--until` that
+# quietly collected the live head instead would be the one outcome a backfill
+# must never get, so the run is refused rather than widened.
+UNTIL_CAPABLE = ("slack", "notion", "github", "slurm")
+
 LEDGER_SOURCE = {
     "slack": "slack",
     "notion": "notion",
@@ -186,6 +203,10 @@ class DailyConfig:
     ledger_root: Path
     environment: str = "production"
     since: str = DEFAULT_SINCE
+    # Exclusive upper bound, as a KST date or an ISO 8601 instant. Set, the run
+    # is a historical slice: it reads one bounded window and moves no
+    # checkpoint. Unset, the run resumes from each source's checkpoint.
+    until: str | None = None
     sources: tuple[str, ...] = SOURCE_ORDER
     database_url: str | None = None
     load_database: bool = True
@@ -199,6 +220,36 @@ class DailyConfig:
         # production checkpoint, so it always implies a dry run.
         if self.smoke:
             self.dry_run = True
+        if self.until is not None:
+            self._validate_until()
+
+    def _validate_until(self) -> None:
+        """Refuse an unusable slice here, before the lock and the first API call.
+
+        Every one of these is a request that cannot be honoured as asked, and
+        the alternative to refusing is a run that quietly collects a different
+        window than the operator named -- which is indistinguishable, in the
+        archive and on the dashboard, from a window that was genuinely empty.
+        """
+        from .slack_collector import parse_since, parse_until
+
+        refused = [
+            source
+            for source in self.sources
+            if source in SOURCE_ORDER and source not in UNTIL_CAPABLE
+        ]
+        if refused:
+            raise ValueError(
+                f"--until cannot be honoured for {', '.join(sorted(refused))}: that source "
+                "resumes from a sync token rather than a time window, so a bounded slice "
+                "cannot be expressed. Name the sources that can take one with --source."
+            )
+        until = parse_until(self.until)
+        if until <= parse_since(self.since):
+            raise ValueError(
+                f"--until {self.until} is not after --since {self.since}; that window holds "
+                "nothing, and an empty run is reported the same way a quiet day is."
+            )
 
     @property
     def capture_density(self) -> str:
@@ -293,20 +344,43 @@ def _kst_window(config: DailyConfig, *, now: datetime | None = None) -> Window:
       * the end is today's KST date, not the moment the run started, because a
         day still in progress is still the day its records are filed under. The
         next run re-reads it and picks up whatever arrived after this one.
+
+    `config.until` replaces that end. It is an exclusive instant, so the window
+    ends on the KST day holding the last moment the bound admits: a bound at
+    midnight KST ends the window on the previous day, which is what makes
+    `--until 2026-09-01` cover exactly August. A bound mid-day rounds up to
+    that whole day, the same direction the start edge rounds.
     """
     from .github_collector import KST, Window
-    from .slack_collector import parse_since
+    from .slack_collector import parse_since, parse_until
 
     current = now or datetime.now(timezone.utc)
     start = parse_since(config.since, now=current).astimezone(KST).date()
-    end = current.astimezone(KST).date()
+    if config.until is not None:
+        end = (parse_until(config.until) - timedelta(microseconds=1)).astimezone(KST).date()
+    else:
+        end = current.astimezone(KST).date()
     # A `--since` in the future would otherwise describe an interval holding no
     # days, which a collector reports as a clean empty run.
     return Window(start, max(start, end))
 
 
+def _advance_checkpoint(config: DailyConfig) -> bool:
+    """Whether this run is allowed to move a checkpoint at all.
+
+    A dry run is not, and neither is a slice: a watermark moved to a slice's
+    end would assert that everything before that date had been read, and the
+    months between it and the previous watermark would never be fetched again.
+    Slack and Notion force this themselves the moment they see an `until`, and
+    GitHub and Slurm are given `backfill=True` for the same reason -- but a
+    guarantee that depends on four collectors each remembering it is not a
+    guarantee, so the answer is decided here as well.
+    """
+    return not config.dry_run and config.until is None
+
+
 def capture_slack(config: DailyConfig, credentials: Credentials) -> CaptureOutcome:
-    from .slack_collector import make_slack_collector, parse_since
+    from .slack_collector import make_slack_collector, parse_since, parse_until
 
     if not credentials.slack_token:
         raise RuntimeError("no Slack user token is available; add it in the backoffice first")
@@ -321,11 +395,12 @@ def capture_slack(config: DailyConfig, credentials: Credentials) -> CaptureOutco
     try:
         result = collector.collect(
             since=parse_since(config.since),
+            until=parse_until(config.until) if config.until else None,
             expected_team_id=credentials.slack_expected_team_id,
             max_channels=SMOKE_LIMITS["slack_max_channels"] if config.smoke else None,
             max_messages=SMOKE_LIMITS["slack_max_messages"] if config.smoke else None,
             use_search=not config.smoke,
-            advance_checkpoint=not config.dry_run,
+            advance_checkpoint=_advance_checkpoint(config),
         )
     except Exception as error:
         raise CaptureFailed(archive, error) from error
@@ -367,10 +442,12 @@ def capture_google_calendar(config: DailyConfig, credentials: Credentials) -> Ca
         config_root=config.config_root,
     )
     try:
+        # No `until` here: Calendar cannot express one, which is why a run that
+        # names it is refused when the config is built (`DailyConfig._validate_until`).
         result = collector.collect(
             since=parse_since(config.since),
             max_calendars=SMOKE_LIMITS["calendar_max_calendars"] if config.smoke else None,
-            advance_checkpoint=not config.dry_run,
+            advance_checkpoint=_advance_checkpoint(config),
         )
     except Exception as error:
         raise CaptureFailed(archive, error) from error
@@ -419,7 +496,11 @@ def capture_github(config: DailyConfig, credentials: Credentials) -> CaptureOutc
             # no API budget, so a full run always takes it. A smoke run is
             # about proving the path, not about measuring the change.
             include_diffstat=not config.smoke,
-            advance_checkpoint=not config.dry_run,
+            # A slice is a backfill: `backfill=True` makes the run independent
+            # of the checkpoint in both directions, which is what the window
+            # already is once an upper bound is named.
+            backfill=config.until is not None,
+            advance_checkpoint=_advance_checkpoint(config),
         )
     except Exception as error:
         raise CaptureFailed(archive, error) from error
@@ -460,7 +541,8 @@ def capture_slurm(config: DailyConfig, credentials: Credentials) -> CaptureOutco
         result = collector.collect(
             window=_kst_window(config),
             clouds=SMOKE_LIMITS["slurm_clouds"] if config.smoke else CLOUDS,
-            advance_checkpoint=not config.dry_run,
+            backfill=config.until is not None,
+            advance_checkpoint=_advance_checkpoint(config),
         )
     except Exception as error:
         raise CaptureFailed(archive, error) from error
@@ -482,7 +564,7 @@ def capture_slurm(config: DailyConfig, credentials: Credentials) -> CaptureOutco
 
 def capture_notion(config: DailyConfig, credentials: Credentials) -> CaptureOutcome:
     from .notion_collector import make_notion_collector
-    from .slack_collector import parse_since
+    from .slack_collector import parse_since, parse_until
 
     if not credentials.notion_token:
         raise RuntimeError("no Notion token is available; add it in the backoffice first")
@@ -497,6 +579,7 @@ def capture_notion(config: DailyConfig, credentials: Credentials) -> CaptureOutc
     try:
         result = collector.collect(
             since=parse_since(config.since),
+            until=parse_until(config.until) if config.until else None,
             max_objects=SMOKE_LIMITS["notion_max_objects"] if config.smoke else None,
             recheck_limit=SMOKE_LIMITS["notion_recheck_limit"] if config.smoke else 100,
             # None means exhaustive: a full run must not cap its own comment
@@ -504,7 +587,7 @@ def capture_notion(config: DailyConfig, credentials: Credentials) -> CaptureOutc
             comment_request_budget=(
                 SMOKE_LIMITS["notion_comment_request_budget"] if config.smoke else None
             ),
-            advance_checkpoint=not config.dry_run,
+            advance_checkpoint=_advance_checkpoint(config),
         )
     except Exception as error:
         raise CaptureFailed(archive, error) from error
@@ -749,6 +832,8 @@ def run_daily(
         "dry_run": config.dry_run,
         "smoke": config.smoke,
         "since": config.since,
+        "until": config.until,
+        "mode": "date_slice" if config.until else "incremental",
         "sources_requested": list(ordered),
         "unknown_sources": unknown,
         "credentials_available": resolved_credentials.availability(),

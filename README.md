@@ -40,8 +40,9 @@ archive, per-run manifests, and resumable per-source checkpoints. Five sources
 are implemented, and `worklog daily-collect` runs all five (Slack, Google
 Calendar, GitHub, Slurm, Notion) from capture through ledger to database.
 `github-collect` and `slurm-collect` remain as capture-only commands for an
-explicit window of KST days, which is what a historical backfill uses. See
-[docs/daily-collection.md](docs/daily-collection.md).
+explicit window of KST days. A historical backfill is a month at a time with
+`--until`, which four of the five sources accept and which never advances a
+checkpoint. See [docs/daily-collection.md](docs/daily-collection.md).
 
 **Ledger.** A standard v1 record format that both live captures and legacy
 exports convert into, loaded into PostgreSQL and projected onto a timeline. See

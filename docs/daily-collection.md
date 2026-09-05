@@ -16,8 +16,8 @@ their own for collecting an explicit historical window.
 | Notion | `worklog daily-collect` | `worklog collect notion` |
 
 `daily-collect` runs every source in `SOURCE_ORDER`
-(`src/rlwrld_worklog/daily.py:45`), and `--source` accepts exactly that list
-(`src/rlwrld_worklog/cli.py:215-220`). All three stages — capture, ledger, load —
+(`src/rlwrld_worklog/daily.py:51`), and `--source` accepts exactly that list
+(`src/rlwrld_worklog/cli.py:227-232`). All three stages — capture, ledger, load —
 run for each of the five.
 
 `github-collect` and `slurm-collect` capture into the same archive under the
@@ -53,11 +53,11 @@ run's raw pages are preserved but produce no ledger record, from
 
 A source can also be reported `degraded` while every stage says `ok`: a Notion
 capture that finished with unresolved objects sets a degraded reason, and the
-source status follows it (`src/rlwrld_worklog/daily.py:636`) so a run summary
+source status follows it (`src/rlwrld_worklog/daily.py:719`) so a run summary
 can never look cleaner than the manifest behind it.
 
 Sources always run in the order **slack → google-calendar → github → slurm →
-notion**, regardless of the order `--source` is given (`daily.py:739`): Slack
+notion**, regardless of the order `--source` is given (`daily.py:822`): Slack
 and Calendar discover Notion URLs, and Notion drains that queue in the same
 run. GitHub and Slurm discover no Notion URL today and are ordered before
 Notion anyway, so the rule stays "Notion runs last" rather than a list of which
@@ -69,7 +69,7 @@ Slack, Calendar and Notion are given the `--since` instant directly. GitHub and
 Slurm cannot take an instant: they collect a closed interval of **KST calendar
 days**, because a KST date is the key their records are filed under and every
 window decision they make is a comparison against that day's boundaries
-(`github_collector.py:175-219`). `_kst_window` (`daily.py:273-307`) makes the
+(`github_collector.py:175-219`). `_kst_window` (`daily.py:324-365`) makes the
 conversion, and it is the only place in the codebase that makes it — it builds
 the same `Window` `github-collect --since/--until` builds, from the daily run's
 instant rather than from the command line.
@@ -99,7 +99,7 @@ three-day one when the run starts before 02:00 KST.
 
 `github-collect` and `slurm-collect` return 3 on a lock conflict and 0 on
 success; a capture failure propagates the exception after writing a
-`status: failed` manifest (`cli.py:444`, `cli.py:521`).
+`status: failed` manifest (`cli.py:498`, `cli.py:575`).
 
 ## Credentials
 
@@ -118,11 +118,11 @@ A file wins over the matching environment variable (`SLACK_USER_TOKEN`,
 `NOTION_TOKEN`, `GOOGLE_TOKEN_PATH`, `GITHUB_TOKEN`): the backoffice is where a
 token is rotated, and a stale shell export must not override it. The GitHub
 token is read by `read_github_token`
-(`src/rlwrld_worklog/github_client.py:61-70`) and passed to `gh` through the
+(`src/rlwrld_worklog/github_client.py:72-81`) and passed to `gh` through the
 child process environment.
 
 The Google token has one extra fallback the others do not
-(`daily.py:117-121`): if `<config root>/credentials/google-token.json` is not a
+(`daily.py:171-176`): if `<config root>/credentials/google-token.json` is not a
 file, `GOOGLE_TOKEN_PATH` is tried, and then the literal relative path
 `secrets/google-token.json`.
 
@@ -133,7 +133,7 @@ treated as a credential and is never logged, returned or written to a manifest
 
 A missing credential fails that one source and is reported in
 `credentials_available`; the other sources still run. `credentials_available`
-covers all five sources (`daily.py:125-139`), and Slurm is always `true` there
+covers all five sources (`daily.py:142-152`), and Slurm is always `true` there
 because it has no credential that can be missing — a four-entry map for five
 sources would read as one source with a lost token. No token, OAuth client,
 database URL or callback code is ever printed or written to a manifest.
@@ -216,7 +216,7 @@ channels and 25 messages with the workspace-wide searches skipped, 5 Notion
 objects with no re-check sweep and a 20-request comment budget, 2 calendars, 2
 GitHub repositories with **no REST kind at all**, and 1 of the 3 Slurm clouds.
 A full run uses a Notion re-check limit of 100 and no comment budget at all
-(`daily.py:501-507`).
+(`daily.py:584-589`).
 
 The GitHub and Slurm bounds are shaped by what each source can be asked for a
 little of at all. GitHub's commits come from the local mirrors, so dropping every REST
@@ -247,11 +247,11 @@ both.
 
 Every collection command takes a non-blocking exclusive lock, so a slow run can
 never be overlapped by the next one; the second run exits 3 without touching
-anything (`daily.py:801-814`).
+anything (`daily.py:886-899`).
 
 The three locks are deliberately separate files. A GitHub backfill taking the
 daily lock would make the nightly `daily-collect` exit 3 and be read the next
-morning as a failed collection (`cli.py:374-380`).
+morning as a failed collection (`cli.py:415-421`).
 
 The batch catalogue in `src/rlwrld_worklog/schedules.py:86-127` declares one
 batch, `daily-collect`, and declares its runner to be a systemd timer driving a
@@ -284,7 +284,7 @@ Output is line-oriented JSON: one `daily_collect_config=` line before the run,
 one `daily_collect_source=` line as each source finishes, and a final
 `daily_collect=` summary (`cli.py:823-828`), so a log can be parsed without
 re-reading manifests. The config line never contains the database URL
-(`daily.py:660`).
+(`daily.py:914`).
 
 ## What a manifest tells you
 
@@ -346,7 +346,7 @@ under `checkpoints/` before the current one is replaced (`archive.py:286-295`).
 
 | Source | Checkpoint holds | Advances when |
 |---|---|---|
-| Slack | per-channel `high_watermarks`, `thread_watch` (pruned to the 30-day lookback), `skipped_channels` | not a dry run **and not truncated** (`slack_collector.py:576`) |
+| Slack | per-channel `high_watermarks`, `thread_watch` (pruned to the 30-day lookback), `skipped_channels` | not a dry run **and not truncated** (`slack_collector.py:606`) |
 | Notion | `last_edited_watermark`, `known_objects` | not a dry run **and not truncated** (`notion_collector.py:753`) |
 | GitHub | `collected_through` (KST date), `organization`, repository count | not a dry run, **not truncated**, and not `--backfill` (`github_collector.py:509`) |
 | Slurm | `collected_through` (KST date), `clouds` | not a dry run, **not truncated**, not `--backfill`, **and every requested cloud answered** (`slurm_collector.py:319-325`) |
@@ -370,7 +370,7 @@ one, and it does not move at all when an object failed unresolved without a
 
 Slack and Notion can capture one bounded historical window instead of resuming
 from the checkpoint. `collect()` takes an exclusive upper bound `until`
-(`slack_collector.py:198`, `notion_collector.py:464`); passing it changes three
+(`slack_collector.py:228`, `notion_collector.py:464`); passing it changes three
 things:
 
 * the checkpoint watermark is ignored, because it records how far the
@@ -382,15 +382,55 @@ things:
   instead of at the wall clock (`collection_status.py:450-480`).
 
 Slack additionally skips the watched-thread re-poll and bounds its
-workspace-wide searches with `before:` (`slack_collector.py:427`, `:464-468`).
+workspace-wide searches with `before:` (`slack_collector.py:457`, `:498`).
 Notion additionally skips the link queue and the re-check sweep, because both
 target the live head (`notion_collector.py:521`).
 
-This mode is what makes a month-by-month backfill terminate. **No CLI flag
-exposes it**; it is reachable only from Python, or from a caller that
-constructs the collector itself. Its known limitation is recorded in the rule
-registry: a slice does not recover replies whose thread parent predates the
-window, which is the defect rule `V7` is published as pending to describe (see
+This mode is what makes a month-by-month backfill terminate, and `--until`
+exposes it on both `worklog collect` and `worklog daily-collect`:
+
+```bash
+# one month, four sources, ledger and load included
+worklog daily-collect --environment production \
+    --source slack --source notion --source github --source slurm \
+    --since 2026-08-01 --until 2026-09-01
+
+# or one source at a time, capture only
+worklog collect slack --since 2026-08-01 --until 2026-09-01
+```
+
+The bound is **exclusive**, and a bare `YYYY-MM-DD` means midnight *KST* that
+day (`slack_collector.py:94-121`) — so `--until 2026-09-01` covers exactly
+August. A date is not an instant, and KST is the only calendar these sources
+file records under; reading a bare date as UTC would put every slice boundary
+nine hours out. An ISO 8601 instant is accepted too and keeps the offset it
+carries, as `--since` does. A duration is refused: "everything before 26 hours
+ago" is a window nobody means to ask for.
+
+Note the collision of names. `github-collect --until` and `slurm-collect
+--until` predate this flag and name the **last day, inclusive**; the flag on
+`collect` and `daily-collect` is an exclusive bound. Both help strings say so.
+
+Four of the five sources take it. Google Calendar is refused, before the lock
+and before any API call: its incremental read is a per-calendar sync token, so
+an upper bound cannot be expressed at all, only ignored — and a run that
+ignored it would collect the live head and file it under the requested window's
+name, which afterwards is indistinguishable from a window that was genuinely
+empty. Naming the sources explicitly with `--source` is how a `daily-collect`
+slice is run.
+
+GitHub and Slurm take the bound as their window's end — the KST day holding the
+last instant the bound admits — together with `backfill=True`, which is their
+own name for ignoring the checkpoint in both directions.
+
+No run carrying `--until` advances a checkpoint. Each collector enforces that
+for itself, and `_advance_checkpoint` (`daily.py:368-380`) enforces it again
+for all four, because a guarantee that depends on four collectors each
+remembering it is not a guarantee.
+
+The mode's known limitation is recorded in the rule registry: a slice does not
+recover replies whose thread parent predates the window, which is the defect
+rule `V7` is published as pending to describe (see
 [collection-rules.md](collection-rules.md)).
 
 ## Per-source coverage, and its limits
@@ -411,9 +451,9 @@ watermark.
 * `conversations.history` omits thread replies, so a reply to an older thread
   cannot be found through history. Two independent paths cover it: a re-poll
   of threads carried in the checkpoint (30-day lookback by default,
-  `slack_collector.py:52`) and the `search.messages` queries. The re-poll is
+  `slack_collector.py:55`) and the `search.messages` queries. The re-poll is
   skipped entirely for a bounded or date-slice run
-  (`slack_collector.py:427`).
+  (`slack_collector.py:457`).
 * Mentions are covered by six searches plus one per usergroup the user belongs
   to. Matches the context filter drops, and matches older than the window, are
   counted in the manifest (`search_matches_context_filtered`,
@@ -580,7 +620,7 @@ load failed yesterday is picked up today rather than being stranded.
 
 The daily batch converts and loads both sources itself. `github-collect` and
 `slurm-collect` do not: their CLI handlers stop after printing the capture
-result (`cli.py:453`, `cli.py:530`), so a window collected with either needs
+result (`cli.py:507`, `cli.py:584`), so a window collected with either needs
 two more commands to follow it.
 
 ```bash

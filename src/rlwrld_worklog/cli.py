@@ -21,6 +21,17 @@ FIXTURE_FILES = {
     Source.GITHUB: "github.json",
 }
 
+# One help string for both commands, because they mean the same thing and a
+# divergence between them would be read as a difference in behaviour. The last
+# sentence is not decoration: `github-collect --until` predates this flag and
+# names the last day *inclusive*, which is the opposite convention.
+UNTIL_HELP = (
+    "Exclusive upper bound: a KST date (YYYY-MM-DD, meaning midnight KST that day) or an "
+    "ISO 8601 instant. Captures one historical window instead of resuming, and never "
+    "advances a checkpoint. Not accepted for google-calendar. Note this bound is exclusive, "
+    "unlike github-collect/slurm-collect --until, which name the last day inclusive"
+)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="worklog")
@@ -38,6 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect = subparsers.add_parser("collect", help="Collect source data into the local archive")
     collect.add_argument("source", choices=["slack", "google-calendar", "notion"])
     collect.add_argument("--since", required=True, help="UTC/offset ISO time, or duration such as 24h or 730d")
+    collect.add_argument("--until", default=None, help=UNTIL_HELP)
     collect.add_argument("--environment", choices=["test", "production"], default="test")
     collect.add_argument("--archive-root", type=Path, default=None)
     collect.add_argument("--database-url", default=None)
@@ -220,6 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     daily.add_argument("--environment", choices=["test", "production"], default="production")
     daily.add_argument("--since", default=DEFAULT_SINCE, help="Floor for sources with no checkpoint")
+    daily.add_argument("--until", default=None, help=UNTIL_HELP)
     daily.add_argument("--archive-root", type=Path, default=None)
     daily.add_argument("--ledger-root", type=Path, default=None)
     daily.add_argument("--config-root", type=Path, default=None, help="APP_CONFIG_ROOT override")
@@ -239,6 +252,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_work_parser(subparsers)
     return parser
+
+
+def _resolve_until(args: argparse.Namespace) -> datetime | None:
+    """The exclusive upper bound for one `collect` run, or None.
+
+    Refuses rather than returns for a source that cannot take one. Silently
+    ignoring the flag would collect the live head and file it as the requested
+    window, which is indistinguishable afterwards from a window that was
+    genuinely empty.
+    """
+    from .daily import UNTIL_CAPABLE
+    from .slack_collector import parse_until
+
+    if not getattr(args, "until", None):
+        return None
+    if args.source not in UNTIL_CAPABLE:
+        raise SystemExit(
+            f"--until cannot be honoured for {args.source}: that source resumes from a sync "
+            "token rather than a time window, so a bounded slice cannot be expressed"
+        )
+    try:
+        return parse_until(args.until)
+    except ValueError as error:
+        raise SystemExit(f"--until must be a KST date or an ISO 8601 instant: {error}")
 
 
 def _positive_int(value: str) -> int:
@@ -321,10 +358,14 @@ def collect_slack(args: argparse.Namespace) -> int:
 
     archive_root = args.archive_root or Path(os.environ.get("RAW_ARCHIVE_ROOT", "/data/rlwrld-worklog"))
     expected = args.expected_team_id or os.environ.get("SLACK_EXPECTED_TEAM_ID")
+    # Resolved before the archive is opened, so a refused bound leaves no
+    # empty run directory behind.
+    until = _resolve_until(args)
     _, archive, collector = make_slack_collector(archive_root=archive_root, environment=args.environment)
     try:
         result = collector.collect(
             since=parse_since(args.since),
+            until=until,
             expected_team_id=expected,
             channel_ids=set(args.channel_id) or None,
             max_channels=args.max_channels,
@@ -580,6 +621,10 @@ def collect_google_calendar(args: argparse.Namespace) -> int:
     from .link_queue import NotionLinkQueue
     from .slack_collector import parse_since
 
+    # Calendar cannot take an upper bound, so this call only ever returns None
+    # or refuses the run. It is here so that `--until` is never silently
+    # dropped: the flag reaching an unbounded capture is the failure.
+    _resolve_until(args)
     archive_root = _archive_root(args)
     token_path = args.google_token or Path(
         os.environ.get("GOOGLE_TOKEN_PATH", "secrets/google-token.json")
@@ -629,6 +674,7 @@ def collect_notion(args: argparse.Namespace) -> int:
     token = os.environ.get("NOTION_TOKEN")
     if not token:
         raise SystemExit("NOTION_TOKEN is required")
+    until = _resolve_until(args)
     archive_root = _archive_root(args)
     archive, collector = make_notion_collector(
         token=token,
@@ -636,7 +682,7 @@ def collect_notion(args: argparse.Namespace) -> int:
         environment=args.environment,
     )
     try:
-        result = collector.collect(since=parse_since(args.since))
+        result = collector.collect(since=parse_since(args.since), until=until)
     except Exception as error:
         failure_manifest = archive.finish(
             {"status": "failed", "error_type": type(error).__name__, "error": str(error)}
@@ -816,19 +862,25 @@ def daily_collect(args: argparse.Namespace) -> int:
     from .daily import DailyConfig, config_as_dict, run_daily
 
     archive_root = _archive_root(args)
-    config = DailyConfig(
-        archive_root=archive_root,
-        ledger_root=_ledger_root(args, archive_root),
-        environment=args.environment,
-        since=args.since,
-        sources=tuple(args.source) if args.source else SOURCE_ORDER,
-        database_url=args.database_url or os.environ.get("DATABASE_URL"),
-        load_database=not args.no_database,
-        dry_run=args.dry_run,
-        smoke=args.smoke,
-        config_root=args.config_root,
-        lock_path=args.lock_path,
-    )
+    try:
+        config = DailyConfig(
+            archive_root=archive_root,
+            ledger_root=_ledger_root(args, archive_root),
+            environment=args.environment,
+            since=args.since,
+            until=args.until,
+            sources=tuple(args.source) if args.source else SOURCE_ORDER,
+            database_url=args.database_url or os.environ.get("DATABASE_URL"),
+            load_database=not args.no_database,
+            dry_run=args.dry_run,
+            smoke=args.smoke,
+            config_root=args.config_root,
+            lock_path=args.lock_path,
+        )
+    except ValueError as error:
+        # A window that cannot be honoured as asked. Refused before the lock is
+        # taken, so the run leaves nothing behind to interpret.
+        raise SystemExit(str(error))
     _print_json("daily_collect_config", config_as_dict(config))
     summary = run_daily(
         config,

@@ -37,10 +37,10 @@
 | `COLLECTION_PROGRESS_ROOT` | `collection_progress.py:66`, `:81` | `APP_CONFIG_ROOT`, 그다음 `~/.config/hk-work-assistant` | 아니오 | **없음** |
 | `ADMIN_SESSION_SECURE` | `admin_web.py:177` | `false` | 예 | 예 |
 | `EMERGENCY_LOGIN_ENABLED` | `admin_web.py:42` | `false` | 예 (리터럴 고정) | **없음** |
-| `SLACK_USER_TOKEN` | `cli.py:287`; `daily.py:127`; `slack_collector.py:660` | 없음 | `collector-slack`만 (`env_file`) | **없음** (`secrets/slack.env`) |
-| `SLACK_EXPECTED_TEAM_ID` | `cli.py:292`, `:319`; `daily.py:85` | 없음 | `collector-slack`만 (`env_file`) | **없음** (`secrets/slack.env`) |
-| `NOTION_TOKEN` | `cli.py:620`; `daily.py:129` | 없음 | 아니오 | **없음** |
-| `GOOGLE_TOKEN_PATH` | `cli.py:576`; `daily.py:119` | `secrets/google-token.json` (상대 경로) | 아니오 | **없음** |
+| `SLACK_USER_TOKEN` | `cli.py:328`; `daily.py:187`; `slack_collector.py:690` | 없음 | `collector-slack`만 (`env_file`) | **없음** (`secrets/slack.env`) |
+| `SLACK_EXPECTED_TEAM_ID` | `cli.py:333`, `:360`; `daily.py:134` | 없음 | `collector-slack`만 (`env_file`) | **없음** (`secrets/slack.env`) |
+| `NOTION_TOKEN` | `cli.py:674`; `daily.py:183` | 없음 | 아니오 | **없음** |
+| `GOOGLE_TOKEN_PATH` | `cli.py:630`; `daily.py:173` | `secrets/google-token.json` (상대 경로) | 아니오 | **없음** |
 | `GITHUB_TOKEN` | `github_client.py:81`; `daily.py:174` | 없음 | 아니오 | **없음** |
 | `GITHUB_ORG` | `daily.py:122` (`cli.py:394` 가 같은 경로를 쓴다) | `settings.json` 의 `github_organization`, 그다음 `rlwrld` | 아니오 | **없음** |
 | `GITHUB_MIRROR_ROOT` | `github_client.py:69` | `/data/rlwrld-worklog/legacy/claude/weekly/scripts/github_mirrors` | 아니오 | **없음** |

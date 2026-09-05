@@ -38,11 +38,14 @@ import os
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from .archive import RawArchive
+# KST is defined once, by the collector whose whole window is a KST calendar
+# day; a second copy of the offset is a second thing to get wrong.
+from .github_collector import KST
 from .models import TimelineEvent
 from .normalizers import normalize_slack
 from .slack_client import SlackApiError, SlackClient
@@ -86,6 +89,33 @@ def parse_since(value: str, *, now: datetime | None = None) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def parse_until(value: str) -> datetime:
+    """An exclusive upper bound, from a KST date or an ISO 8601 instant.
+
+    A bare `YYYY-MM-DD` is midnight KST that day, which is the convention the
+    date-slice collectors already document: the KST day 2026-08-01 is captured
+    with an `until` of `2026-08-02T00:00:00+09:00` (see `collect` below). A
+    date is not an instant, and KST is the only calendar these sources file
+    records under, so reading a bare date as UTC would put every slice boundary
+    nine hours out -- the exact class of defect the GitHub collector was ported
+    to remove.
+
+    Anything else is read as `parse_since` reads it, offset and all, which
+    means a datetime written without an offset is UTC. A duration is rejected:
+    "everything before 26 hours ago" is a window nobody means to ask for, and
+    accepting it would silently produce one.
+    """
+    text = value.strip()
+    lowered = text.casefold()
+    if lowered.endswith(("h", "d")) and lowered[:-1].isdigit():
+        raise ValueError("an upper bound must be a date or an instant, not a duration")
+    try:
+        day = date.fromisoformat(text)
+    except ValueError:
+        return parse_since(text)
+    return datetime.combine(day, time.min, tzinfo=KST)
 
 
 def _archive_safe_slack_body(body: dict[str, Any]) -> dict[str, Any]:
