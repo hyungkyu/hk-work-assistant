@@ -49,11 +49,11 @@ re-projectable. `_load_manifest` accepts only `success` and
 `success_with_skips` (`src/rlwrld_worklog/ledger/live.py:81-85`), so a degraded
 run's raw pages are preserved but produce no ledger record, from
 `daily-collect` or from `ledger-live-convert`. Only the Notion collector emits
-`degraded` (`src/rlwrld_worklog/notion_collector.py:748`).
+`degraded` (`src/rlwrld_worklog/notion_collector.py:839`).
 
 A source can also be reported `degraded` while every stage says `ok`: a Notion
 capture that finished with unresolved objects sets a degraded reason, and the
-source status follows it (`src/rlwrld_worklog/daily.py:719`) so a run summary
+source status follows it (`src/rlwrld_worklog/daily.py:781`) so a run summary
 can never look cleaner than the manifest behind it.
 
 Sources always run in the order **slack → google-calendar → github → slurm →
@@ -254,7 +254,7 @@ channels and 25 messages with the workspace-wide searches skipped, 5 Notion
 objects with no re-check sweep and a 20-request comment budget, 2 calendars, 2
 GitHub repositories with **no REST kind at all**, and 1 of the 3 Slurm clouds.
 A full run uses a Notion re-check limit of 100 and no comment budget at all
-(`daily.py:584-589`).
+(`daily.py:641-652`).
 
 The GitHub and Slurm bounds are shaped by what each source can be asked for a
 little of at all. GitHub's commits come from the local mirrors, so dropping every REST
@@ -371,7 +371,7 @@ The per-source details each collector adds to its own manifest:
 |---|---|
 | Slack | `team_id`, `self_user_id`, `since`, `channels_seen`, `channels_attempted`, `channels_collected`, `events`, `skipped_channels`, `high_watermarks`, `counters` |
 | Google Calendar | `since`, `calendars_seen`, `calendars_attempted`, `calendars_collected`, `skipped_calendars`, `events_archived`, `cancelled_events`, `notion_urls`, `counters` |
-| Notion | `counters`, including `coverage_complete`, `objects_failed_by_phase`, `objects_failed_unresolved`, `watermark_held`, `comment_request_budget`, `comment_requests_made` |
+| Notion | `counters`, including `coverage_complete`, `objects_failed_by_phase`, `objects_failed_unresolved`, `watermark_held`, `comment_strategy`, `comment_blocks_unswept`, `comment_request_budget`, `comment_requests_made` |
 | GitHub | `organization`, `mode`, `repositories_listed`, `repositories_collected`, `skipped_repositories`, `mirrors_behind_remote`, `mirrors_with_unknown_coverage`, `repositories_mirror_only`, `repositories_api_only`, `commits`, `commit_rows_archived`, `rest_counts`, `counters` |
 | Slurm | `mode`, `clouds_attempted`, `clouds_collected`, `jobs`, `parent_rows_archived`, `step_rows`, `counters` |
 
@@ -391,7 +391,7 @@ under `checkpoints/` before the current one is replaced (`archive.py:286-295`).
 | Source | Checkpoint holds | Advances when |
 |---|---|---|
 | Slack | per-channel `high_watermarks`, `thread_watch` (pruned to the 30-day lookback), `skipped_channels` | not a dry run **and not truncated** (`slack_collector.py:606`) |
-| Notion | `last_edited_watermark`, `known_objects` | not a dry run **and not truncated** (`notion_collector.py:753`) |
+| Notion | `last_edited_watermark`, `known_objects` | not a dry run **and not truncated** (`notion_collector.py:845`) |
 | GitHub | `collected_through` (KST date), `organization`, repository count | not a dry run, **not truncated**, and not `--backfill` (`github_collector.py:509`) |
 | Slurm | `collected_through` (KST date), `clouds` | not a dry run, **not truncated**, not `--backfill`, **and every requested cloud answered** (`slurm_collector.py:319-325`) |
 | Google Calendar | per-calendar `sync_tokens`, `skipped_calendars`, `reset_calendars` | **not a dry run — that is the only guard** (`calendar_collector.py:254`) |
@@ -414,7 +414,7 @@ one, and it does not move at all when an object failed unresolved without a
 
 Slack and Notion can capture one bounded historical window instead of resuming
 from the checkpoint. `collect()` takes an exclusive upper bound `until`
-(`slack_collector.py:228`, `notion_collector.py:464`); passing it changes three
+(`slack_collector.py:228`, `notion_collector.py:529`); passing it changes three
 things:
 
 * the checkpoint watermark is ignored, because it records how far the
@@ -428,7 +428,7 @@ things:
 Slack additionally skips the watched-thread re-poll and bounds its
 workspace-wide searches with `before:` (`slack_collector.py:457`, `:498`).
 Notion additionally skips the link queue and the re-check sweep, because both
-target the live head (`notion_collector.py:521`).
+target the live head (`notion_collector.py:603`).
 
 This mode is what makes a month-by-month backfill terminate, and `--until`
 exposes it on both `worklog collect` and `worklog daily-collect`. A range of
@@ -485,7 +485,7 @@ remembering it is not a guarantee.
 
 The mode's known limitation is recorded in the rule registry: a slice does not
 recover replies whose thread parent predates the window, which is the defect
-rule `V7` is published as pending to describe (see
+rule `V8` is published as pending to describe (see
 [collection-rules.md](collection-rules.md)).
 
 ## Per-source coverage, and its limits
@@ -521,22 +521,40 @@ watermark.
 
 **Notion.** `/search` with no object filter (pages, databases, data sources),
 full page and data-source properties, every descendant block recursively,
-comments per block, users, and the archived/in-trash flags.
+comments under one of two named sweep strategies, users, and the
+archived/in-trash flags.
 
 * `/search` is **not a change feed**: it omits archived and trashed objects and
   anything not shared with the integration, and it can lag an edit. Deletion,
   trashing and a lost share become observable only through the bounded
   re-check of previously seen objects (100 per run by default), which reports
   a 404 as a skip rather than as a clean day.
-* Comments live on the block they were left on, so `/comments` is queried per
-  block. A full-density run is **exhaustive and uncapped**: the bound is the
-  API client's rate-limit handling. A finite default would make any large
-  workspace mark itself truncated, withhold its checkpoint, and then redo the
-  identical window on every run. An operator can still pass a finite budget;
-  when one is set it is reported in `comment_request_budget` /
-  `comment_requests_made`, adds the `notion.comment_requests_capped` coverage
-  note, and reaching it marks the run truncated and withholds the checkpoint.
-  Smoke runs use a small explicit budget for exactly that reason.
+* Comments live on the block they were left on, so an exhaustive sweep costs
+  one `/comments` request per block. One completed day measured what that is
+  worth: 176 pages, 6,053 block requests, 1,500 comment requests — and one
+  comment. So the sweep has two named strategies
+  (`notion_collector.COMMENT_STRATEGIES`), and every manifest records which one
+  ran in `requested_window.comment_strategy` and `counters.comment_strategy`:
+  * `page_first` (**the default**) asks each object for its own comments and
+    walks its blocks only when that answered with at least one. A page with no
+    discussion costs one request instead of dozens.
+  * `every_block` is the old exhaustive sweep, kept for a run that wants it.
+
+  The default is a **narrowing of coverage, not a free saving**: an inline
+  comment on a block of a page that carries no page-level comment is not
+  fetched, and its absence from a run is not evidence it does not exist. That
+  is stated in the `notion.comments_page_first` coverage note on every run that
+  uses it, and `counters.comment_blocks_unswept` counts the blocks never asked
+  about. The run is *not* marked truncated for it — the narrowing is the rule
+  the run followed, not a bound it hit — so the checkpoint still advances.
+* Neither strategy caps itself by default: the bound is the API client's
+  rate-limit handling. A finite default budget would make any large workspace
+  mark itself truncated, withhold its checkpoint, and then redo the identical
+  window on every run. An operator can still pass a finite budget; when one is
+  set it is reported in `comment_request_budget` / `comment_requests_made`,
+  adds the `notion.comment_requests_capped` coverage note, and reaching it does
+  mark the run truncated and withhold the checkpoint. Smoke runs use a small
+  explicit budget for exactly that reason.
 * **Mentions are extracted, and cost nothing extra.** The user mentions inside
   the `rich_text` of blocks and comments the run already fetched are pulled out
   and carried both on the timeline event (`mentions`, as `MentionKind.DIRECT`)

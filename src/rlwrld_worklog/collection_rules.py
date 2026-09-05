@@ -50,6 +50,17 @@ RULE_REGISTRY_SCHEMA_VERSION = 2
 # record, so the repair has something to land against; it stamps nothing, and
 # it does not close its predecessor's window. Activating it is a status flip,
 # which the digest deliberately does not cover.
+#
+# A pending version is always the **tip**: it supersedes the version in force
+# and never sits beneath one. That ordering is the whole point rather than an
+# accident of who committed first. The version describing what the collector
+# does is the version being stamped -- a stamp that does not describe the run
+# is worth less than no stamp, because it is believed -- and a change that has
+# already landed never queues behind an unlanded one for nothing but a number.
+# When both kinds are in flight, the landed one takes the next active number
+# and the pending one is renumbered above it. That costs nothing recoverable:
+# a pending version has stamped no manifest and, by the check in
+# `_validate_registry`, has pinned no digest.
 RULE_STATUSES = ("pending", "active", "superseded")
 
 # Canonical ledger source names, as used by the ledger and the service DB.
@@ -1094,7 +1105,7 @@ GITHUB_V6 = replace(
 V6 = CollectionRule(
     version="V6",
     title="공식 API 원본 원장 + 슬랙 날짜 슬라이스 (bounded Slack capture)",
-    status="active",
+    status="superseded",
     effective=EffectivePeriod(
         start="2026-09-03",
         end=None,
@@ -1134,6 +1145,116 @@ V6 = CollectionRule(
 
 # --------------------------------------------------------------------- V7
 
+# One completed one-day production manifest
+# (20260903T021233Z-fd43af8d6700, window 2026-08-31 KST) spent 6,053 block
+# requests and 1,500 comment requests across 176 pages, and the entire comment
+# sweep returned one comment. A comment hangs off the block it was left on, so
+# the exhaustive sweep asked every block; the collector now asks a page for its
+# own comments and walks its blocks only when that answers. A page with no
+# discussion costs one request instead of dozens. That is a narrowing of what
+# gets collected, not a free saving, and it is written down as one below.
+#
+# Separately, the user mentions already inside every fetched block and comment
+# are extracted instead of discarded, which answers "who mentioned whom" for
+# Notion at no request that was not already being made.
+NOTION_V7 = replace(
+    V6.source_rule("notion"),
+    includes=V6.source_rule("notion").includes
+    + (
+        "User mentions read out of the rich_text of blocks and comments already fetched, "
+        "carried both on the timeline event (`mentions`) and on every ledger record "
+        "(`relations.mentioned_user_ids`, with `relations.mentions_extracted` true)",
+    ),
+    excludes=V6.source_rule("notion").excludes
+    + (
+        "Under the page_first comment strategy: the per-block comment sweep for any object "
+        "whose own /comments query returned nothing",
+        "Page, database, date and link_preview mentions, which are not people and so are "
+        "not given a direction; they stay in the raw block JSON the ledger keeps verbatim",
+    ),
+    known_limitations=V6.source_rule("notion").known_limitations
+    + (
+        "notion.comments_page_first: /comments is asked of each object first and the "
+        "per-block sweep runs only for objects that answered with at least one comment. An "
+        "inline comment on a block of a page carrying no page-level comment is therefore "
+        "not fetched, and its absence is not evidence it does not exist. Measured: 1,500 "
+        "per-block requests over one day returned one comment. The run is not marked "
+        "truncated for it -- the narrowing is the rule the run followed, not a bound it hit "
+        "-- so the checkpoint still advances; counters.comment_strategy names the sweep and "
+        "counters.comment_blocks_unswept counts what it skipped.",
+    ),
+    evidence=V6.source_rule("notion").evidence
+    + (
+        "src/rlwrld_worklog/notion_collector.py (COMMENT_STRATEGIES, "
+        "PAGE_FIRST_COMMENTS_NOTE, EXHAUSTIVE_COMMENTS_NOTE, `_collect_comments`)",
+        "src/rlwrld_worklog/normalizers.py (notion_mention_user_ids, "
+        "extract_notion_mentions)",
+        "manifest fields: requested_window.comment_strategy, counters.comment_strategy, "
+        "counters.comment_block_sweeps, counters.comment_blocks_unswept",
+        "measured: manifests/notion/production/20260903T021233Z-fd43af8d6700.json "
+        "(2,000 search candidates, 176 pages, 6,053 block requests, 1,500 comment "
+        "requests, 1 comment)",
+    ),
+    unknowns=V6.source_rule("notion").unknowns
+    + (
+        "How many inline comments the page_first sweep misses. Counting them would cost "
+        "exactly the exhaustive sweep it exists to avoid, so what is recorded is how many "
+        "blocks went unasked, never how many comments were on them.",
+    ),
+)
+
+
+V7 = CollectionRule(
+    version="V7",
+    title="공식 API 원본 원장 + 노션 멘션·페이지 우선 댓글 (Notion mentions and a page-first comment sweep)",
+    # Active from the day the collector changed, which is this one. A version
+    # describing what the collector already does belongs in force: a stamp that
+    # does not describe the run is worth less than no stamp, because it is
+    # believed. The version above it stays pending until its own code lands.
+    status="active",
+    effective=EffectivePeriod(
+        start="2026-09-05",
+        end=None,
+        basis=(
+            "observed: notion_collector gained a page-first comment sweep "
+            "(COMMENT_STRATEGIES, default page_first) and the normalizer and ledger "
+            "converter began extracting Notion user mentions."
+        ),
+    ),
+    summary=(
+        "V6 with the Notion capture corrected, driven by measurement. The comment sweep "
+        "asks each object for its own comments and walks its blocks only when that answered, "
+        "in place of a per-block sweep that spent 1,500 requests in one day to return one "
+        "comment; a page with no discussion now costs one request. That narrows coverage -- "
+        "an inline comment on a page with nothing at page level is missed -- so every run "
+        "names the sweep it used. And the user mentions already sitting in the blocks and "
+        "comments a run fetches are extracted rather than discarded, which answers who "
+        "mentioned whom without one extra request. Slack, Google Calendar, GitHub and Slurm "
+        "are unchanged from V6."
+    ),
+    manifest_schema_version=2,
+    ledger_schema_version="1.0",
+    source_schema_version=None,
+    capture_profiles=V6.capture_profiles,
+    storage_layout=V6.storage_layout,
+    unknowns=V6.unknowns
+    + (
+        "How much Notion discussion the page-first comment sweep leaves unread. The only "
+        "way to find out is the exhaustive sweep it replaces.",
+    ),
+    sources=(
+        V6.source_rule("slack"),
+        NOTION_V7,
+        V6.source_rule("google_calendar"),
+        V6.source_rule("github"),
+        V6.source_rule("slurm"),
+    ),
+    supersedes="V6",
+)
+
+
+# --------------------------------------------------------------------- V8
+
 # V6 wrote the slice's shortcuts down as facts: in a bounded window the
 # watched-thread re-poll and the lookback are skipped. Measurement says those
 # shortcuts are why a whole class of message never arrives. The production
@@ -1149,10 +1270,10 @@ V6 = CollectionRule(
 # that names its parent -- the slice cannot discover what to ask for. Closing
 # that needs a pass that reads backwards from the window's start looking for
 # parents, which is a change in what gets collected, so it is a new version
-# rather than an edit to V6.
-SLACK_V7 = replace(
-    V6.source_rule("slack"),
-    includes=V6.source_rule("slack").includes
+# rather than an edit to a published one.
+SLACK_V8 = replace(
+    V7.source_rule("slack"),
+    includes=V7.source_rule("slack").includes
     + (
         "In slice mode: replies under threads whose parent sits before the window, found "
         "by reading the channel backwards from the window's start for parents rather than "
@@ -1160,7 +1281,7 @@ SLACK_V7 = replace(
     ),
     excludes=tuple(
         exclude
-        for exclude in V6.source_rule("slack").excludes
+        for exclude in V7.source_rule("slack").excludes
         if not exclude.startswith("In slice mode: the checkpoint watermark")
     )
     + (
@@ -1170,7 +1291,7 @@ SLACK_V7 = replace(
     ),
     known_limitations=tuple(
         limitation
-        for limitation in V6.source_rule("slack").known_limitations
+        for limitation in V7.source_rule("slack").known_limitations
         if not limitation.startswith("slack.date_slice_capture")
     )
     + (
@@ -1200,7 +1321,7 @@ SLACK_V7 = replace(
         "parent older than that is still missed; the reach used by a run is recorded rather "
         "than assumed.",
     ),
-    evidence=V6.source_rule("slack").evidence
+    evidence=V7.source_rule("slack").evidence
     + (
         "checkpoint measurement: manifests/slack/production/checkpoint.json, 86 channels and "
         "356 watched threads spanning 2026-08-30 to 2026-09-03",
@@ -1209,15 +1330,23 @@ SLACK_V7 = replace(
 )
 
 
-V7 = CollectionRule(
-    version="V7",
+V8 = CollectionRule(
+    version="V8",
     title="공식 API 원본 원장 + 창 앞 부모 탐색 (slice recovers pre-window parents)",
     # Pending, not active. The repair this version describes is being written
-    # by another hand; publishing it as active would make every run between
-    # now and then stamp a rule it does not follow, which is the same lie V6
-    # tells about the re-poll and the reason this version exists at all. It is
-    # published so the repair has a rule to land against, and it takes effect
-    # when the collector does. See PENDING_RULE_STATUS.
+    # by another hand; publishing it as active would make every run between now
+    # and then stamp a rule it does not follow, which is the same defect V6
+    # carries about the re-poll and the reason this version exists at all. It
+    # is published so the repair has a rule to land against, and it takes
+    # effect when the collector does.
+    #
+    # A pending version is the tip of the registry, never a rule an already
+    # landed change has to queue behind. This one was first published as V7,
+    # while it was the only unlanded work in flight; when the Notion repair
+    # landed, that number went to the version describing what the collector
+    # actually does and this one moved up. Nothing was lost in the move: a
+    # pending version stamps no manifest and cannot pin a digest, so no run and
+    # no PUBLISHED_DIGESTS entry ever carried the number V7 for this rule.
     status="pending",
     effective=EffectivePeriod(
         start=None,
@@ -1229,40 +1358,42 @@ V7 = CollectionRule(
         ),
     ),
     summary=(
-        "V6 with the Slack slice corrected. A bounded window run now recovers replies whose "
+        "V7 with the Slack slice corrected. A bounded window run now recovers replies whose "
         "parent predates it, by reading backwards from the window's start for thread "
         "parents and by re-polling watched threads inside the window instead of skipping "
         "the re-poll. V6 described the skips as deliberate; measurement showed they are why "
         "a month-by-month backfill silently misses replies to older threads. Notion, Google "
-        "Calendar, GitHub and Slurm are unchanged from V6."
+        "Calendar, GitHub and Slurm are unchanged from V7. Published first under the number "
+        "V7 while it was the only unlanded change in flight, and renumbered when the Notion "
+        "repair landed and took that number; it had stamped nothing and pinned no digest."
     ),
     manifest_schema_version=2,
     ledger_schema_version="1.0",
     source_schema_version=None,
-    capture_profiles=V6.capture_profiles,
-    storage_layout=V6.storage_layout,
-    unknowns=V6.unknowns
+    capture_profiles=V7.capture_profiles,
+    storage_layout=V7.storage_layout,
+    unknowns=V7.unknowns
     + (
         "How far before a window a parent can sit and still be recovered. The backward pass "
         "has to stop somewhere, and a thread whose parent is older than it reaches is missed "
         "the same way it is missed today -- less often, but not never.",
     ),
     sources=(
-        SLACK_V7,
-        V6.source_rule("notion"),
-        V6.source_rule("google_calendar"),
-        V6.source_rule("github"),
-        V6.source_rule("slurm"),
+        SLACK_V8,
+        V7.source_rule("notion"),
+        V7.source_rule("google_calendar"),
+        V7.source_rule("github"),
+        V7.source_rule("slurm"),
     ),
-    supersedes="V6",
+    supersedes="V7",
 )
 
 
 # --------------------------------------------------------------- registry
 
-RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3, V4, V5, V6, V7)
+RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3, V4, V5, V6, V7, V8)
 
-ACTIVE_RULE_VERSION = "V6"
+ACTIVE_RULE_VERSION = "V7"
 
 # Content digests of every published version. A published rule is frozen: if
 # editing one changes its meaning, the digest moves and import fails here,
@@ -1333,6 +1464,7 @@ PUBLISHED_DIGESTS: dict[str, str] = {
     "V4": "sha256:da7f50ccadb136c979097e6929af10c41b11855203bfa0eaaae6ca1355875e20",
     "V5": "sha256:ba77758f618dc29f60d48adc3a47f8b17867aa6b9683ada5e3d63a15ae213941",
     "V6": "sha256:ddbf228989f159091e7b02f9fc6ce7acd73713e26f3fdaa39ca92d2cb637a5f3",
+    "V7": "sha256:09b4586496cc1f2a403b112e30e6b3ff81409ff325cb72391dc35dccc43b78fc",
 }
 
 

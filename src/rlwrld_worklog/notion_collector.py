@@ -15,8 +15,10 @@ Coverage design, and the honest limits of it:
     becomes observable), and `last_edited_time` checkpointing that only
     advances over objects that were actually fetched.
   * Every descendant block is fetched recursively, including the child blocks
-    that meeting-notes blocks point at, plus comments per block and paginated
-    title/rich-text/relation properties.
+    that meeting-notes blocks point at, plus paginated title/rich-text/relation
+    properties and comments under one of two named strategies -- see
+    `COMMENT_STRATEGIES`, which records which sweep a run used and what the
+    cheaper one gives up.
   * The checkpoint watermark advances only across the contiguous prefix of
     successfully fetched objects: it is never moved past an object whose fetch
     failed, so a permission error cannot silently skip a window.
@@ -59,6 +61,20 @@ DEFAULT_RECHECK_LIMIT = 100
 DEFAULT_COMMENT_REQUEST_BUDGET: int | None = None
 MAX_TRACKED_OBJECTS = 20_000
 
+# How the comment sweep decides which blocks to ask about.
+#
+#   page_first  -- ask the object for its own comments, and sweep its blocks
+#                  only if that answered with at least one comment.
+#   every_block -- ask every block, always. Exhaustive, and expensive.
+#
+# The default is `page_first` because of what one completed day measured:
+# 6,053 block requests and 1,500 comment requests over 176 pages, and the
+# whole 1,500 returned a single comment. It is a trade, not a free win -- what
+# it gives up is named in PAGE_FIRST_COMMENTS_NOTE and written into every
+# manifest -- so the exhaustive sweep stays selectable for a run that wants it.
+COMMENT_STRATEGIES = ("page_first", "every_block")
+DEFAULT_COMMENT_STRATEGY = "page_first"
+
 COVERAGE_NOTES = (
     "notion.search_is_not_a_change_feed: /search omits archived and trashed objects and "
     "anything not shared with the integration, and can lag an edit. Deletion and "
@@ -67,9 +83,24 @@ COVERAGE_NOTES = (
     "through /search rather than by querying every data source daily.",
     "notion.attachments_are_metadata_only: file blocks and file properties are preserved as "
     "JSON with their (expiring) URLs; no file body is downloaded.",
-    "notion.comments_are_per_block: an inline comment lives on its own block, so /comments is "
-    "queried for every block of every fetched object. A full-density run is exhaustive; the "
-    "API client's rate-limit handling is the bound.",
+)
+
+# One of these two is always recorded, so a manifest names the sweep that
+# produced its comments instead of leaving a reader to infer it from counters.
+EXHAUSTIVE_COMMENTS_NOTE = (
+    "notion.comments_are_per_block: an inline comment lives on its own block, so /comments "
+    "was queried for every block of every fetched object. This sweep is exhaustive; the "
+    "API client's rate-limit handling is the bound."
+)
+
+PAGE_FIRST_COMMENTS_NOTE = (
+    "notion.comments_page_first: /comments was asked for each object itself, and the "
+    "per-block sweep ran only for objects whose own query returned at least one comment. "
+    "What this gives up is real: an inline comment left on a block of a page that carries "
+    "no page-level comment is not fetched by this run, and its absence here is not evidence "
+    "it does not exist. Measured on one completed day, the exhaustive sweep spent 1,500 "
+    "requests to return one comment. counters.comment_blocks_unswept says how many blocks "
+    "were skipped this way."
 )
 
 BOUNDED_COMMENTS_NOTE = (
@@ -191,6 +222,8 @@ class NotionCollector:
         self._comment_budget: int | None = DEFAULT_COMMENT_REQUEST_BUDGET
         self._comment_requests_made = 0
         self._comment_budget_exhausted = False
+        self._comment_block_sweeps = 0
+        self._comment_blocks_unswept = 0
 
     # ------------------------------------------------------------- helpers
 
@@ -370,31 +403,63 @@ class NotionCollector:
                 raise
         return blocks, sorted(set(block_ids) | (seen - {root_id}))
 
-    def _collect_comments(self, block_ids: list[str]) -> list[dict[str, Any]]:
-        comments: list[dict[str, Any]] = []
+    def _comments_for(self, block_id: str) -> list[dict[str, Any]]:
+        """One /comments query, or none at all once the budget is spent."""
+        if self._comment_budget is not None and self._comment_requests_made >= self._comment_budget:
+            self._comment_budget_exhausted = True
+            return []
+        self._comment_requests_made += 1
+        results: list[dict[str, Any]] = []
+        try:
+            for page in self.client.iter_comments(block_id):
+                page_results = page.get("results") or []
+                self.archive.write_page(
+                    f"comments-{block_id}",
+                    page,
+                    endpoint="GET /comments",
+                    request={"block_id": block_id},
+                    item_count=len(page_results),
+                )
+                results.extend(page_results)
+        except NotionApiError as error:
+            if error.status in {400, 403, 404}:
+                self.archive.note_skip(
+                    "comments_inaccessible", block_id=block_id, status=error.status, code=error.code
+                )
+                return results
+            raise
+        return results
+
+    def _collect_comments(
+        self, object_id: str, block_ids: list[str], *, strategy: str
+    ) -> list[dict[str, Any]]:
+        """Comments for one object, asking the object itself before its blocks.
+
+        Under `page_first` a page that answered with nothing has its blocks
+        left alone. That is a deliberate loss of coverage rather than a free
+        saving: a discussion that exists only as an inline comment on a block,
+        with nothing at page level, is not fetched, and PAGE_FIRST_COMMENTS_NOTE
+        says so in the manifest so the hole is a recorded one. The price of
+        closing it is one request per block -- 6,053 blocks in a measured day,
+        of which the 1,500 comment requests returned one comment.
+
+        `every_block` keeps the exhaustive sweep for a run that would rather
+        pay that.
+        """
+        comments = self._comments_for(object_id)
+        if self._comment_budget_exhausted:
+            # The budget stopped this, not the strategy. Nothing below would
+            # run anyway, and counting these blocks as strategy-skipped would
+            # blame the wrong bound.
+            return comments
+        if strategy == "page_first" and not comments:
+            self._comment_blocks_unswept += len(block_ids)
+            return comments
+        self._comment_block_sweeps += 1
         for block_id in block_ids:
-            if self._comment_budget is not None and self._comment_requests_made >= self._comment_budget:
-                self._comment_budget_exhausted = True
+            comments.extend(self._comments_for(block_id))
+            if self._comment_budget_exhausted:
                 break
-            self._comment_requests_made += 1
-            try:
-                for page in self.client.iter_comments(block_id):
-                    results = page.get("results") or []
-                    self.archive.write_page(
-                        f"comments-{block_id}",
-                        page,
-                        endpoint="GET /comments",
-                        request={"block_id": block_id},
-                        item_count=len(results),
-                    )
-                    comments.extend(results)
-            except NotionApiError as error:
-                if error.status in {400, 403, 404}:
-                    self.archive.note_skip(
-                        "comments_inaccessible", block_id=block_id, status=error.status, code=error.code
-                    )
-                    continue
-                raise
         return comments
 
     def _collect_paginated_properties(self, page: dict[str, Any]) -> int:
@@ -460,9 +525,18 @@ class NotionCollector:
         max_objects: int | None = None,
         recheck_limit: int = DEFAULT_RECHECK_LIMIT,
         comment_request_budget: int | None = DEFAULT_COMMENT_REQUEST_BUDGET,
+        comment_strategy: str = DEFAULT_COMMENT_STRATEGY,
         advance_checkpoint: bool = True,
         until: datetime | None = None,
     ) -> NotionCollectionResult:
+        if comment_strategy not in COMMENT_STRATEGIES:
+            # Refused before the first API call: a misspelled strategy that
+            # silently fell back to a default would produce a run whose
+            # manifest names a sweep it did not perform.
+            raise ValueError(
+                f"unknown comment strategy {comment_strategy!r}; expected one of "
+                + ", ".join(COMMENT_STRATEGIES)
+            )
         archive = self.archive
         # A dry or smoke run must not touch persistent production state. The
         # queue is swapped for a read-only view rather than guarded at each
@@ -473,6 +547,13 @@ class NotionCollector:
         self._comment_budget = comment_request_budget
         self._comment_requests_made = 0
         self._comment_budget_exhausted = False
+        self._comment_block_sweeps = 0
+        self._comment_blocks_unswept = 0
+        archive.note_coverage(
+            PAGE_FIRST_COMMENTS_NOTE
+            if comment_strategy == "page_first"
+            else EXHAUSTIVE_COMMENTS_NOTE
+        )
         if comment_request_budget is not None:
             archive.note_coverage(BOUNDED_COMMENTS_NOTE)
         checkpoint = archive.read_checkpoint()
@@ -509,6 +590,7 @@ class NotionCollector:
                 "max_objects": max_objects,
                 "recheck_limit": recheck_limit,
                 "comment_request_budget": comment_request_budget,
+                "comment_strategy": comment_strategy,
             }
         )
 
@@ -604,7 +686,9 @@ class NotionCollector:
                 phase = "blocks"
                 blocks, block_ids = self._collect_blocks(object_id)
                 phase = "comments"
-                comments = self._collect_comments([object_id, *block_ids])
+                comments = self._collect_comments(
+                    object_id, block_ids, strategy=comment_strategy
+                )
                 if resolved_type == "page":
                     phase = "properties"
                     property_pages = self._collect_paginated_properties(obj)
@@ -713,6 +797,11 @@ class NotionCollector:
             "blocks_collected": blocks_collected,
             "comments_collected": comments_collected,
             "comment_requests_made": self._comment_requests_made,
+            "comment_strategy": comment_strategy,
+            # What the strategy bought and what it cost, as two counts rather
+            # than one ratio: sweeps that ran, and blocks never asked about.
+            "comment_block_sweeps": self._comment_block_sweeps,
+            "comment_blocks_unswept": self._comment_blocks_unswept,
             "comment_request_budget": comment_request_budget,
             "comment_requests_remaining": (
                 None

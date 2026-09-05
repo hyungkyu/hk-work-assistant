@@ -620,7 +620,7 @@ def capture_slurm(config: DailyConfig, credentials: Credentials) -> CaptureOutco
 
 
 def capture_notion(config: DailyConfig, credentials: Credentials) -> CaptureOutcome:
-    from .notion_collector import make_notion_collector
+    from .notion_collector import DEFAULT_COMMENT_STRATEGY, make_notion_collector
     from .slack_collector import parse_since, parse_until
 
     if not credentials.notion_token:
@@ -644,6 +644,12 @@ def capture_notion(config: DailyConfig, credentials: Credentials) -> CaptureOutc
             comment_request_budget=(
                 SMOKE_LIMITS["notion_comment_request_budget"] if config.smoke else None
             ),
+            # Named at the call site rather than left to the default, because
+            # it is the one setting here that changes what a run can find: a
+            # daily run asks each page for its comments and sweeps the blocks
+            # only of pages that have some. `every_block` buys the inline
+            # comments that misses, at one request per block.
+            comment_strategy=DEFAULT_COMMENT_STRATEGY,
             advance_checkpoint=_advance_checkpoint(config),
         )
     except Exception as error:

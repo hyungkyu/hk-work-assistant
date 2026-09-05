@@ -22,7 +22,9 @@ from rlwrld_worklog.notion_client import NotionApiError, NotionClient
 from rlwrld_worklog.notion_collector import (
     BOUNDED_COMMENTS_NOTE,
     DRY_RUN_LINK_QUEUE_NOTE,
+    EXHAUSTIVE_COMMENTS_NOTE,
     OBJECT_ISOLATION_NOTE,
+    PAGE_FIRST_COMMENTS_NOTE,
     SEARCH_INCOMPLETE_NOTE,
     UNRESOLVED_FAILURE_NOTE,
     WATERMARK_HELD_NOTE,
@@ -247,7 +249,9 @@ def test_descendant_blocks_and_comments_are_fetched_recursively(tmp_path: Path) 
     assert f"blocks-{PAGE_ID}" in kinds
     assert "blocks-summary-1" in kinds
     assert f"comments-{PAGE_ID}" in kinds
-    assert "comments-block-1" in kinds, "comments are requested per block, not only per page"
+    assert "comments-block-1" in kinds, (
+        "the page answered with a comment, so its blocks are swept for inline ones too"
+    )
 
 
 def test_users_and_data_sources_are_captured(tmp_path: Path) -> None:
@@ -414,7 +418,11 @@ def test_coverage_notes_declare_the_search_limits(tmp_path: Path) -> None:
 
 def test_an_explicitly_configured_comment_budget_bounds_and_reports_itself(tmp_path: Path) -> None:
     client = FakeNotionClient()
-    _, _, result = collect(tmp_path, client, comment_request_budget=1)
+    # Swept exhaustively, because a budget can only be seen to bind a sweep
+    # that would otherwise have made more than one request.
+    _, _, result = collect(
+        tmp_path, client, comment_request_budget=1, comment_strategy="every_block"
+    )
 
     assert result.counters["comment_budget_exhausted"] is True
     assert result.counters["comment_request_budget"] == 1
@@ -433,7 +441,7 @@ def test_a_full_density_run_sweeps_comments_exhaustively(tmp_path: Path) -> None
     """A finite default cap would make a large workspace truncate itself
     forever: withhold the checkpoint, then redo the identical window."""
     client = FakeNotionClient()
-    _, _, result = collect(tmp_path, client)
+    _, _, result = collect(tmp_path, client, comment_strategy="every_block")
 
     assert result.counters["comment_request_budget"] is None
     assert result.counters["comment_requests_remaining"] is None
@@ -463,7 +471,7 @@ def test_a_large_object_count_still_never_caps_itself(tmp_path: Path) -> None:
         ]
     ]
     client = FakeNotionClient(blocks={PAGE_ID: wide})
-    _, _, result = collect(tmp_path, client)
+    _, _, result = collect(tmp_path, client, comment_strategy="every_block")
 
     assert result.blocks_collected == 2_500
     assert result.counters["comment_requests_made"] == 2_501  # every block, plus the page
@@ -503,6 +511,110 @@ def test_a_mention_costs_no_request_that_was_not_already_being_made(tmp_path: Pa
     assert plain.calls == named.calls, "the same conversation with Notion, to the call"
     assert without.events[0].mentions == []
     assert [mention.target_id for mention in with_mention.events[0].mentions] == ["user-2"]
+
+
+# ---------------------------------------------------- the comment strategies
+#
+# Measured on one completed production day (176 pages, 6,053 block requests):
+# 1,500 /comments requests returned one comment. These tests pin both what the
+# cheaper sweep saves and what it stops seeing.
+
+
+def test_a_page_with_no_comments_costs_one_request_instead_of_a_whole_sweep(
+    tmp_path: Path,
+) -> None:
+    """The saving, as a number rather than a claim.
+
+    The same page under both strategies: the exhaustive sweep asks the page and
+    each of its four blocks, the page-first sweep stops after the page said no.
+    """
+    _, _, exhaustive = collect(
+        tmp_path / "exhaustive", FakeNotionClient(), comment_strategy="every_block"
+    )
+    _, _, page_first = collect(
+        tmp_path / "page-first", FakeNotionClient(), comment_strategy="page_first"
+    )
+
+    assert exhaustive.counters["comment_requests_made"] == 5
+    assert page_first.counters["comment_requests_made"] == 1
+    assert page_first.counters["comment_requests_made"] < exhaustive.counters[
+        "comment_requests_made"
+    ]
+    assert page_first.counters["comment_blocks_unswept"] == 4
+    assert page_first.counters["comment_block_sweeps"] == 0
+    assert exhaustive.counters["comment_blocks_unswept"] == 0
+
+
+def test_the_page_first_sweep_still_reaches_the_blocks_of_a_page_that_answered(
+    tmp_path: Path,
+) -> None:
+    client = FakeNotionClient(
+        comments={
+            PAGE_ID: [{"id": "comment-1", "discussion_id": "d1", "rich_text": []}],
+            "summary-text": [{"id": "comment-2", "discussion_id": "d2", "rich_text": []}],
+        }
+    )
+    _, _, result = collect(tmp_path, client)
+
+    assert result.comments_collected == 2, "the inline one is found once the page vouched"
+    assert result.counters["comment_requests_made"] == 5
+    assert result.counters["comment_block_sweeps"] == 1
+    assert result.counters["comment_blocks_unswept"] == 0
+
+
+def test_the_page_first_sweep_misses_an_inline_comment_with_no_page_level_one(
+    tmp_path: Path,
+) -> None:
+    """The cost of the trade, stated as a test so nobody rediscovers it live."""
+    client = FakeNotionClient(
+        comments={"summary-text": [{"id": "comment-2", "discussion_id": "d2"}]}
+    )
+    _, _, missed = collect(tmp_path / "page-first", client)
+    _, _, found = collect(
+        tmp_path / "exhaustive",
+        FakeNotionClient(comments={"summary-text": [{"id": "comment-2", "discussion_id": "d2"}]}),
+        comment_strategy="every_block",
+    )
+
+    assert missed.comments_collected == 0
+    assert found.comments_collected == 1, "the exhaustive sweep is still there for a run that wants it"
+    manifest = json.loads(missed.manifest_path.read_text())
+    assert PAGE_FIRST_COMMENTS_NOTE in manifest["coverage_notes"]
+    assert manifest["truncated"] is False, (
+        "the narrowing is the rule the run followed, not a bound it hit, so the "
+        "checkpoint still advances"
+    )
+    assert missed.checkpoint_advanced is True
+
+
+def test_each_run_names_the_sweep_that_produced_its_comments(tmp_path: Path) -> None:
+    _, _, page_first = collect(tmp_path / "page-first", FakeNotionClient())
+    _, _, exhaustive = collect(
+        tmp_path / "exhaustive", FakeNotionClient(), comment_strategy="every_block"
+    )
+
+    assert page_first.counters["comment_strategy"] == "page_first", "the new default"
+    assert exhaustive.counters["comment_strategy"] == "every_block"
+    for result, present, absent in (
+        (page_first, PAGE_FIRST_COMMENTS_NOTE, EXHAUSTIVE_COMMENTS_NOTE),
+        (exhaustive, EXHAUSTIVE_COMMENTS_NOTE, PAGE_FIRST_COMMENTS_NOTE),
+    ):
+        manifest = json.loads(result.manifest_path.read_text())
+        assert present in manifest["coverage_notes"]
+        assert absent not in manifest["coverage_notes"]
+        assert manifest["requested_window"]["comment_strategy"] == result.counters[
+            "comment_strategy"
+        ]
+
+
+def test_an_unknown_comment_strategy_is_refused_before_the_first_request(
+    tmp_path: Path,
+) -> None:
+    """A silent fallback would leave a manifest naming a sweep it never ran."""
+    client = FakeNotionClient()
+    with pytest.raises(ValueError, match="unknown comment strategy"):
+        collect(tmp_path, client, comment_strategy="every-block")
+    assert client.calls == []
 
 
 # ------------------------------------------------- the link queue in a dry run
