@@ -166,21 +166,37 @@ or `success_with_skips`.
 run does not know what it missed, while a run with skips named every one of
 them. Only `degraded`, `failed` and truncation make a date incomplete.
 
-### Run order is ignored
+### A whole-day re-read supersedes what came before it
 
-Every run intersecting the date contributes equally, through `any()` and
-`all()`. **Nothing in the verdict depends on which run happened last.**
+Runs on a date are first split by `_effective_runs()` into the ones that still
+speak for the date and the ones a later re-read has answered. The verdict is
+computed from the first group only, through the same `any()` / `all()` over
+states as before.
 
-The consequence is deliberate and worth stating plainly: **a later successful
-run does not clear an earlier failed one on the same date.** A date with a
-failed 03:10 run and a clean 09:00 re-run reads `partial`, not `collected`,
-because the incomplete signal is still true of that date's evidence. Clearing
-it would require asserting that the second run covered everything the first
-one missed, which the manifests do not say.
+A run supersedes earlier runs only if all three conditions in
+`_reread_whole_day()` hold:
 
-Ordering is used for exactly two fields: `last_status` and `last_run_id` come
-from the run with the greatest `last_activity_at` (falling back to
-`started_at`), at `:1382`.
+| Condition | Why it is there |
+| --- | --- |
+| state is `success` or `success_with_skips` | a failure says nothing about what is there |
+| not `truncated` | a truncated run is precisely one that knows it stopped early |
+| window spans the whole KST date | a run that re-read two hours cannot speak for the other twenty-two |
+
+So a date with a failed 03:10 run and a clean full-day 09:00 re-run reads
+`collected`. A date whose re-run covered only the afternoon, or was truncated,
+or itself failed, still reads `partial`. Supersession runs forwards only: a
+failure *after* a clean re-read is not cleared by it.
+
+The date's history is not erased. `runs` still counts every run that touched
+the date, `runs_superseded` says how many the re-read answered, and a note on
+the cell says so in words.
+
+Before this, every run intersecting a date voted forever, so a repaired gap
+could not be shown as repaired on the screen that reported it.
+
+Ordering is otherwise used for exactly two fields: `last_status` and
+`last_run_id` come from the run with the greatest `last_activity_at`, falling
+back to `started_at`, with the run id breaking exact ties (`_run_order_key()`).
 
 ### `truncated` forces incomplete
 

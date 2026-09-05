@@ -1515,3 +1515,123 @@ def test_a_stamped_rule_that_does_not_name_the_source_is_said_so_not_filled_in(
         run_id="20260902T140337Z-0aa0aa98d8ce",
     )
     assert slack["declares_source"] is True
+
+
+def _day_run(
+    paths: status.CollectionPaths,
+    *,
+    run_id: str,
+    at: str,
+    manifest_status: str = "success",
+    since: str = "2026-08-29T15:00:00+00:00",
+    until: str = "2026-08-30T15:00:00+00:00",
+    truncated: bool = False,
+) -> None:
+    """One run over the KST date 2026-08-30, or over part of it."""
+    write_manifest(
+        paths,
+        source="notion",
+        run_id=run_id,
+        status=manifest_status,
+        started_at=at,
+        finished_at=at,
+        requested_window={"since_effective": since, "until": until, "mode": "date_slice"},
+        truncated=truncated,
+        truncation=[{"kind": "budget", "count": 1}] if truncated else [],
+    )
+
+
+def _cell_for_0830(paths: status.CollectionPaths) -> dict[str, Any]:
+    grid = status.coverage(
+        paths,
+        start=status.parse_iso_date("2026-08-30"),
+        end=status.parse_iso_date("2026-08-30"),
+        sources=["notion"],
+        now=NOW,
+    )
+    return grid["rows"][0]["cells"]["notion"]
+
+
+def test_a_whole_day_reread_clears_an_earlier_failure(
+    paths: status.CollectionPaths,
+) -> None:
+    """Repairing a gap has to be visible on the screen that reported it.
+
+    Every run touching a date used to vote forever, so a capture that failed
+    at 01:00 held the date at `partial` even after a clean run at 05:00 read
+    the whole day. The dashboard could show a gap and could never show it
+    closed, which made it useless for the only thing it was used for.
+    """
+    _day_run(paths, run_id="20260830T010000Z-f00001", at="2026-08-30T01:00:00+00:00",
+             manifest_status="failed")
+    _day_run(paths, run_id="20260830T050000Z-f00002", at="2026-08-30T05:00:00+00:00")
+
+    cell = _cell_for_0830(paths)
+    assert cell["coverage"] == "collected"
+    assert cell["completeness"] == "complete"
+    # The history is not erased: the date still had two runs, and the cell
+    # says how many of them the re-read answered.
+    assert cell["runs"] == 2
+    assert cell["runs_superseded"] == 1
+    assert any("판정에서 제외" in note for note in cell["notes"])
+
+
+def test_a_partial_reread_clears_nothing(paths: status.CollectionPaths) -> None:
+    """A run that re-read two hours cannot speak for the other twenty-two."""
+    _day_run(paths, run_id="20260830T010000Z-f00003", at="2026-08-30T01:00:00+00:00",
+             manifest_status="failed")
+    _day_run(
+        paths,
+        run_id="20260830T050000Z-f00004",
+        at="2026-08-30T05:00:00+00:00",
+        since="2026-08-30T13:00:00+00:00",
+    )
+
+    cell = _cell_for_0830(paths)
+    assert cell["coverage"] == "partial"
+    assert cell["runs_superseded"] == 0
+
+
+def test_a_truncated_reread_clears_nothing(paths: status.CollectionPaths) -> None:
+    """A truncated run is precisely one that knows it stopped early.
+
+    Slack fails loudly and Notion runs out of budget quietly. The two must not
+    end the same way: a successful-but-truncated re-read may not turn a date
+    green, however recent it is.
+    """
+    _day_run(paths, run_id="20260830T010000Z-f00005", at="2026-08-30T01:00:00+00:00",
+             manifest_status="failed")
+    _day_run(paths, run_id="20260830T050000Z-f00006", at="2026-08-30T05:00:00+00:00",
+             truncated=True)
+
+    cell = _cell_for_0830(paths)
+    assert cell["coverage"] == "partial"
+    assert cell["completeness"] == "incomplete"
+    assert cell["runs_superseded"] == 0
+
+
+def test_a_failure_after_the_reread_is_not_cleared_by_it(
+    paths: status.CollectionPaths,
+) -> None:
+    """Supersession runs forwards only."""
+    _day_run(paths, run_id="20260830T010000Z-f00007", at="2026-08-30T01:00:00+00:00")
+    _day_run(paths, run_id="20260830T050000Z-f00008", at="2026-08-30T05:00:00+00:00",
+             manifest_status="failed")
+
+    cell = _cell_for_0830(paths)
+    assert cell["coverage"] == "partial"
+    assert cell["runs_superseded"] == 0
+
+
+def test_two_runs_at_the_same_instant_order_by_run_id(
+    paths: status.CollectionPaths,
+) -> None:
+    """A verdict that changes with directory listing order is not a verdict."""
+    _day_run(paths, run_id="20260830T050000Z-aaaaaa", at="2026-08-30T05:00:00+00:00",
+             manifest_status="failed")
+    _day_run(paths, run_id="20260830T050000Z-bbbbbb", at="2026-08-30T05:00:00+00:00")
+
+    cell = _cell_for_0830(paths)
+    assert cell["coverage"] == "collected"
+    assert cell["runs_superseded"] == 1
+    assert cell["last_run_id"] == "20260830T050000Z-bbbbbb"

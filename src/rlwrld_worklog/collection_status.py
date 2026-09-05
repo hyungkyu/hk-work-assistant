@@ -1291,6 +1291,77 @@ def _run_intersects_day(run: Mapping[str, Any], start: datetime, end: datetime) 
     return window_start < end and window_end >= start
 
 
+_SETTLED_STATES = {"success", "success_with_skips"}
+
+
+def _run_window_start(run: Mapping[str, Any]) -> datetime | None:
+    """From when this run observed."""
+    window = run.get("window") or {}
+    return parse_instant(window.get("start")) or parse_instant(run.get("started_at"))
+
+
+def _run_order_key(run: Mapping[str, Any]) -> tuple[str, str]:
+    """When a run last did anything, with the run id breaking exact ties.
+
+    Two manifests can carry the same instant. Without the second element the
+    order between them would depend on the order the files happened to be
+    read, and a verdict that changes with directory listing order is not a
+    verdict.
+    """
+    return (
+        str(run.get("last_activity_at") or run.get("started_at") or ""),
+        str(run.get("run_id") or ""),
+    )
+
+
+def _reread_whole_day(run: Mapping[str, Any], day_start: datetime, day_end: datetime) -> bool:
+    """Did this run settle cleanly over the whole of this date?
+
+    Three conditions, each earning its place. The run has to have settled - a
+    failure says nothing about what is there. It has to be untruncated,
+    because a truncated run is precisely one that knows it stopped early. And
+    its window has to span the entire date, because a run that re-read two
+    hours has no standing to speak for the other twenty-two.
+    """
+    if str(run.get("state")) not in _SETTLED_STATES:
+        return False
+    if run.get("truncated"):
+        return False
+    start = _run_window_start(run)
+    end = _run_window_end(run)
+    if start is None or end is None:
+        return False
+    return start <= day_start and end >= day_end
+
+
+def _effective_runs(
+    runs: list[Mapping[str, Any]], *, day_start: datetime, day_end: datetime
+) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
+    """Split a date's runs into those that still speak for it and those a
+    later whole-day re-read has answered.
+
+    Before this, every run intersecting a date voted forever: a capture that
+    failed at 10:00 held the date at `partial` even after a clean full-day
+    re-run at 14:00 read everything it had missed. Repairing a gap could not
+    be seen on the screen that reported the gap, which is the one thing that
+    screen exists for.
+
+    Supersession is deliberately narrow. Only a run matching
+    `_reread_whole_day` supersedes, it supersedes only what came before it, a
+    partial or truncated re-run clears nothing, and a failure *after* the
+    re-read is not cleared by it. The date's history is not erased - the count
+    of superseded runs is reported on the cell.
+    """
+    rereads = [run for run in runs if _reread_whole_day(run, day_start, day_end)]
+    if not rereads:
+        return list(runs), []
+    mark = _run_order_key(max(rereads, key=_run_order_key))
+    superseded = [run for run in runs if _run_order_key(run) < mark]
+    if not superseded:
+        return list(runs), []
+    return [run for run in runs if _run_order_key(run) >= mark], superseded
+
+
 def _run_evidence_class(runs: list[Mapping[str, Any]]) -> str:
     """Which grade of evidence backs these runs.
 
@@ -1305,7 +1376,14 @@ def _run_evidence_class(runs: list[Mapping[str, Any]]) -> str:
     return EVIDENCE_MANIFEST if with_manifest else EVIDENCE_DIRECTORY_ONLY
 
 
-def _cell_from_runs(runs: list[Mapping[str, Any]]) -> dict[str, Any]:
+def _cell_from_runs(
+    runs: list[Mapping[str, Any]], *, day_start: datetime, day_end: datetime
+) -> dict[str, Any]:
+    # `all_runs` is what touched this date; `runs` below is what still speaks
+    # for it. The count on the cell stays the former so a repaired date does
+    # not look like it was only ever collected once.
+    all_runs = runs
+    runs, superseded = _effective_runs(runs, day_start=day_start, day_end=day_end)
     states = [str(run.get("state")) for run in runs]
     rule_counts: dict[tuple[str | None, str], int] = {}
     for run in runs:
@@ -1379,13 +1457,16 @@ def _cell_from_runs(runs: list[Mapping[str, Any]]) -> dict[str, Any]:
         )
     if any(state == "malformed" for state in states):
         notes.append("a manifest for this date could not be parsed and is quarantined")
-    last = max(
-        runs,
-        key=lambda run: str(run.get("last_activity_at") or run.get("started_at") or ""),
-    )
+    if superseded:
+        notes.append(
+            f"이 날짜 전체를 다시 읽은 실행이 뒤에 있어, 앞선 실행 {len(superseded)}건은 "
+            "판정에서 제외했습니다."
+        )
+    last = max(runs, key=_run_order_key)
     return {
         "coverage": coverage,
-        "runs": len(runs),
+        "runs": len(all_runs),
+        "runs_superseded": len(superseded),
         "runs_known": True,
         "last_status": last.get("manifest_status") or last.get("state"),
         "last_run_id": last.get("run_id"),
@@ -1601,7 +1682,7 @@ def coverage(
             ]
             legacy_dirs = (inventory["dates"].get(iso) or {}).get(source) or []
             if matching:
-                cell = _cell_from_runs(matching)
+                cell = _cell_from_runs(matching, day_start=day_start, day_end=day_end)
                 _apply_time_coverage(cell, matching, day_end=day_end, now=moment)
                 if legacy_dirs:
                     cell["rule_versions"].append(
