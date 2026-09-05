@@ -29,6 +29,7 @@ from test_notion_collector import (  # noqa: E402
     FakeNotionClient,
     PAGE_ID,
     page_body,
+    paragraph,
 )
 from test_notion_collector import collect as collect_notion  # noqa: E402
 from test_slack_collector import (  # noqa: E402
@@ -236,6 +237,53 @@ def test_an_archived_notion_page_carries_its_deleted_state(tmp_path: Path) -> No
         "kind": "archived_or_in_trash",
         "status": "observed",
     }
+
+
+def test_a_notion_record_carries_who_it_named_and_says_that_it_looked(
+    tmp_path: Path,
+) -> None:
+    """Who edited what already rode on the page object. Who mentioned whom did not.
+
+    Slack's records say `mentions_extracted: False` because nothing re-derives
+    them from message text; the Notion path does the work, so its records say
+    so -- including the objects that named nobody, where an empty list means no
+    mention rather than not-looked.
+    """
+    client = FakeNotionClient(
+        blocks={
+            PAGE_ID: [[paragraph(mention={"type": "user", "user": {"id": "user-2"}})]],
+        },
+        comments={
+            PAGE_ID: [
+                {
+                    "id": "comment-1",
+                    "discussion_id": "d1",
+                    "created_time": "2026-08-26T01:30:00Z",
+                    "rich_text": [
+                        {
+                            "type": "mention",
+                            "mention": {"type": "user", "user": {"id": "user-3"}},
+                            "plain_text": "@Dana",
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+    _, _, run = collect_notion(tmp_path, client)
+    records = rows(convert(tmp_path, run.manifest_path, "notion"))
+
+    block = by_type(records, "block")[0]
+    comment = by_type(records, "comment")[0]
+    page = by_type(records, "page")[0]
+    assert block["relations"]["mentioned_user_ids"] == ["user-2"]
+    assert comment["relations"]["mentioned_user_ids"] == ["user-3"]
+    assert page["relations"]["mentioned_user_ids"] == []
+    assert page["relations"]["last_edited_by_user_id"] == "user-1", (
+        "who edited it was always free; it rides on the page object"
+    )
+    for record in (block, comment, page):
+        assert record["relations"]["mentions_extracted"] is True
 
 
 # -------------------------------------------------------- google calendar

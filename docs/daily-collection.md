@@ -537,6 +537,16 @@ comments per block, users, and the archived/in-trash flags.
   `comment_requests_made`, adds the `notion.comment_requests_capped` coverage
   note, and reaching it marks the run truncated and withholds the checkpoint.
   Smoke runs use a small explicit budget for exactly that reason.
+* **Mentions are extracted, and cost nothing extra.** The user mentions inside
+  the `rich_text` of blocks and comments the run already fetched are pulled out
+  and carried both on the timeline event (`mentions`, as `MentionKind.DIRECT`)
+  and on every ledger record (`relations.mentioned_user_ids`, alongside
+  `relations.mentions_extracted: true`). Who *edited* a page was already free —
+  `created_by` and `last_edited_by` ride on the page object. Page, database,
+  date and link_preview mentions are deliberately not turned into a `Mention`:
+  a mention carries a direction, and one document naming another has no
+  direction to state. Those stay in the raw block JSON, which the ledger keeps
+  verbatim.
 * The `last_edited_time` watermark advances only across the contiguous prefix
   of successfully fetched objects: it never steps over a failed fetch. A
   stalled checkpoint widens the next window rather than leaving a hole.

@@ -472,6 +472,39 @@ def test_a_large_object_count_still_never_caps_itself(tmp_path: Path) -> None:
     assert result.checkpoint_advanced is True
 
 
+# ------------------------------------------------------------ who was named
+
+
+def paragraph(*, mention: dict[str, Any] | None = None) -> dict[str, Any]:
+    """One paragraph block, optionally naming somebody, as Notion shapes it."""
+    rich_text: list[dict[str, Any]] = [
+        {"type": "text", "text": {"content": "please review "}, "plain_text": "please review "}
+    ]
+    if mention is not None:
+        rich_text.append({"type": "mention", "mention": mention, "plain_text": "@Someone"})
+    return {
+        "id": "block-1",
+        "type": "paragraph",
+        "has_children": False,
+        "paragraph": {"rich_text": rich_text},
+    }
+
+
+def test_a_mention_costs_no_request_that_was_not_already_being_made(tmp_path: Path) -> None:
+    """The mentions were always in the blocks; only throwing them away was free."""
+    plain = FakeNotionClient(blocks={PAGE_ID: [[paragraph()]]})
+    named = FakeNotionClient(
+        blocks={PAGE_ID: [[paragraph(mention={"type": "user", "user": {"id": "user-2"}})]]}
+    )
+
+    _, _, without = collect(tmp_path / "plain", plain)
+    _, _, with_mention = collect(tmp_path / "named", named)
+
+    assert plain.calls == named.calls, "the same conversation with Notion, to the call"
+    assert without.events[0].mentions == []
+    assert [mention.target_id for mention in with_mention.events[0].mentions] == ["user-2"]
+
+
 # ------------------------------------------------- the link queue in a dry run
 
 

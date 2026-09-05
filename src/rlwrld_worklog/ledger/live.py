@@ -27,6 +27,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+# The one extractor, shared with the timeline normalizer on purpose: two
+# definitions of what counts as a Notion mention would eventually disagree, and
+# then a person's name would be in one projection of a run and not the other.
+from ..normalizers import notion_mention_user_ids
 from .common import content_hash, slack_ts_to_iso
 from .schema import (
     CAPTURE_PROFILES,
@@ -680,6 +684,18 @@ def _notion_records(
                     if isinstance(obj.get("last_edited_by"), dict)
                     else None,
                     "has_children": obj.get("has_children"),
+                    # Who this object named. `created_by` and `last_edited_by`
+                    # above already answer who *touched* it; a mention is the
+                    # other half of the question, and it rides inside the
+                    # rich_text of blocks and comments the run has already
+                    # paid to fetch. Slack's records say `mentions_extracted:
+                    # False` because nothing re-derives them from message text
+                    # yet; the Notion path does, so it says so. An object with
+                    # no rich text -- a user, a data source -- was still
+                    # walked, and its empty list means no mention, not
+                    # not-looked.
+                    "mentioned_user_ids": notion_mention_user_ids(obj),
+                    "mentions_extracted": True,
                 },
                 provenance=provenance,
                 coverage=_coverage(len(objects), manifest),

@@ -104,6 +104,28 @@ authority; the docstring has not been corrected.
 The five extensions are `observation_window`, `capture_completeness`,
 `supplement_provenance`, `visibility_routing`, `denormalized_label_snapshot`.
 
+`relations` is a free-form object, and it is where a converter lifts pointers
+already inside `raw_payload` into a place a query can reach: a Slack message's
+`author_user_id` and `thread_id`, a Notion object's `parent_id`,
+`created_by_user_id` and `last_edited_by_user_id`. Nothing there is inferred —
+each value is a copy of something the API returned.
+
+Two of its members answer "who mentioned whom", and they do not say the same
+thing for every source:
+
+| Source | `relations.mentions_extracted` | `relations.mentioned_user_ids` |
+|---|---|---|
+| Slack (live and legacy) | `false` | absent — the legacy pipeline derived mentions from a single regex over `text`, and re-deriving them belongs to the service layer, where the method and its limits can be recorded (`ledger/legacy_slack.py:147-150`, `ledger/live.py:428`) |
+| Notion | `true` | ids of the users named in that object's own `rich_text`, in first-seen order. `[]` means the object named nobody, not that nobody looked |
+
+Notion's are extracted here because they are already in hand: they ride inside
+the blocks and comments the run has paid to fetch, and the extractor
+(`normalizers.notion_mention_user_ids`) is shared with the timeline normalizer
+so two projections of one run cannot disagree about what a mention is. Page,
+database, date and link_preview mentions are not listed — a mention carries a
+direction, and one document naming another has no direction to state. Those
+stay in `raw_payload` verbatim.
+
 Deliberately **not** ledger fields:
 
 | Item | Where it lives | Why |

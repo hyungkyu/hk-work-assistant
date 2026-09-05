@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from .models import Classification, Mention, MentionKind, Source, TimelineEvent
 
@@ -170,12 +170,83 @@ def _plain_text(value: Any) -> str:
     return "\n".join(part for part in parts if part)
 
 
+def _iter_notion_mentions(value: Any) -> Iterator[dict[str, Any]]:
+    """Every rich-text entry that is a mention, wherever in the object it sits.
+
+    Notion hangs `rich_text` off a key named after the block's own type
+    (`paragraph`, `heading_2`, `to_do`, a database property, …) and a comment
+    carries its own array, so there is no single path to read. Matching on the
+    shape rather than the path means a block type nobody here has seen yet
+    still yields the people it named.
+    """
+    if isinstance(value, dict):
+        mention = value.get("mention")
+        if value.get("type") == "mention" and isinstance(mention, dict):
+            # A mention object holds only the thing mentioned; nothing nested
+            # inside it is itself rich text.
+            yield mention
+            return
+        for nested in value.values():
+            yield from _iter_notion_mentions(nested)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _iter_notion_mentions(item)
+
+
+def notion_mention_user_ids(value: Any) -> list[str]:
+    """Ids of the users mentioned anywhere in `value`, in first-seen order.
+
+    Page, database, date and link_preview mentions are deliberately left out.
+    A `Mention` carries a `direction` -- to_self, from_self, other -- which is a
+    statement about people, and one document naming another has no direction to
+    state; recording it here would answer "who mentioned whom" with something
+    that is not a who. The document-to-document link is not lost by the choice:
+    the mention object stays verbatim in the raw block JSON, which the ledger
+    keeps as `raw_payload`.
+
+    One entry per person, not one per occurrence. The question this answers is
+    who a page pulled in, and a name repeated across forty blocks is still one
+    person.
+    """
+    ids: list[str] = []
+    for mention in _iter_notion_mentions(value):
+        if mention.get("type") != "user":
+            continue
+        user = mention.get("user")
+        user_id = user.get("id") if isinstance(user, dict) else None
+        if isinstance(user_id, str) and user_id and user_id not in ids:
+            ids.append(user_id)
+    return ids
+
+
+def extract_notion_mentions(
+    value: Any, *, actor_id: str | None, self_user_id: str
+) -> list[Mention]:
+    """Notion mentions in the same shape Slack's arrive in.
+
+    Direction needs a self to be relative to. Notion user ids are workspace
+    uuids from a different namespace than Slack's, so a caller that has not
+    said which one is ours gets `other` throughout rather than a guess.
+    """
+    mentions: list[Mention] = []
+    for target_id in notion_mention_user_ids(value):
+        if self_user_id and target_id == self_user_id:
+            direction = "to_self"
+        elif self_user_id and actor_id == self_user_id:
+            direction = "from_self"
+        else:
+            direction = "other"
+        mentions.append(Mention(target_id, MentionKind.DIRECT, direction, 100))
+    return mentions
+
+
 def normalize_notion(
     page: dict[str, Any],
     *,
     blocks: list[dict[str, Any]] | None = None,
     comments: list[dict[str, Any]] | None = None,
     legacy_text: str | None = None,
+    self_user_id: str = "",
 ) -> TimelineEvent:
     created = page.get("created_time") or page.get("last_edited_time")
     if not created:
@@ -184,17 +255,23 @@ def normalize_notion(
     page_id = str(page["id"])
     content = legacy_text if legacy_text is not None else _plain_text(blocks or [])
     title = page.get("title") or _plain_text(page.get("properties", {}))[:500]
+    actor_id = (page.get("last_edited_by") or {}).get("id")
     return TimelineEvent.create(
         source=Source.NOTION,
         event_type="notion_page",
         external_id=page_id,
-        actor_id=(page.get("last_edited_by") or {}).get("id"),
+        actor_id=actor_id,
         occurred_at=_iso_datetime(created),
         updated_at=_iso_datetime(updated),
         container_id=str((page.get("parent") or {}).get("page_id") or (page.get("parent") or {}).get("data_source_id") or ""),
         thread_id=page_id,
         permalink=page.get("url"),
         classification=classify_text(f"{title}\n{content}"),
+        # The blocks and comments are already in hand; the mentions inside them
+        # cost no request that has not already been paid for.
+        mentions=extract_notion_mentions(
+            [blocks or [], comments or []], actor_id=actor_id, self_user_id=self_user_id
+        ),
         payload={
             "title": title,
             "properties": page.get("properties", {}),
