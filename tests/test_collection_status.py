@@ -1635,3 +1635,81 @@ def test_two_runs_at_the_same_instant_order_by_run_id(
     assert cell["coverage"] == "collected"
     assert cell["runs_superseded"] == 1
     assert cell["last_run_id"] == "20260830T050000Z-bbbbbb"
+
+
+def test_a_dry_run_does_not_collect_a_date(paths: status.CollectionPaths) -> None:
+    """A dry run reads the source and keeps nothing.
+
+    No checkpoint moves and no ledger row lands, so the date is exactly as
+    uncollected afterwards as before. It used to paint the cell `collected`,
+    which is the one direction this module must never err in.
+    """
+    write_manifest(
+        paths,
+        source="notion",
+        run_id="20260830T050000Z-d00001",
+        started_at="2026-08-30T05:00:00+00:00",
+        finished_at="2026-08-30T05:00:00+00:00",
+        requested_window={
+            "since_effective": "2026-08-29T15:00:00+00:00",
+            "until": "2026-08-30T15:00:00+00:00",
+            "mode": "date_slice",
+        },
+        dry_run=True,
+    )
+
+    cell = _cell_for_0830(paths)
+    assert cell["coverage"] == "not_collected"
+    assert cell["completeness"] == "incomplete"
+    assert cell["runs"] == 1
+    assert any("dry-run" in note for note in cell["notes"])
+
+
+def test_a_dry_run_neither_clears_nor_condemns_a_real_run(
+    paths: status.CollectionPaths,
+) -> None:
+    """Set aside, not folded in: it is evidence of neither collection nor failure."""
+    _day_run(paths, run_id="20260830T010000Z-d00002", at="2026-08-30T01:00:00+00:00")
+    write_manifest(
+        paths,
+        source="notion",
+        run_id="20260830T050000Z-d00003",
+        status="failed",
+        started_at="2026-08-30T05:00:00+00:00",
+        finished_at="2026-08-30T05:00:00+00:00",
+        requested_window={
+            "since_effective": "2026-08-29T15:00:00+00:00",
+            "until": "2026-08-30T15:00:00+00:00",
+            "mode": "date_slice",
+        },
+        dry_run=True,
+    )
+
+    cell = _cell_for_0830(paths)
+    # The dry run failed, but it was never going to keep anything, so it does
+    # not turn a genuinely collected date partial.
+    assert cell["coverage"] == "collected"
+    assert cell["runs"] == 2
+
+
+def test_a_dry_run_cannot_supersede_a_failure(paths: status.CollectionPaths) -> None:
+    """Superseding means 'this was read again'. A dry run did not keep it."""
+    _day_run(paths, run_id="20260830T010000Z-d00004", at="2026-08-30T01:00:00+00:00",
+             manifest_status="failed")
+    write_manifest(
+        paths,
+        source="notion",
+        run_id="20260830T050000Z-d00005",
+        started_at="2026-08-30T05:00:00+00:00",
+        finished_at="2026-08-30T05:00:00+00:00",
+        requested_window={
+            "since_effective": "2026-08-29T15:00:00+00:00",
+            "until": "2026-08-30T15:00:00+00:00",
+            "mode": "date_slice",
+        },
+        dry_run=True,
+    )
+
+    cell = _cell_for_0830(paths)
+    assert cell["coverage"] == "failed"
+    assert cell["runs_superseded"] == 0

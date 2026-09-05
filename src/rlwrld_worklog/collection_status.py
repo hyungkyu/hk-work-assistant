@@ -1325,7 +1325,7 @@ def _reread_whole_day(run: Mapping[str, Any], day_start: datetime, day_end: date
     """
     if str(run.get("state")) not in _SETTLED_STATES:
         return False
-    if run.get("truncated"):
+    if run.get("truncated") or run.get("dry_run"):
         return False
     start = _run_window_start(run)
     end = _run_window_end(run)
@@ -1384,6 +1384,15 @@ def _cell_from_runs(
     # not look like it was only ever collected once.
     all_runs = runs
     runs, superseded = _effective_runs(runs, day_start=day_start, day_end=day_end)
+    # A dry run reads the source and persists nothing: no checkpoint moves, and
+    # the date is no more collected afterwards than before. It is not evidence
+    # of collection, and it is not evidence of failure either, so it is set
+    # aside rather than folded into the verdict. A date whose only runs were
+    # dry runs was not collected, and used to paint itself `collected`.
+    dry_count = sum(1 for run in runs if run.get("dry_run"))
+    dry_only = bool(runs) and dry_count == len(runs)
+    if not dry_only:
+        runs = [run for run in runs if not run.get("dry_run")]
     states = [str(run.get("state")) for run in runs]
     rule_counts: dict[tuple[str | None, str], int] = {}
     for run in runs:
@@ -1418,8 +1427,13 @@ def _cell_from_runs(
         coverage = COVERAGE_COLLECTED_WITH_SKIPS
     else:
         coverage = COVERAGE_COLLECTED
+    if dry_only and coverage != COVERAGE_RUNNING:
+        # Whatever those runs looked like, nothing was kept.
+        coverage = COVERAGE_NOT_COLLECTED
     completeness = "unknown"
-    if coverage == COVERAGE_COLLECTED:
+    if coverage == COVERAGE_NOT_COLLECTED:
+        completeness = "incomplete"
+    elif coverage == COVERAGE_COLLECTED:
         completeness = "complete"
     elif coverage == COVERAGE_COLLECTED_WITH_SKIPS:
         # Everything the run set out to read, minus what it explicitly named.
@@ -1457,6 +1471,11 @@ def _cell_from_runs(
         )
     if any(state == "malformed" for state in states):
         notes.append("a manifest for this date could not be parsed and is quarantined")
+    if dry_count:
+        notes.append(
+            f"이 날짜의 실행 {dry_count}건은 dry-run 이라 아무것도 남기지 않았습니다"
+            + ("; 이 날짜에 남은 실행이 없습니다." if dry_only else "; 판정에서 제외했습니다.")
+        )
     if superseded:
         notes.append(
             f"이 날짜 전체를 다시 읽은 실행이 뒤에 있어, 앞선 실행 {len(superseded)}건은 "

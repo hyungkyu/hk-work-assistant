@@ -223,28 +223,29 @@ V0 evidence is recorded alongside it — an extra `rule_versions` entry and an
 `evidence_class` of `mixed` — rather than blended into the verdict
 (`:1613-1619`).
 
-## Known defect: a plain `--dry-run` day reads as `collected`
+## Dry runs are set aside, not counted
 
-`_cell_from_runs` never consults `dry_run`. The field is carried per run —
-`summarize_manifest_payload` records it at `collection_status.py:519` and it is
-listed in `_RUN_FIELDS` at `:1763` — but the verdict logic at
-`:1308-1400` does not read it.
+A dry run reads the source and keeps nothing: no checkpoint advances, the link
+queue is a read-only view, and the database transaction is rolled back. The
+date is exactly as uncollected afterwards as before.
 
-A `--smoke` run is caught anyway, because every smoke bound calls
-`note_truncation` and truncation forces `partial`. A plain
-`worklog daily-collect --dry-run` sets no truncation, so its manifest is an
-ordinary `success` and **the coverage grid paints that date `collected`** —
-even though the run advanced no checkpoint, wrote nothing to the link queue and
-rolled back its database transaction.
+`_cell_from_runs` therefore removes dry runs from the evidence before computing
+the verdict. They are evidence of neither collection nor failure, so setting
+them aside is not the same as treating them as a failure:
 
-This is a defect, not intended behaviour. A dry run is not a collection, and a
-date whose only evidence is one should not read as covered. Fixing it means
-treating `dry_run` as an incomplete signal in `_cell_from_runs`, the same way
-`truncated` is treated.
+| The date's runs | Verdict |
+| --- | --- |
+| one real success, one failed dry run | `collected` — the dry run was never going to keep anything |
+| dry runs only | `not_collected`, `completeness: incomplete` |
+| a failure, then a clean full-day dry run | `failed` — a dry run cannot supersede |
 
-Until then: when reading the dashboard, check the run row's `dry_run` field
-before trusting a `collected` cell on a date you know was only exercised with a
-dry run.
+`runs` still counts every run that touched the date, and a note names how many
+were dry runs.
+
+This was a defect until 2026-09-05: `_cell_from_runs` did not consult
+`dry_run`, a `--smoke` run happened to be caught because every smoke bound
+calls `note_truncation`, and a plain `worklog daily-collect --dry-run` produced
+an ordinary `success` manifest that painted the date `collected`.
 
 ## Rule attribution
 
