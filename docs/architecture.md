@@ -36,12 +36,13 @@ Slack · Notion · Google Calendar · GitHub · Slurm
 | Slack | `slack_collector.py` | `daily-collect`, `collect slack` | 자동 |
 | Google Calendar | `calendar_collector.py` | `daily-collect`, `collect google-calendar` | 자동 |
 | Notion | `notion_collector.py` | `daily-collect`, `collect notion` | 자동 |
-| GitHub | `github_collector.py` | `github-collect` **만** | **수동** |
-| Slurm | `slurm_collector.py` | `slurm-collect` **만** | **수동** |
+| GitHub | `github_collector.py` | `daily-collect`, `github-collect` | 자동 |
+| Slurm | `slurm_collector.py` | `daily-collect`, `slurm-collect` | 자동 |
 
-`daily-collect` 가 도는 것은 위 셋뿐이다(`daily.py:35`). GitHub 과 Slurm 은 수집에서
-멈추고, `ledger-live-convert` 와 `ledger-load` 를 사람이 따로 돌려야 한다. 자세한
-것은 [daily-collection.md](daily-collection.md).
+`daily-collect` 는 다섯 소스를 모두 돌린다(`daily.py:45`). `github-collect` 와
+`slurm-collect` 는 KST 날짜 구간을 지정해 손으로 수집할 때 쓰는 명령으로 남아
+있고, 그 경로로 수집한 것은 `ledger-live-convert` 와 `ledger-load` 를 사람이 따로
+돌려야 한다. 자세한 것은 [daily-collection.md](daily-collection.md).
 
 ### 수집 범위 — 실제
 

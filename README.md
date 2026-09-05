@@ -37,9 +37,10 @@ explicit policy change before files are staged. See
 
 **Collection.** Daily incremental, read-only capture with an immutable raw
 archive, per-run manifests, and resumable per-source checkpoints. Five sources
-are implemented; `worklog daily-collect` runs three of them (Slack, Google
-Calendar, Notion), and GitHub and Slurm are separate commands whose output must
-be converted and loaded by hand. See
+are implemented, and `worklog daily-collect` runs all five (Slack, Google
+Calendar, GitHub, Slurm, Notion) from capture through ledger to database.
+`github-collect` and `slurm-collect` remain as capture-only commands for an
+explicit window of KST days, which is what a historical backfill uses. See
 [docs/daily-collection.md](docs/daily-collection.md).
 
 **Ledger.** A standard v1 record format that both live captures and legacy

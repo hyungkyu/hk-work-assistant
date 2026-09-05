@@ -1,4 +1,4 @@
-"""One daily incremental run across Slack, Notion and Google Calendar.
+"""One daily incremental run across all five sources.
 
 Shape of a run, per source and in this order:
 
@@ -17,7 +17,14 @@ owns its own checkpoint file under its own manifest directory.
 
 Source order is fixed rather than taken from the command line: Slack and
 Calendar feed the Notion link queue, so Notion runs last and drains what they
-discovered in the same run.
+discovered in the same run. GitHub and Slurm discover no Notion URL today, but
+they are ordered before Notion anyway, so the rule stays the single sentence
+"Notion runs last" rather than a list of which sources happen to feed it.
+
+Slack, Calendar and Notion are given a `since` instant. GitHub and Slurm are
+given a window of KST calendar days instead, because that is the key their
+records are filed under; `_kst_window` makes that conversion and is the only
+place in the codebase that makes it.
 """
 
 from __future__ import annotations
@@ -28,12 +35,21 @@ import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from .archive import RawArchive
 
-SOURCE_ORDER = ("slack", "google-calendar", "notion")
-LEDGER_SOURCE = {"slack": "slack", "notion": "notion", "google-calendar": "google_calendar"}
+if TYPE_CHECKING:  # collectors are imported lazily, inside each capture
+    from .github_collector import Window
+
+SOURCE_ORDER = ("slack", "google-calendar", "github", "slurm", "notion")
+LEDGER_SOURCE = {
+    "slack": "slack",
+    "notion": "notion",
+    "google-calendar": "google_calendar",
+    "github": "github",
+    "slurm": "slurm",
+}
 
 DEFAULT_SINCE = "26h"
 DEFAULT_ARCHIVE_ROOT = "/data/rlwrld-worklog"
@@ -47,6 +63,18 @@ SMOKE_LIMITS = {
     "notion_recheck_limit": 0,
     "notion_comment_request_budget": 20,
     "calendar_max_calendars": 2,
+    "github_max_repositories": 2,
+    # No REST kind at all. GitHub's commits come from the local mirrors, so a
+    # commit-only capture still proves the whole path -- listing, mirror read,
+    # archive, manifest -- for the one API call the repository listing costs.
+    # Any REST kind costs at least one more call per repository.
+    "github_kinds": (),
+    # One cloud, not three. The dump endpoint offers no time query and no
+    # pagination, so the smallest thing Slurm can fetch is one cloud's entire
+    # export; asking for all three would download what a full run downloads.
+    # `clouds_attempted` in the manifest records which one was asked for, so
+    # the bound is never mistaken for two quiet clouds.
+    "slurm_clouds": ("kakao",),
 }
 
 EXIT_OK = 0
@@ -62,7 +90,10 @@ SECRET_FILENAMES = {
     "slack_token": "slack-token",
     "notion_token": "notion-token",
     "google_token": "google-token.json",
+    "github_token": "github-token",
 }
+
+DEFAULT_GITHUB_ORGANIZATION = "rlwrld"
 
 
 @dataclass(frozen=True)
@@ -77,6 +108,7 @@ class Credentials:
     config_root: Path
     slack_token: str | None
     notion_token: str | None
+    github_token: str | None
     google_token_path: Path | None
     settings: dict[str, Any]
 
@@ -85,11 +117,22 @@ class Credentials:
         value = self.settings.get("slack_expected_team_id") or os.environ.get("SLACK_EXPECTED_TEAM_ID")
         return str(value) if value else None
 
+    @property
+    def github_organization(self) -> str:
+        value = self.settings.get("github_organization") or os.environ.get("GITHUB_ORG")
+        return str(value) if value else DEFAULT_GITHUB_ORGANIZATION
+
     def availability(self) -> dict[str, bool]:
         return {
             "slack": bool(self.slack_token),
             "notion": bool(self.notion_token),
             "google-calendar": bool(self.google_token_path and self.google_token_path.is_file()),
+            "github": bool(self.github_token),
+            # Slurm is listed with the others and is always true rather than
+            # left out. Its dump endpoint is an unauthenticated request on the
+            # tailnet, so there is no credential that can be missing; a
+            # five-source map with four entries would read as a lost token.
+            "slurm": True,
         }
 
 
@@ -127,6 +170,8 @@ def load_credentials(config_root: Path | None = None) -> Credentials:
         or os.environ.get("SLACK_USER_TOKEN"),
         notion_token=_read_secret(credentials_dir / SECRET_FILENAMES["notion_token"])
         or os.environ.get("NOTION_TOKEN"),
+        github_token=_read_secret(credentials_dir / SECRET_FILENAMES["github_token"])
+        or os.environ.get("GITHUB_TOKEN"),
         google_token_path=google_path,
         settings=settings,
     )
@@ -225,6 +270,41 @@ CaptureFn = Callable[[DailyConfig, Credentials], CaptureOutcome]
 # ----------------------------------------------------------------- capture
 
 
+def _kst_window(config: DailyConfig, *, now: datetime | None = None) -> Window:
+    """The window of KST calendar days that `config.since` covers.
+
+    Slack, Calendar and Notion take an instant. GitHub and Slurm take a closed
+    interval of KST calendar days (`github_collector.py:175-219`), because a
+    KST date is the key their records are filed under and every window decision
+    they make is a comparison against that day's boundaries. This builds the
+    same `Window` `github-collect` builds (`cli.py:396`); the only difference
+    is that the two dates are read off the daily run's instant instead of off
+    the command line, so the codebase keeps one window convention, not two.
+
+    Both edges round outwards, and that rounding is the point of the
+    conversion:
+
+      * the start is the whole KST day that *contains* the since instant. A day
+        is the smallest unit these two sources can express, so the alternative
+        to re-reading that day's earlier hours is never reading them at all.
+        Re-reading costs nothing: a commit sha and a job id are stable
+        identities, the ledger is keyed by them, and the archive refuses to
+        rewrite a page it already holds.
+      * the end is today's KST date, not the moment the run started, because a
+        day still in progress is still the day its records are filed under. The
+        next run re-reads it and picks up whatever arrived after this one.
+    """
+    from .github_collector import KST, Window
+    from .slack_collector import parse_since
+
+    current = now or datetime.now(timezone.utc)
+    start = parse_since(config.since, now=current).astimezone(KST).date()
+    end = current.astimezone(KST).date()
+    # A `--since` in the future would otherwise describe an interval holding no
+    # days, which a collector reports as a clean empty run.
+    return Window(start, max(start, end))
+
+
 def capture_slack(config: DailyConfig, credentials: Credentials) -> CaptureOutcome:
     from .slack_collector import make_slack_collector, parse_since
 
@@ -309,6 +389,93 @@ def capture_google_calendar(config: DailyConfig, credentials: Credentials) -> Ca
             "events_archived": result.events_archived,
             "cancelled_events": result.cancelled_events,
             "events": len(result.events),
+        },
+    )
+
+
+def capture_github(config: DailyConfig, credentials: Credentials) -> CaptureOutcome:
+    from .github_client import GhCliClient, GitMirrorReader, default_mirror_root
+    from .github_collector import REST_KINDS, make_github_collector
+
+    if not credentials.github_token:
+        raise RuntimeError("no GitHub token is available; add it in the backoffice first")
+    organization = credentials.github_organization
+    archive, collector = make_github_collector(
+        client=GhCliClient(organization, config_root=config.config_root),
+        mirrors=GitMirrorReader(default_mirror_root()),
+        archive_root=config.archive_root,
+        environment=config.environment,
+        organization=organization,
+        capture_density=config.capture_density,
+        dry_run=config.dry_run,
+        config_root=config.config_root,
+    )
+    try:
+        result = collector.collect(
+            window=_kst_window(config),
+            kinds=SMOKE_LIMITS["github_kinds"] if config.smoke else REST_KINDS,
+            max_repositories=SMOKE_LIMITS["github_max_repositories"] if config.smoke else None,
+            # The diffstat is a second `git log` pass per repository and costs
+            # no API budget, so a full run always takes it. A smoke run is
+            # about proving the path, not about measuring the change.
+            include_diffstat=not config.smoke,
+            advance_checkpoint=not config.dry_run,
+        )
+    except Exception as error:
+        raise CaptureFailed(archive, error) from error
+    return CaptureOutcome(
+        archive=archive,
+        manifest_path=result.manifest_path,
+        checkpoint_advanced=result.checkpoint_advanced,
+        summary={
+            "run_id": result.run_id,
+            "window": result.window.as_dict(),
+            "organization": organization,
+            "repositories_listed": result.repositories_listed,
+            "repositories_collected": result.repositories_collected,
+            "repositories_skipped": result.repositories_skipped,
+            "commits": result.commits,
+            "commit_rows_archived": result.commit_rows,
+            "rest_counts": dict(result.rest_counts),
+        },
+    )
+
+
+def capture_slurm(config: DailyConfig, credentials: Credentials) -> CaptureOutcome:
+    # Slurm takes no credential: the dump endpoint is an unauthenticated
+    # request on the tailnet. The presigned S3 URL it redirects to is treated
+    # as one, and never reaches a manifest, a log or this summary.
+    from .slurm_client import SlurmDumpFetcher
+    from .slurm_collector import CLOUDS, make_slurm_collector
+
+    archive, collector = make_slurm_collector(
+        fetcher=SlurmDumpFetcher(),
+        archive_root=config.archive_root,
+        environment=config.environment,
+        capture_density=config.capture_density,
+        dry_run=config.dry_run,
+        config_root=config.config_root,
+    )
+    try:
+        result = collector.collect(
+            window=_kst_window(config),
+            clouds=SMOKE_LIMITS["slurm_clouds"] if config.smoke else CLOUDS,
+            advance_checkpoint=not config.dry_run,
+        )
+    except Exception as error:
+        raise CaptureFailed(archive, error) from error
+    return CaptureOutcome(
+        archive=archive,
+        manifest_path=result.manifest_path,
+        checkpoint_advanced=result.checkpoint_advanced,
+        summary={
+            "run_id": result.run_id,
+            "window": result.window.as_dict(),
+            "clouds_attempted": list(result.clouds_attempted),
+            "clouds_collected": list(result.clouds_collected),
+            "jobs": result.jobs,
+            "parent_rows_archived": result.parent_rows,
+            "step_rows": result.step_rows,
         },
     )
 
@@ -403,6 +570,8 @@ class CaptureFailed(RuntimeError):
 DEFAULT_CAPTURES: dict[str, CaptureFn] = {
     "slack": capture_slack,
     "google-calendar": capture_google_calendar,
+    "github": capture_github,
+    "slurm": capture_slurm,
     "notion": capture_notion,
 }
 

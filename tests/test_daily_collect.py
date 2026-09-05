@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from test_calendar_collector import FakeCalendarClient  # noqa: E402
 from test_calendar_collector import collect as collect_calendar  # noqa: E402
+from test_github_collector import FakeMirrors, FakeRest, commit, repository  # noqa: E402
 from test_notion_collector import (  # noqa: E402
     PAGE_ID,
     SECOND_PAGE_ID,
@@ -29,6 +31,7 @@ from test_notion_collector import (  # noqa: E402
 from test_notion_collector import collect as collect_notion  # noqa: E402
 from test_slack_collector import CHANNEL, DM, FakeSlack, message, ts  # noqa: E402
 from test_slack_collector import collect as collect_slack  # noqa: E402
+from test_slurm_collector import FakeFetcher, row, write_dump  # noqa: E402
 
 from rlwrld_worklog import daily  # noqa: E402
 from rlwrld_worklog.daily import (  # noqa: E402
@@ -49,6 +52,7 @@ def credentials(tmp_path: Path) -> Credentials:
         config_root=tmp_path / "config",
         slack_token="xoxp-synthetic",
         notion_token="ntn_synthetic",
+        github_token="ghp_synthetic",
         google_token_path=None,
         settings={},
     )
@@ -115,9 +119,86 @@ def calendar_capture(config_value: DailyConfig, _credentials: Credentials) -> Ca
     )
 
 
+GITHUB_ORGANIZATION = "example-org"
+GITHUB_REPOSITORY = "alpha"
+COMMIT_SHA = "a" * 40
+
+
+def github_capture(config_value: DailyConfig, _credentials: Credentials) -> CaptureOutcome:
+    """The real GitHub collector, on a scripted mirror and a scripted API.
+
+    The commit is dated inside whatever window the run asks for rather than at
+    a fixed date, because that window is derived from `--since` and moves with
+    the clock: a fixture pinned to a calendar date would convert to zero ledger
+    records the day after it was written.
+    """
+    from rlwrld_worklog.archive import RawArchive
+    from rlwrld_worklog.github_collector import GithubCollector
+
+    window = daily._kst_window(config_value)
+    archive = RawArchive(
+        config_value.archive_root, "github", "github-run", "test", dry_run=config_value.dry_run
+    )
+    collector = GithubCollector(
+        FakeRest(repositories=[[repository(GITHUB_REPOSITORY)]]),
+        FakeMirrors(
+            {GITHUB_REPOSITORY: [commit(COMMIT_SHA, (window.start_at + timedelta(hours=1)).isoformat())]}
+        ),
+        archive,
+        organization=GITHUB_ORGANIZATION,
+    )
+    result = collector.collect(
+        window=window,
+        # No REST kind, as a smoke run takes it: the commit path is what the
+        # orchestration has to prove it reaches.
+        kinds=(),
+        advance_checkpoint=not config_value.dry_run,
+    )
+    return CaptureOutcome(
+        archive=archive,
+        manifest_path=result.manifest_path,
+        checkpoint_advanced=result.checkpoint_advanced,
+        summary={"commits": result.commits, "window": result.window.as_dict()},
+    )
+
+
+def slurm_capture(config_value: DailyConfig, _credentials: Credentials) -> CaptureOutcome:
+    """The real Slurm collector, on a dump this test writes itself."""
+    from rlwrld_worklog.archive import RawArchive
+    from rlwrld_worklog.slurm_collector import SlurmCollector
+
+    window = daily._kst_window(config_value)
+    # sacct writes local time with no offset, which the collector reads as KST.
+    ended_at = (window.start_at + timedelta(hours=10)).strftime("%Y-%m-%dT%H:%M:%S")
+    dump = write_dump(
+        config_value.archive_root / "dumps" / "kakao.psv.gz", [row("1001", end=ended_at)]
+    )
+    archive = RawArchive(
+        config_value.archive_root, "slurm", "slurm-run", "test", dry_run=config_value.dry_run
+    )
+    collector = SlurmCollector(
+        FakeFetcher({"kakao": dump}),
+        archive,
+        staging_root=config_value.archive_root / "staging" / "slurm",
+    )
+    result = collector.collect(
+        window=window,
+        clouds=("kakao",),
+        advance_checkpoint=not config_value.dry_run,
+    )
+    return CaptureOutcome(
+        archive=archive,
+        manifest_path=result.manifest_path,
+        checkpoint_advanced=result.checkpoint_advanced,
+        summary={"jobs": result.jobs, "clouds_collected": list(result.clouds_collected)},
+    )
+
+
 ALL_CAPTURES = {
     "slack": slack_capture,
     "google-calendar": calendar_capture,
+    "github": github_capture,
+    "slurm": slurm_capture,
     "notion": notion_capture,
 }
 
@@ -133,15 +214,19 @@ def source(summary: dict, name: str) -> dict:
 # ------------------------------------------------------------- happy path
 
 
-def test_all_three_sources_capture_and_convert(tmp_path: Path) -> None:
+def test_all_five_sources_capture_and_convert(tmp_path: Path) -> None:
     summary = run_daily(config(tmp_path), credentials=credentials(tmp_path), captures=ALL_CAPTURES)
 
     assert summary["status"] == "ok"
     assert summary["exit_code"] == EXIT_OK
-    assert [item["source"] for item in summary["sources"]] == ["slack", "google-calendar", "notion"], (
-        "Notion runs last so it drains the link queue Slack and Calendar filled"
-    )
-    for name in ("slack", "google-calendar", "notion"):
+    assert [item["source"] for item in summary["sources"]] == [
+        "slack",
+        "google-calendar",
+        "github",
+        "slurm",
+        "notion",
+    ], "Notion runs last so it drains the link queue Slack and Calendar filled"
+    for name in ("slack", "google-calendar", "github", "slurm", "notion"):
         result = source(summary, name)
         assert result["status"] == "ok"
         assert stage(result, "capture")["status"] == "ok"
@@ -168,6 +253,101 @@ def test_only_the_requested_sources_run(tmp_path: Path) -> None:
         captures=ALL_CAPTURES,
     )
     assert [item["source"] for item in summary["sources"]] == ["notion"]
+
+
+# ------------------------------------------------------- github and slurm
+
+
+def test_github_and_slurm_reach_the_ledger_and_load_stages(tmp_path: Path, monkeypatch) -> None:
+    """The gap this closes: both sources captured and then stopped.
+
+    `github-collect` and `slurm-collect` write a manifest and return. Nothing
+    converted it, so three of five sources had no ledger record since
+    2026-09-01 while the archive filled up behind them.
+    """
+    import rlwrld_worklog.ledger.load as load_module
+
+    loaded: list[str] = []
+
+    def record(**kwargs):
+        loaded.append(kwargs["source"])
+        return load_module.LoadResult(source=kwargs["source"], dry_run=kwargs["dry_run"])
+
+    monkeypatch.setattr(load_module, "load_source", record)
+    summary = run_daily(
+        config(
+            tmp_path,
+            sources=("github", "slurm"),
+            load_database=True,
+            database_url="postgresql://fake",
+        ),
+        credentials=credentials(tmp_path),
+        captures=ALL_CAPTURES,
+    )
+
+    assert [item["source"] for item in summary["sources"]] == ["github", "slurm"]
+    assert loaded == ["github", "slurm"], "the ledger source names, not the collector directories"
+    for name in ("github", "slurm"):
+        result = source(summary, name)
+        assert result["status"] == "ok"
+        for stage_name in ("capture", "ledger", "load"):
+            assert stage(result, stage_name)["status"] == "ok"
+        assert stage(result, "ledger")["detail"]["records_written"] > 0
+        assert Path(stage(result, "ledger")["detail"]["output_path"]).is_file()
+
+
+def test_a_missing_github_token_fails_only_that_source(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    without_github = Credentials(
+        config_root=tmp_path / "config",
+        slack_token="xoxp-synthetic",
+        notion_token="ntn_synthetic",
+        github_token=None,
+        google_token_path=None,
+        settings={},
+    )
+
+    summary = run_daily(
+        config(tmp_path),
+        credentials=without_github,
+        # The real capture, which is the thing that has to refuse before it
+        # builds a client and shells out to `gh`.
+        captures={**ALL_CAPTURES, "github": daily.capture_github},
+    )
+
+    assert summary["credentials_available"]["github"] is False
+    assert source(summary, "github")["status"] == "failed"
+    assert "no GitHub token" in stage(source(summary, "github"), "capture")["error"]
+    for name in ("slack", "google-calendar", "slurm", "notion"):
+        assert source(summary, name)["status"] == "ok"
+
+
+def test_a_dry_run_moves_no_github_or_slurm_checkpoint(tmp_path: Path) -> None:
+    """Both collectors record a `collected_through` KST date. A dry run that
+    moved it would mark a day collected that was only rehearsed."""
+    run_config = config(tmp_path, dry_run=True, sources=("github", "slurm"))
+    summary = run_daily(run_config, credentials=credentials(tmp_path), captures=ALL_CAPTURES)
+
+    for name in ("github", "slurm"):
+        assert stage(source(summary, name), "capture")["status"] == "ok", "the capture still ran"
+        assert source(summary, name)["checkpoint_advanced"] is False
+        assert not (run_config.archive_root / f"manifests/{name}/test/checkpoint.json").exists()
+
+
+def test_the_kst_window_covers_the_whole_day_the_since_instant_falls_in(tmp_path: Path) -> None:
+    """GitHub and Slurm file records under a KST date, so the instant `--since`
+    describes has to become a pair of whole days -- rounded outwards, because
+    the alternative to re-reading a day's earlier hours is never reading them.
+    """
+    from rlwrld_worklog.github_collector import KST
+
+    # 10:30 KST on 2026-09-05; 26 hours earlier is 08:30 KST on the 4th.
+    now = datetime(2026, 9, 5, 1, 30, tzinfo=timezone.utc)
+    window = daily._kst_window(config(tmp_path, since="26h"), now=now)
+
+    assert window.days == ("2026-09-04", "2026-09-05")
+    assert window.start_at == datetime(2026, 9, 4, tzinfo=KST), "the 08:30 cut is widened back"
+    assert window.end_at == datetime(2026, 9, 6, tzinfo=KST), "today is captured whole"
 
 
 # --------------------------------------------------------------- isolation
@@ -336,7 +516,7 @@ def test_a_dry_run_advances_no_checkpoint(tmp_path: Path) -> None:
     summary = run_daily(run_config, credentials=credentials(tmp_path), captures=ALL_CAPTURES)
 
     assert summary["capture_density"] == "dry-run"
-    for name in ("slack", "google-calendar", "notion"):
+    for name in ("slack", "google-calendar", "github", "slurm", "notion"):
         assert source(summary, name)["checkpoint_advanced"] is False
     manifests = run_config.archive_root / "manifests"
     assert not list(manifests.glob("*/test/checkpoint.json"))
@@ -394,30 +574,54 @@ def test_admin_managed_files_win_over_environment_variables(tmp_path: Path, monk
     (root / "credentials").mkdir(parents=True)
     (root / "credentials" / "slack-token").write_text("xoxp-from-backoffice\n", encoding="utf-8")
     (root / "credentials" / "notion-token").write_text("ntn_from-backoffice\n", encoding="utf-8")
+    (root / "credentials" / "github-token").write_text("ghp_from-backoffice\n", encoding="utf-8")
     (root / "credentials" / "google-token.json").write_text("{}", encoding="utf-8")
     (root / "settings.json").write_text(
-        json.dumps({"slack_expected_team_id": "T0FROMSETTINGS"}), encoding="utf-8"
+        json.dumps(
+            {"slack_expected_team_id": "T0FROMSETTINGS", "github_organization": "org-from-settings"}
+        ),
+        encoding="utf-8",
     )
     monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-stale-shell-export")
     monkeypatch.setenv("NOTION_TOKEN", "ntn_stale")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_stale")
+    monkeypatch.setenv("GITHUB_ORG", "org-from-stale-shell-export")
 
     resolved = daily.load_credentials(root)
 
     assert resolved.slack_token == "xoxp-from-backoffice"
     assert resolved.notion_token == "ntn_from-backoffice"
+    assert resolved.github_token == "ghp_from-backoffice"
     assert resolved.google_token_path == root / "credentials" / "google-token.json"
     assert resolved.slack_expected_team_id == "T0FROMSETTINGS"
-    assert resolved.availability() == {"slack": True, "notion": True, "google-calendar": True}
+    assert resolved.github_organization == "org-from-settings"
+    assert resolved.availability() == {
+        "slack": True,
+        "notion": True,
+        "google-calendar": True,
+        "github": True,
+        "slurm": True,
+    }
 
 
 def test_missing_credentials_are_reported_not_invented(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("SLACK_USER_TOKEN", raising=False)
     monkeypatch.delenv("NOTION_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GOOGLE_TOKEN_PATH", raising=False)
     resolved = daily.load_credentials(tmp_path / "absent")
 
     assert resolved.slack_token is None
-    assert resolved.availability() == {"slack": False, "notion": False, "google-calendar": False}
+    assert resolved.github_token is None
+    assert resolved.availability() == {
+        "slack": False,
+        "notion": False,
+        "google-calendar": False,
+        "github": False,
+        # Slurm asks the tailnet for an unauthenticated dump, so there is no
+        # credential that can be missing.
+        "slurm": True,
+    }
 
 
 def test_the_summary_never_contains_credential_material(tmp_path: Path) -> None:
@@ -439,11 +643,11 @@ def test_an_error_message_carrying_a_token_is_redacted(tmp_path: Path) -> None:
 
 def test_unknown_sources_are_named_rather_than_silently_dropped(tmp_path: Path) -> None:
     summary = run_daily(
-        config(tmp_path, sources=("slack", "github")),
+        config(tmp_path, sources=("slack", "jira")),
         credentials=credentials(tmp_path),
         captures=ALL_CAPTURES,
     )
-    assert summary["unknown_sources"] == ["github"]
+    assert summary["unknown_sources"] == ["jira"]
     assert [item["source"] for item in summary["sources"]] == ["slack"]
 
 
@@ -496,6 +700,27 @@ def test_the_cli_passes_its_flags_through_and_returns_the_exit_code(tmp_path: Pa
     printed = capsys.readouterr().out
     assert printed.startswith("daily_collect_config=")
     assert "daily_collect=" in printed
+
+
+def test_the_cli_accepts_every_source_the_runner_can_order(tmp_path: Path, monkeypatch) -> None:
+    """`--source` and `SOURCE_ORDER` cannot drift: a source the runner knows
+    and the parser refuses is a source unreachable from the nightly timer."""
+    from rlwrld_worklog import cli
+
+    seen: dict = {}
+
+    def fake_run(run_config, **kwargs):
+        seen["config"] = run_config
+        return {"exit_code": EXIT_OK}
+
+    monkeypatch.setattr(daily, "run_daily", fake_run)
+    arguments = ["daily-collect", "--environment", "test", "--archive-root", str(tmp_path)]
+    for name in daily.SOURCE_ORDER:
+        arguments += ["--source", name]
+
+    cli.main(arguments)
+
+    assert seen["config"].sources == daily.SOURCE_ORDER
 
 
 def test_the_cli_config_line_never_prints_a_database_url(tmp_path: Path, monkeypatch, capsys) -> None:

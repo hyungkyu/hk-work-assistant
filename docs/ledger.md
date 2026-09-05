@@ -278,10 +278,10 @@ editing `0002`, so `0002`'s recorded checksum stays stable.
 
 ## Live capture runs
 
-`worklog daily-collect` runs the conversion itself for Slack, Notion and Google
-Calendar. GitHub and Slurm captures do **not** convert themselves;
-`ledger-live-convert` has to be run against the archived manifest afterwards.
-The same command re-runs a conversion for any already-archived run without
+`worklog daily-collect` runs the conversion itself, for all five sources.
+`github-collect` and `slurm-collect` still capture only, so a window collected
+by hand needs `ledger-live-convert` run against its archived manifest
+afterwards. The same command re-runs a conversion for any archived run without
 touching an API:
 
 ```bash

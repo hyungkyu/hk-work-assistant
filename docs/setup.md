@@ -317,7 +317,7 @@ Slack 앱 관리 화면에서 **From an app manifest**로 새 내부 앱을 만�
 `SLACK_EXPECTED_TEAM_ID` 두 줄을 쓴다. 이 파일은 `compose.slack.yaml`의 `env_file`로만
 전달된다. `compose.yaml`의 `app` 서비스에는 `env_file`이 없으므로 앱 컨테이너는 이
 토큰을 보지 못한다. 앱 쪽에서 쓰려면 `APP_CONFIG_ROOT/credentials/` 아래에 두어야
-한다(`src/rlwrld_worklog/daily.py:104-131`).
+한다(`src/rlwrld_worklog/daily.py:147-177`).
 
 먼저 읽기 권한과 워크스페이스 ID만 확인한다. 이 단계는 메시지를 저장하지 않는다.
 

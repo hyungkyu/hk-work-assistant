@@ -88,8 +88,8 @@ CATALOGUE: tuple[Batch, ...] = (
         key="daily-collect",
         name="일일 수집 (daily collect)",
         purpose=(
-            "Slack · Notion · Google Calendar를 공식 읽기 전용 API로 증분 수집해 불변 원본 "
-            "아카이브와 실행 manifest를 남기고, 표준 v1 원장으로 투영한다."
+            "Slack · Google Calendar · GitHub · Slurm · Notion을 공식 읽기 전용 API로 증분 "
+            "수집해 불변 원본 아카이브와 실행 manifest를 남기고, 표준 v1 원장으로 투영한다."
         ),
         runner="systemd timer → oneshot service (Codex 세션이나 사람의 수동 실행이 아님)",
         command="worklog daily-collect",
@@ -101,8 +101,9 @@ CATALOGUE: tuple[Batch, ...] = (
             "OnCalendar 값이 실제 실행 시각을 결정하며, 설정과 다르면 systemd 쪽이 사실이다."
         ),
         scope=(
-            "환경 production, 소스 slack · notion · google-calendar. 각 소스는 자기 "
-            "checkpoint 이후분만 읽고, 기본 요청 창은 26시간이다."
+            "환경 production, 소스 다섯 개 전부(slack · google-calendar · github · slurm · "
+            "notion). 각 소스는 자기 checkpoint 이후분만 읽고, 기본 요청 창은 26시간이다. "
+            "GitHub 과 Slurm 은 그 26시간이 걸치는 KST 날짜 구간으로 환산해 읽는다."
         ),
         concurrency=(
             "<RAW_ARCHIVE_ROOT>/locks/daily-collect-<environment>.lock 에 비차단 flock. "

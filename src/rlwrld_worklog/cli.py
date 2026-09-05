@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Sequence
 
-from .daily import DEFAULT_SINCE
+from .daily import DEFAULT_SINCE, SOURCE_ORDER
 from .models import Source, TimelineEvent
 from .normalizers import normalize_records
 from .slurm_collector import CLOUDS as SLURM_CLOUDS
@@ -57,7 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     github.add_argument("--since", required=True, help="First KST day, YYYY-MM-DD")
     github.add_argument("--until", default=None, help="Last KST day, inclusive. Defaults to --since")
-    github.add_argument("--organization", default=None, help="Defaults to $GITHUB_ORG, then rlwrld")
+    github.add_argument(
+        "--organization",
+        default=None,
+        help="Defaults to settings.json github_organization, then $GITHUB_ORG, then rlwrld",
+    )
     github.add_argument("--mirror-root", type=Path, default=None, help="Bare mirror directory")
     github.add_argument("--environment", choices=["test", "production"], default="test")
     github.add_argument("--archive-root", type=Path, default=None)
@@ -211,8 +215,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--source",
         action="append",
         default=[],
-        choices=["slack", "google-calendar", "notion"],
-        help="Repeatable. Default: all three, always run in link-queue order.",
+        choices=list(SOURCE_ORDER),
+        help="Repeatable. Default: all five, always run in link-queue order.",
     )
     daily.add_argument("--environment", choices=["test", "production"], default="production")
     daily.add_argument("--since", default=DEFAULT_SINCE, help="Floor for sources with no checkpoint")
@@ -374,16 +378,21 @@ def collect_github(args: argparse.Namespace) -> int:
     and be read the next morning as a failed collection, when in fact a
     backfill was simply still running.
     """
-    from .daily import _acquire_lock, _release_lock
-    from .github_client import GhCliClient, GitMirrorReader, MirrorRepositoryLister
+    from .daily import _acquire_lock, _release_lock, load_credentials
+    from .github_client import (
+        GhCliClient,
+        GitMirrorReader,
+        MirrorRepositoryLister,
+        default_mirror_root,
+    )
     from .github_collector import REST_KINDS, Window, make_github_collector
 
     archive_root = _archive_root(args)
-    organization = args.organization or os.environ.get("GITHUB_ORG") or "rlwrld"
-    mirror_root = args.mirror_root or Path(
-        os.environ.get("GITHUB_MIRROR_ROOT")
-        or "/data/rlwrld-worklog/legacy/claude/weekly/scripts/github_mirrors"
-    )
+    # The organization is resolved exactly as the daily batch resolves it, so
+    # a backfill run by hand cannot target a different org than the nightly
+    # run does on the same host.
+    organization = args.organization or load_credentials(args.config_root).github_organization
+    mirror_root = args.mirror_root or default_mirror_root()
     window = Window.parse(args.since, args.until)
     if args.kinds is None:
         kinds: tuple[str, ...] = REST_KINDS
@@ -804,7 +813,7 @@ def ledger_live_convert(args: argparse.Namespace) -> int:
 
 
 def daily_collect(args: argparse.Namespace) -> int:
-    from .daily import DailyConfig, SOURCE_ORDER, config_as_dict, run_daily
+    from .daily import DailyConfig, config_as_dict, run_daily
 
     archive_root = _archive_root(args)
     config = DailyConfig(

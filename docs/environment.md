@@ -41,9 +41,9 @@
 | `SLACK_EXPECTED_TEAM_ID` | `cli.py:292`, `:319`; `daily.py:85` | 없음 | `collector-slack`만 (`env_file`) | **없음** (`secrets/slack.env`) |
 | `NOTION_TOKEN` | `cli.py:620`; `daily.py:129` | 없음 | 아니오 | **없음** |
 | `GOOGLE_TOKEN_PATH` | `cli.py:576`; `daily.py:119` | `secrets/google-token.json` (상대 경로) | 아니오 | **없음** |
-| `GITHUB_TOKEN` | `github_client.py:70` | 없음 | 아니오 | **없음** |
-| `GITHUB_ORG` | `cli.py:382` | `rlwrld` | 아니오 | **없음** |
-| `GITHUB_MIRROR_ROOT` | `cli.py:384` | `/data/rlwrld-worklog/legacy/claude/weekly/scripts/github_mirrors` | 아니오 | **없음** |
+| `GITHUB_TOKEN` | `github_client.py:81`; `daily.py:174` | 없음 | 아니오 | **없음** |
+| `GITHUB_ORG` | `daily.py:122` (`cli.py:394` 가 같은 경로를 쓴다) | `settings.json` 의 `github_organization`, 그다음 `rlwrld` | 아니오 | **없음** |
+| `GITHUB_MIRROR_ROOT` | `github_client.py:69` | `/data/rlwrld-worklog/legacy/claude/weekly/scripts/github_mirrors` | 아니오 | **없음** |
 | `GH_BIN` | `github_client.py:34` | `gh` | 아니오 | **없음** |
 | `GIT_BIN` | `github_client.py:35` | `git` | 아니오 | **없음** |
 | `SLURM_DUMP_BASE_URL` | `slurm_client.py:33` | `http://infra-node:8888` | 아니오 | **없음** |
@@ -140,4 +140,4 @@
 
 이들은 `.env.example`에 주석 형태로 들어가 있다. 토큰류는 `.env`가 아니라
 `secrets/slack.env` 또는 `APP_CONFIG_ROOT/credentials/` 아래에 둔다
-(`src/rlwrld_worklog/daily.py:104-131`).
+(`src/rlwrld_worklog/daily.py:147-177`).

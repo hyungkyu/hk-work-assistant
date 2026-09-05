@@ -4,23 +4,25 @@ Five sources are collected over their official read-only APIs into an immutable
 raw archive, projected into the standard v1 ledger, and loaded into the service
 database.
 
-They are **not** all driven by one command.
+All five are driven by one command, and two of them also have a command of
+their own for collecting an explicit historical window.
 
-| Source | Captured by | Converts and loads by itself |
+| Source | Daily capture, ledger and load | Window capture by hand |
 |---|---|---|
-| Slack | `worklog daily-collect` | yes |
-| Google Calendar | `worklog daily-collect` | yes |
-| Notion | `worklog daily-collect` | yes |
-| GitHub | `worklog github-collect` | **no** |
-| Slurm | `worklog slurm-collect` | **no** |
+| Slack | `worklog daily-collect` | `worklog collect slack` |
+| Google Calendar | `worklog daily-collect` | `worklog collect google-calendar` |
+| GitHub | `worklog daily-collect` | `worklog github-collect` |
+| Slurm | `worklog daily-collect` | `worklog slurm-collect` |
+| Notion | `worklog daily-collect` | `worklog collect notion` |
 
-`daily-collect` runs three sources and nothing else: `SOURCE_ORDER` in
-`src/rlwrld_worklog/daily.py:35` is `("slack", "google-calendar", "notion")`,
-and `--source` accepts only those three (`src/rlwrld_worklog/cli.py:214`).
+`daily-collect` runs every source in `SOURCE_ORDER`
+(`src/rlwrld_worklog/daily.py:45`), and `--source` accepts exactly that list
+(`src/rlwrld_worklog/cli.py:215-220`). All three stages — capture, ledger, load —
+run for each of the five.
 
 `github-collect` and `slurm-collect` capture into the same archive under the
 same manifest and checkpoint conventions, but they stop after the capture
-stage. Their ledger projection and database load must be run by hand
+stage: a window collected with either has to be converted and loaded by hand
 afterwards — see [After a GitHub or Slurm capture](#after-a-github-or-slurm-capture).
 
 The ledger format both paths write is documented in [ledger.md](ledger.md).
@@ -51,12 +53,40 @@ run's raw pages are preserved but produce no ledger record, from
 
 A source can also be reported `degraded` while every stage says `ok`: a Notion
 capture that finished with unresolved objects sets a degraded reason, and the
-source status follows it (`src/rlwrld_worklog/daily.py:552`) so a run summary
+source status follows it (`src/rlwrld_worklog/daily.py:636`) so a run summary
 can never look cleaner than the manifest behind it.
 
-Sources always run in the order **slack → google-calendar → notion**,
-regardless of the order `--source` is given (`daily.py:570`): Slack and
-Calendar discover Notion URLs, and Notion drains that queue in the same run.
+Sources always run in the order **slack → google-calendar → github → slurm →
+notion**, regardless of the order `--source` is given (`daily.py:739`): Slack
+and Calendar discover Notion URLs, and Notion drains that queue in the same
+run. GitHub and Slurm discover no Notion URL today and are ordered before
+Notion anyway, so the rule stays "Notion runs last" rather than a list of which
+sources happen to feed it.
+
+### Two kinds of window
+
+Slack, Calendar and Notion are given the `--since` instant directly. GitHub and
+Slurm cannot take an instant: they collect a closed interval of **KST calendar
+days**, because a KST date is the key their records are filed under and every
+window decision they make is a comparison against that day's boundaries
+(`github_collector.py:175-219`). `_kst_window` (`daily.py:273-307`) makes the
+conversion, and it is the only place in the codebase that makes it — it builds
+the same `Window` `github-collect --since/--until` builds, from the daily run's
+instant rather than from the command line.
+
+Both edges round outwards:
+
+* the start is the whole KST day that *contains* the since instant, because a
+  day is the smallest unit these two sources can express and the alternative to
+  re-reading that day's earlier hours is never reading them. Re-reading costs
+  nothing: a commit sha and a job id are stable identities, the ledger is keyed
+  by them, and the archive refuses to rewrite a page it already holds;
+* the end is today's KST date, not the moment the run started, because a day
+  still in progress is still the day its records are filed under. Tomorrow's
+  run re-reads it and picks up what arrived after this one.
+
+With the default `--since 26h`, that is a two-day window on most days and a
+three-day one when the run starts before 02:00 KST.
 
 ### Exit codes
 
@@ -103,9 +133,10 @@ treated as a credential and is never logged, returned or written to a manifest
 
 A missing credential fails that one source and is reported in
 `credentials_available`; the other sources still run. `credentials_available`
-covers the three `daily-collect` sources only (`daily.py:88-93`). No token,
-OAuth client, database URL or callback code is ever printed or written to a
-manifest.
+covers all five sources (`daily.py:125-139`), and Slurm is always `true` there
+because it has no credential that can be missing — a four-entry map for five
+sources would read as one source with a lost token. No token, OAuth client,
+database URL or callback code is ever printed or written to a manifest.
 
 ## Paths
 
@@ -125,7 +156,7 @@ manifests/<source>/<env>/<run id>.<n>.json      a second finish() in one run
 manifests/<source>/<env>/checkpoint.json        current position
 manifests/<source>/<env>/checkpoints/<run>.json every previous position
 manifests/notion/<env>/link-queue.json          Notion URLs still to resolve
-locks/daily-collect-<env>.lock                  Slack + Calendar + Notion
+locks/daily-collect-<env>.lock                  every source daily-collect runs
 locks/github-collect-<env>.lock                 GitHub only
 locks/slurm-collect-<env>.lock                  Slurm only
 staging/slurm/<run id>-<cloud>.psv.gz           transient; unlinked after use
@@ -180,35 +211,47 @@ was, and run the database stage as a transaction that rolls back. That means:
   reports `notion_links_queued` (what it would have written) alongside
   `notion_links_persisted: false`.
 
-`--smoke` additionally bounds the API work (`daily.py:42-50`): at most 2 Slack
+`--smoke` additionally bounds the API work (`daily.py:58-80`): at most 2 Slack
 channels and 25 messages with the workspace-wide searches skipped, 5 Notion
-objects with no re-check sweep and a 20-request comment budget, and 2
-calendars. A full run uses a Notion re-check limit of 100 and no comment budget
-at all (`daily.py:334-339`).
+objects with no re-check sweep and a 20-request comment budget, 2 calendars, 2
+GitHub repositories with **no REST kind at all**, and 1 of the 3 Slurm clouds.
+A full run uses a Notion re-check limit of 100 and no comment budget at all
+(`daily.py:501-507`).
+
+The GitHub and Slurm bounds are shaped by what each source can be asked for a
+little of at all. GitHub's commits come from the local mirrors, so dropping every REST
+kind still exercises listing, mirror read, archive and manifest for the single
+API call the repository listing costs. Slurm's dump endpoint has neither a time
+query nor pagination, so the smallest thing it can fetch is one cloud's entire
+export; `clouds_attempted` records which one was asked for, so the bound is
+never mistaken for two quiet clouds.
 
 Raw and ledger files are still written by a dry run. Both are immutable,
 deterministic, genuinely observed data, and having them on disk is what makes
 a smoke test inspectable.
 
-Each of those smoke bounds calls `note_truncation`, so a smoke run's manifest
-is `truncated` and the coverage dashboard reads its date as `partial`. A plain
-`--dry-run` sets no truncation, and the dashboard currently reads its date as
-`collected` — see the known defect in
+Most of those smoke bounds call `note_truncation`, so a smoke run's manifest is
+`truncated` and the coverage dashboard reads its date as `partial`. Asking
+Slurm for one cloud is the exception: it is a narrower request, not a truncated
+answer, and the manifest records it as `clouds_attempted`. A plain `--dry-run`
+sets no truncation, and the dashboard currently reads its date as `collected` —
+see the known defect in
 [collection-status.md](collection-status.md#known-defect-a-plain---dry-run-day-reads-as-collected).
 
 `github-collect` and `slurm-collect` take `--dry-run` with the same meaning: no
 checkpoint moves (`github_collector.py:509`, `slurm_collector.py:319`). Neither
-has a `--smoke` mode.
+has a `--smoke` mode of its own; `daily-collect --smoke` is the bounded run for
+both.
 
 ## Scheduling
 
 Every collection command takes a non-blocking exclusive lock, so a slow run can
 never be overlapped by the next one; the second run exits 3 without touching
-anything (`daily.py:632-645`).
+anything (`daily.py:801-814`).
 
 The three locks are deliberately separate files. A GitHub backfill taking the
 daily lock would make the nightly `daily-collect` exit 3 and be read the next
-morning as a failed collection (`cli.py:371-376`).
+morning as a failed collection (`cli.py:374-380`).
 
 The batch catalogue in `src/rlwrld_worklog/schedules.py:86-127` declares one
 batch, `daily-collect`, and declares its runner to be a systemd timer driving a
@@ -533,11 +576,12 @@ The load stage offers the whole ledger root for that source, not only the file
 this run produced. Files already loaded are skipped by sha256, so a file whose
 load failed yesterday is picked up today rather than being stranded.
 
-## After a GitHub or Slurm capture
+## After a GitHub or Slurm capture *by hand*
 
-Neither `github-collect` nor `slurm-collect` runs the ledger or load stages.
-Their CLI handlers stop after printing the capture result (`cli.py:453`,
-`cli.py:530`). Two commands have to follow:
+The daily batch converts and loads both sources itself. `github-collect` and
+`slurm-collect` do not: their CLI handlers stop after printing the capture
+result (`cli.py:453`, `cli.py:530`), so a window collected with either needs
+two more commands to follow it.
 
 ```bash
 ARCHIVE=/data/rlwrld-worklog

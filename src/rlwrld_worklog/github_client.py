@@ -34,6 +34,12 @@ from .github_collector import GitHubApiError
 GH_BIN = os.environ.get("GH_BIN") or "gh"
 GIT_BIN = os.environ.get("GIT_BIN") or "git"
 
+# Where the bare mirrors live when nobody says otherwise. `github-collect` and
+# the daily batch have to agree on this: two answers would mean one of them
+# reading a directory the other never fetched into, and reporting every
+# repository it lacks as a skipped one.
+DEFAULT_MIRROR_ROOT = "/data/rlwrld-worklog/legacy/claude/weekly/scripts/github_mirrors"
+
 # One commit per record; fields in this order. `%aI`/`%cI` are strict ISO 8601
 # with the offset, so they parse without guessing.
 _COMMIT_FORMAT = (
@@ -56,6 +62,11 @@ _COMMIT_FIELDS = (
     "subject",
     "body",
 )
+
+
+def default_mirror_root() -> Path:
+    """The mirror directory: `GITHUB_MIRROR_ROOT`, else the data disk."""
+    return Path(os.environ.get("GITHUB_MIRROR_ROOT") or DEFAULT_MIRROR_ROOT)
 
 
 def read_github_token(config_root: Path | None = None) -> str | None:
