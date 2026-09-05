@@ -1,0 +1,12 @@
+[Unit]
+Description=Check the board for work that needs a session on this machine
+
+[Timer]
+OnBootSec=4min
+OnUnitInactiveSec=3min
+Persistent=true
+AccuracySec=30s
+Unit=hkwa-wake.service
+
+[Install]
+WantedBy=timers.target
