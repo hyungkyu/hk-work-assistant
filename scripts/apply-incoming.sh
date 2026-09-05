@@ -20,9 +20,9 @@ if [ ${#patches[@]} -eq 0 ]; then
   exit 0
 fi
 
-if [ -n "$(git status --porcelain)" ]; then
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo "worktree is dirty. commit or stash first, then run again." >&2
-  git status --short >&2
+  git status --short --untracked-files=no >&2
   exit 1
 fi
 

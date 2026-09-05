@@ -1,0 +1,16 @@
+[Unit]
+Description=Apply patches handed over from the cloud development side, test, push
+# A watcher that can be permanently disabled by its own failures is not a
+# channel. The outbox path unit taught us this on 2026-09-04: six failures in
+# ten seconds hit the default start rate limit and killed both the service and
+# the unit watching for it, silently.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Documents/ChatGPT/RLWRLD workspace
+ExecStart=/bin/bash %h/Documents/ChatGPT/RLWRLD workspace/scripts/incoming-tick.sh
+# The tick writes incoming/last-run.json on every path, so a timeout that
+# kills it mid-run would leave the cloud side reading a stale file. Bound it
+# well above a full suite run rather than leaving it unbounded.
+TimeoutStartSec=900

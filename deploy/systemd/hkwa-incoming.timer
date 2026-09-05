@@ -1,0 +1,14 @@
+[Unit]
+Description=Check every few minutes for patches from the cloud development side
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=3min
+# Catch up on a tick missed while the machine was off, rather than waiting
+# for the next interval.
+Persistent=true
+AccuracySec=30s
+Unit=hkwa-incoming.service
+
+[Install]
+WantedBy=timers.target
