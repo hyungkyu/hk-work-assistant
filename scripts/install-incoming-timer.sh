@@ -50,8 +50,17 @@ done
 
 echo
 systemctl --user list-timers 'hkwa-*' --no-pager
+
+# Installing a unit is not evidence it runs. The first version of these units
+# put an unquoted path with a space in ExecStart, so systemd split it and the
+# service failed before the script could write its state file -- and the only
+# symptom was a state file that never appeared. Prove it here instead.
 echo
-echo "run one now:     systemctl --user start hkwa-incoming.service"
-echo "                 systemctl --user start hkwa-wake.service"
-echo "see what it did: cat '$root/incoming/last-run.json'"
-echo "                 cat '$root/incoming/last-wake.json'"
+echo "== running one tick now"
+systemctl --user start hkwa-incoming.service || true
+if [ -f "$root/incoming/last-run.json" ]; then
+  cat "$root/incoming/last-run.json"
+else
+  echo "NO last-run.json -- the service did not reach its own state write." >&2
+  systemctl --user status hkwa-incoming.service --no-pager -n 20 || true
+fi
