@@ -261,9 +261,81 @@ def run_work(args: argparse.Namespace) -> int:
 # request, and the board would no longer say who observed what.
 OUTBOX_FIELDS = ("next_action", "detail")
 
+# A queued file may also create an item, with `"op": "create"`. Creation is the
+# requester's own act, so the fields it may set are the request - what is
+# wanted, of whom, by when - and never the account of the work.
+#
+# `status` is allowed, but only among the stages that mean "nobody has started
+# this". A queue that could file an item straight to `in_progress` or `done`
+# would let a requester close work no one did, which is the same hole that
+# keeping `progress_summary` out of OUTBOX_FIELDS closes for updates.
+OUTBOX_CREATE_FIELDS = (
+    "title",
+    "detail",
+    "next_action",
+    "assigned_to",
+    "priority",
+    "due_at",
+    "parent_id",
+    "source_ref",
+    "status",
+)
+OUTBOX_CREATE_STATUSES = ("backlog", "todo", "ready")
+
 
 def _outbox_result(name: str, ok: bool, reason: str, **extra: Any) -> dict[str, Any]:
     return {"file": name, "ok": ok, "reason": reason, **extra}
+
+
+def _apply_one_create(
+    store: WorkStore, path: Path, payload: Mapping[str, Any], actor: str
+) -> dict[str, Any]:
+    """Create one item from a queued file. Never raises."""
+    fields = {key: payload[key] for key in OUTBOX_CREATE_FIELDS if key in payload}
+    ignored = sorted(set(payload) - set(OUTBOX_CREATE_FIELDS) - {"op", "requested_by"})
+    for key, value in fields.items():
+        if not isinstance(value, str):
+            return _outbox_result(path.name, False, f"{key} must be a string", ignored=ignored)
+
+    status = fields.get("status")
+    if status is not None and status not in OUTBOX_CREATE_STATUSES:
+        return _outbox_result(
+            path.name,
+            False,
+            f"status {status!r} may not be set on create: only "
+            f"{', '.join(OUTBOX_CREATE_STATUSES)}",
+            ignored=ignored,
+        )
+
+    # The queue's owner is the requester, by construction. A file that names
+    # someone else is refused rather than quietly corrected, because a board
+    # that misattributes who asked for the work is worse than a rejected file.
+    declared = payload.get("requested_by")
+    if isinstance(declared, str) and declared.strip() and declared.strip() != actor:
+        return _outbox_result(
+            path.name,
+            False,
+            f"requested_by must be {actor!r}: a queued file may not record "
+            "someone else as the requester",
+            ignored=ignored,
+        )
+    fields["requested_by"] = actor
+
+    try:
+        item = store.create_item(fields, actor=actor)
+    except WorkStoreError as error:
+        return _outbox_result(
+            path.name, False, f"{error.__class__.__name__}: {error}", ignored=ignored
+        )
+    return _outbox_result(
+        path.name,
+        True,
+        "created",
+        work_id=item["id"],
+        revision=item["revision"],
+        applied=sorted(fields),
+        ignored=ignored,
+    )
 
 
 def _apply_one_outbox(store: WorkStore, path: Path, actor: str) -> dict[str, Any]:
@@ -282,6 +354,14 @@ def _apply_one_outbox(store: WorkStore, path: Path, actor: str) -> dict[str, Any
         return _outbox_result(path.name, False, f"not JSON: {error}")
     if not isinstance(payload, dict):
         return _outbox_result(path.name, False, "top level must be a JSON object")
+
+    op = payload.get("op", "update")
+    if op not in ("update", "create"):
+        return _outbox_result(
+            path.name, False, f"unknown op {op!r}: expected 'create' or 'update'"
+        )
+    if op == "create":
+        return _apply_one_create(store, path, payload, actor)
 
     work_id = payload.get("work_id")
     if not isinstance(work_id, str) or not work_id:

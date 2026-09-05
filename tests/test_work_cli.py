@@ -379,3 +379,114 @@ def test_the_edit_is_recorded_under_the_name_the_board_knows(
 
     _, history = run(capsys, config, "history", "--item-id", item_id)
     assert history["items"][0]["actor"] == "mori"
+
+
+def test_a_queued_file_can_create_an_item(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Without this the queue can only edit work someone else already filed."""
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    _queue(outbox, "n.json", {
+        "op": "create",
+        "title": "수집 판정이 실행 순서를 무시한다",
+        "assigned_to": "local",
+        "status": "ready",
+        "next_action": "최신 정착 실행으로 판정하라",
+    })
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (1, 0)
+    entry = result["results"][0]
+    assert entry["reason"] == "created"
+
+    _, shown = run(capsys, config, "show", entry["work_id"])
+    item = shown["item"]
+    assert item["assigned_to"] == "local"
+    assert item["status"] == "ready"
+    # The queue's owner is the requester by construction, never a claim in
+    # the file.
+    assert item["requested_by"] == "mori"
+
+
+def test_a_queued_create_may_not_file_work_as_already_underway(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Filing straight to done would let a requester close work nobody did."""
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    for name, status in (("d.json", "done"), ("p.json", "in_progress")):
+        _queue(outbox, name, {
+            "op": "create", "title": "t", "assigned_to": "local", "status": status,
+        })
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (0, 2)
+    for entry in result["results"]:
+        assert "may not be set on create" in entry["reason"]
+
+    _, listed = run(capsys, config, "list")
+    assert listed["count"] == 0
+
+
+def test_a_queued_create_may_not_name_another_requester(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A board that misattributes who asked is worse than a rejected file."""
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    _queue(outbox, "r.json", {
+        "op": "create", "title": "t", "assigned_to": "local", "requested_by": "hk",
+    })
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (0, 1)
+    assert "requested_by must be" in result["results"][0]["reason"]
+
+
+def test_a_queued_create_naming_its_own_owner_is_accepted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Stating the truth explicitly is not an error."""
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    _queue(outbox, "s.json", {
+        "op": "create", "title": "t", "assigned_to": "local", "requested_by": "mori",
+    })
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (1, 0)
+
+
+def test_a_queued_create_without_an_assignee_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The store's own create rules still apply through the queue."""
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    _queue(outbox, "m.json", {"op": "create", "title": "t"})
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (0, 1)
+    assert "missing required fields" in result["results"][0]["reason"]
+
+
+def test_an_unknown_op_is_refused_rather_than_guessed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    _queue(outbox, "u.json", {"op": "archive", "work_id": "wi_0000000000000000"})
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (0, 1)
+    assert "unknown op" in result["results"][0]["reason"]
+
+
+def test_a_file_without_an_op_is_still_an_edit(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every queued file written before create existed omits op."""
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    _, created = run(capsys, config, "create", "--title", "티켓", "--assigned-to", "soa",
+                     "--requested-by", "mori")
+    item_id = created["item"]["id"]
+    _queue(outbox, "o.json", {"work_id": item_id, "next_action": "옛 형식"})
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (1, 0)
+    assert result["results"][0]["reason"] == "applied"
