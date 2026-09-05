@@ -3,7 +3,7 @@
 One section per file. Each says what the script does, who invokes it, what it
 refuses to do and why, and whether it is safe to run twice.
 
-`scripts/` holds twelve shell scripts and one Markdown file. The Markdown file,
+`scripts/` holds thirteen shell scripts and one Markdown file. The Markdown file,
 `local-work-prompt.md`, is not a script — it is data read by `wake-local.sh`, and
 it is described at the end.
 
@@ -28,6 +28,7 @@ Quick index:
 | `worklog-local.sh` | a person, as the CLI entry point | yes |
 | `deploy-tick.sh` | `hkwa-deploy.service` (timer, 10 min) | yes, by design |
 | `board-audit-tick.sh` | `hkwa-board-audit.service` (timer, 30 min) | yes, by design |
+| `collection-audit-tick.sh` | `hkwa-collection-audit.service` (timer, 02:00 KST) | yes, by design |
 | `run-logged.sh` | anyone running a batch by hand or on a timer | yes |
 | `backfill-days.sh` | a person, for a range of KST days | yes — it skips the days already banked |
 
@@ -489,3 +490,34 @@ contend for the same lock.
 `Persistent=true` so a machine asleep at 01:00 collects when it wakes rather
 than skipping the day, and the installer enables lingering so the timer fires
 whether or not anyone is logged in.
+
+## `collection-audit-tick.sh`
+
+**What it does.** One tick of the collection audit. Runs
+`worklog collection audit --days N` over the last N finished KST days and
+writes `incoming/last-collection-audit.json` on every path, including the paths
+that do nothing. When `$APP_CONFIG_ROOT/collection-audit-target` names a work
+item, it also drops a one-line summary onto that item's `next_action` through
+the cowork outbox — the same shape, and for the same reasons, as
+`board-audit-tick.sh`.
+
+**Who invokes it.** `hkwa-collection-audit.service`, driven by
+`hkwa-collection-audit.timer` at **02:00 Asia/Seoul** — one hour after
+`hkwa-collect`, so what it reads is last night's finished run rather than a run
+still going. That hour is the point of the batch: three sources went
+uncollected for four days and nobody could see it, and an hour is the longest
+that should ever be true again.
+
+**What it refuses, and why.** A second concurrent tick (`flock -n 7`, then
+`outcome=busy`). It also refuses to *fix* anything: it reports, and never
+starts a collection. Every finding is a day somebody has to decide about, and a
+batch that silently began a backfill would be making that decision at 02:00
+with nobody watching.
+
+**Safe to re-run?** Yes — it is a report over evidence already on disk. Every
+exit path is `exit 0`, so systemd always sees success and the real result is
+the `outcome` field (`clean`, `gaps`, `busy`, `no-worklog`, `audit-failed`).
+
+The audit itself — what it counts as a gap, why today is never audited, and
+what to run when it finds one — is documented in
+[collection-audit.md](collection-audit.md).

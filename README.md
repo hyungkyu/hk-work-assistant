@@ -66,6 +66,11 @@ append-only history. See [docs/delegated-work.md](docs/delegated-work.md) and
 drifted from the work and writes the count where it can be seen. See
 [docs/board-audit.md](docs/board-audit.md).
 
+**Collection audit.** A nightly batch, an hour after the collection itself,
+reporting every source-day the archive does not show as collected. Three
+sources once went uncollected for four days with the evidence sitting unread on
+the coverage grid. See [docs/collection-audit.md](docs/collection-audit.md).
+
 **Agent coordination.** A directive validator and liveness marks used by the
 sessions that do work against the board. Parts of the written protocol are not
 implemented; that document says which. See

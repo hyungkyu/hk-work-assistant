@@ -1,0 +1,18 @@
+[Unit]
+Description=Daily collection audit at 02:00 KST
+
+[Timer]
+# One hour after hkwa-collect, so what the audit reads is last night's finished
+# run and not a run still going. KST is named rather than assumed, exactly as
+# the collection timer names it.
+OnCalendar=*-*-* 02:00:00 Asia/Seoul
+# A machine asleep at 02:00 audits when it wakes rather than skipping the day.
+# A skipped audit is a day nobody checked, which is the state this unit exists
+# to end.
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=60s
+Unit=hkwa-collection-audit.service
+
+[Install]
+WantedBy=timers.target

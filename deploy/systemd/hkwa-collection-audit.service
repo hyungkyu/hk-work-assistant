@@ -1,0 +1,11 @@
+[Unit]
+Description=Measure whether the last few KST days were actually collected
+# Three sources went uncollected for four days and the only evidence was a
+# dashboard nobody had opened. This unit opens it.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Documents/ChatGPT/RLWRLD workspace
+ExecStart=/bin/bash "%h/Documents/ChatGPT/RLWRLD workspace/scripts/collection-audit-tick.sh"
+TimeoutStartSec=300

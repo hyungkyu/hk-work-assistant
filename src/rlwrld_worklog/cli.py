@@ -4,10 +4,11 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import IO, Sequence
 
+from .collection_audit import DEFAULT_DAYS as COLLECTION_AUDIT_DEFAULT_DAYS
 from .daily import DEFAULT_SINCE, MAX_WINDOW_HOURS, SOURCE_ORDER
 from .models import Source, TimelineEvent
 from .normalizers import normalize_records
@@ -259,6 +260,44 @@ def build_parser() -> argparse.ArgumentParser:
             "the next run starting where the dead one did. scripts/backfill-days.sh does the "
             "same work one KST day per run and keeps every day that finished"
         ),
+    )
+
+    # `collection` is a group rather than a top-level `collection-audit`,
+    # because reading the collection record is a family of questions and the
+    # board already has the same shape in `work audit`.
+    collection = subparsers.add_parser(
+        "collection", help="Read the record of what has been collected"
+    )
+    collection_commands = collection.add_subparsers(dest="collection_command", required=True)
+    collection_audit_parser = collection_commands.add_parser(
+        "audit",
+        help="Report every source-day the archive does not show as collected",
+    )
+    collection_audit_parser.add_argument(
+        "--days",
+        type=_positive_int,
+        default=COLLECTION_AUDIT_DEFAULT_DAYS,
+        help="How many finished KST days to check, ending yesterday. Today is never "
+        "audited: it is not over, and a day in progress is incomplete for a reason "
+        "that is not a defect",
+    )
+    collection_audit_parser.add_argument(
+        "--source",
+        action="append",
+        default=[],
+        choices=list(SOURCE_ORDER),
+        help="Repeatable. Default: all five",
+    )
+    collection_audit_parser.add_argument(
+        "--environment",
+        default=None,
+        help="Defaults to production. `all` widens to every environment, which lets a "
+        "test capture answer a question about production data",
+    )
+    collection_audit_parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Print only the one-line summary, short enough for next_action",
     )
 
     add_work_parser(subparsers)
@@ -869,6 +908,50 @@ def ledger_live_convert(args: argparse.Namespace) -> int:
     return 1 if result.schema_errors else 0
 
 
+def collection_audit(args: argparse.Namespace) -> int:
+    """Report every source-day the archive does not show as collected.
+
+    The window ends yesterday, in KST. Today is deliberately outside it: the
+    day is not over, so its cells are incomplete for a reason that is not a
+    defect, and an audit that reported them would cry wolf once a day forever.
+
+    Exit code is 0 even with findings, as `work audit` is: this is a report,
+    and the batch that runs it reads `ok` from the payload. A non-zero exit
+    would make the systemd unit fail on the days the audit is doing its job.
+    """
+    from . import collection_audit as audit_module
+    from . import collection_status
+    from .collection_rules import COLLECTOR_TO_SOURCE
+
+    # Production unless asked otherwise, and only the explicit sentinel widens
+    # it. Somebody reads this to decide whether real data was collected, and a
+    # test capture answering that question is a lie — the same rule the 수집
+    # 현황 API applies (`collection_web.DEFAULT_ENVIRONMENT`).
+    environment: str | None = args.environment or "production"
+    if environment == "all":
+        environment = None
+
+    now = datetime.now(timezone.utc)
+    end = now.astimezone(audit_module.KST).date() - timedelta(days=1)
+    start = end - timedelta(days=args.days - 1)
+    grid = collection_status.coverage(
+        collection_status.paths_from_environment(),
+        start=start,
+        end=end,
+        # The grid speaks ledger source names; the command line speaks the
+        # collector names every other subcommand takes.
+        sources=[COLLECTOR_TO_SOURCE[source] for source in args.source] or None,
+        environment=environment,
+        now=now,
+    )
+    report = audit_module.audit(grid, now=now)
+    if args.summary:
+        print(report["summary"])
+        return 0
+    print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
 def daily_collect(args: argparse.Namespace) -> int:
     from .daily import DailyConfig, config_as_dict, run_daily
 
@@ -941,6 +1024,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return ledger_live_convert(args)
     if args.command == "daily-collect":
         return daily_collect(args)
+    if args.command == "collection" and args.collection_command == "audit":
+        return collection_audit(args)
     if args.command == "work":
         return run_work(args)
     raise AssertionError(f"Unhandled command: {args.command}")
