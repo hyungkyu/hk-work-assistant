@@ -409,7 +409,9 @@ ends, so a multi-day run banks nothing until it finishes. On 2026-09-05 a
 five-day catch-up was started as a single `--since 5d`; two hours later it was
 still going and a failure at that point would have lost all four finished days
 together. August was backfilled the other way, one KST day per run, where a
-failure costs one day and every day before it is already banked.
+failure costs one day and every day before it is already banked. `daily-collect`
+now [refuses a window that wide](daily-collection.md#a-window-too-wide-for-one-run)
+and names this script.
 
 **Who invokes it.** A person, for a range that is over. Nothing runs it on a
 timer: the nightly `hkwa-collect` covers the incremental front, and this is for

@@ -71,6 +71,15 @@ LEDGER_SOURCE = {
 DEFAULT_SINCE = "26h"
 DEFAULT_ARCHIVE_ROOT = "/data/rlwrld-worklog"
 
+# The widest observation window one unbounded run may carry before it has to be
+# asked for explicitly.
+#
+# Two days rather than one: the nightly incremental window is `DEFAULT_SINCE`,
+# 26 hours, and rounds outwards to three KST days when the run starts before
+# 02:00 KST. That run has to keep working untouched, so the line sits above it
+# and below any catch-up worth slicing.
+MAX_WINDOW_HOURS = 48
+
 # A smoke run must cost a predictable, tiny number of API calls.
 SMOKE_LIMITS = {
     "slack_max_channels": 2,
@@ -212,6 +221,11 @@ class DailyConfig:
     load_database: bool = True
     dry_run: bool = False
     smoke: bool = False
+    # Run an observation window wider than `MAX_WINDOW_HOURS` as a single run
+    # anyway. The escape hatch exists because "many days at once" is
+    # occasionally what somebody means; it is off by default because it is
+    # almost never what they want. See `_validate_window_width`.
+    allow_wide_window: bool = False
     config_root: Path | None = None
     lock_path: Path | None = None
 
@@ -222,6 +236,11 @@ class DailyConfig:
             self.dry_run = True
         if self.until is not None:
             self._validate_until()
+        elif not self.allow_wide_window:
+            # Only an unbounded run is measured. A run carrying `--until` is
+            # already one named slice, and the day-slicing runner produces
+            # exactly those.
+            self._validate_window_width()
 
     def _validate_until(self) -> None:
         """Refuse an unusable slice here, before the lock and the first API call.
@@ -250,6 +269,44 @@ class DailyConfig:
                 f"--until {self.until} is not after --since {self.since}; that window holds "
                 "nothing, and an empty run is reported the same way a quiet day is."
             )
+
+    def _validate_window_width(self) -> None:
+        """Refuse a catch-up wide enough that it should have been day slices.
+
+        A single run over many days banks nothing until it finishes. Every day
+        it has already read is held in one process: the run advances no
+        checkpoint until the end, so a failure in hour three loses all of them
+        together and the next run starts exactly where the dead one did.
+        Day-sized slices bank each finished day instead, and a failure costs
+        one day rather than the whole window.
+
+        Measured on 2026-09-05: a five-day catch-up started as
+        `daily-collect --since 5d` was still running two hours later with four
+        finished days unbanked. A day is an expensive unit -- one KST day of
+        Notion cost 6,053 block reads -- which is what makes the width of the
+        window the thing worth checking, not the number of sources.
+        """
+        from .slack_collector import parse_since
+
+        now = datetime.now(timezone.utc)
+        try:
+            floor = parse_since(self.since, now=now)
+        except ValueError:
+            # Not this check's job. The collectors parse `--since` themselves
+            # and report an unusable one against their own window.
+            return
+        hours = (now - floor).total_seconds() / 3600.0
+        if hours <= MAX_WINDOW_HOURS:
+            return
+        raise ValueError(
+            f"--since {self.since} asks for a window {hours / 24:.1f} days wide in one run, "
+            f"and anything past {MAX_WINDOW_HOURS} hours has to be sliced: one run banks "
+            "nothing until it finishes, so a failure part way through loses every day it "
+            "had already read and moves no checkpoint. Run it one KST day at a time with "
+            "scripts/backfill-days.sh <first KST date> <last KST date>, which banks each "
+            "day as it finishes and resumes at the first day that failed. Pass "
+            "--allow-wide-window to run it as one run anyway."
+        )
 
     @property
     def capture_density(self) -> str:

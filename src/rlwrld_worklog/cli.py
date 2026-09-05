@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Sequence
 
-from .daily import DEFAULT_SINCE, SOURCE_ORDER
+from .daily import DEFAULT_SINCE, MAX_WINDOW_HOURS, SOURCE_ORDER
 from .models import Source, TimelineEvent
 from .normalizers import normalize_records
 from .slurm_collector import CLOUDS as SLURM_CLOUDS
@@ -248,6 +248,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--smoke",
         action="store_true",
         help="Strictly bounded API work for a connectivity check. Implies --dry-run.",
+    )
+    daily.add_argument(
+        "--allow-wide-window",
+        action="store_true",
+        help=(
+            f"Run an unbounded window wider than {MAX_WINDOW_HOURS} hours as one run anyway. "
+            "What it costs: the run banks nothing until it finishes, so a failure part way "
+            "through loses every day it had already read, advances no checkpoint, and leaves "
+            "the next run starting where the dead one did. scripts/backfill-days.sh does the "
+            "same work one KST day per run and keeps every day that finished"
+        ),
     )
 
     add_work_parser(subparsers)
@@ -874,12 +885,14 @@ def daily_collect(args: argparse.Namespace) -> int:
             load_database=not args.no_database,
             dry_run=args.dry_run,
             smoke=args.smoke,
+            allow_wide_window=args.allow_wide_window,
             config_root=args.config_root,
             lock_path=args.lock_path,
         )
     except ValueError as error:
-        # A window that cannot be honoured as asked. Refused before the lock is
-        # taken, so the run leaves nothing behind to interpret.
+        # A window that cannot be honoured as asked, or one too wide to be
+        # honoured as a single run. Refused before the lock is taken, so the
+        # run leaves nothing behind to interpret.
         raise SystemExit(str(error))
     _print_json("daily_collect_config", config_as_dict(config))
     summary = run_daily(

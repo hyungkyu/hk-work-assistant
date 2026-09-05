@@ -234,7 +234,13 @@ def test_the_same_run_without_a_bound_does_write_one(tmp_path: Path, monkeypatch
     client = FakeSlack(history={CHANNEL: [[message(ts(-100))]], DM: [[]]})
     monkeypatch.setattr(collector_module, "make_slack_collector", slack_factory(client))
 
-    run_config = config(tmp_path, sources=("slack",), since="2026-08-01")
+    # The same wide `--since` as the sliced run above, so the bound is the only
+    # difference between the two. Unbounded, that width is refused as a
+    # catch-up that should have been day slices (`test_wide_window.py`); the
+    # escape hatch is what keeps this control honest rather than narrow.
+    run_config = config(
+        tmp_path, sources=("slack",), since="2026-08-01", allow_wide_window=True
+    )
     summary = run_daily(run_config, credentials=credentials(tmp_path), captures=daily.DEFAULT_CAPTURES)
 
     result = next(item for item in summary["sources"] if item["source"] == "slack")

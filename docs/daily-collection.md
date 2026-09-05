@@ -88,6 +88,44 @@ Both edges round outwards:
 With the default `--since 26h`, that is a two-day window on most days and a
 three-day one when the run starts before 02:00 KST.
 
+### A window too wide for one run
+
+An **unbounded** run whose window is wider than `MAX_WINDOW_HOURS` (48 hours,
+`daily.py:71-80`) is refused while the config is built — before the lock and
+before the first API call — and the refusal names
+[`scripts/backfill-days.sh`](scripts.md#backfill-dayssh).
+
+```
+$ worklog daily-collect --since 5d
+--since 5d asks for a window 5.0 days wide in one run, and anything past 48
+hours has to be sliced: one run banks nothing until it finishes, so a failure
+part way through loses every day it had already read and moves no checkpoint.
+Run it one KST day at a time with scripts/backfill-days.sh <first KST date>
+<last KST date>, which banks each day as it finishes and resumes at the first
+day that failed. Pass --allow-wide-window to run it as one run anyway.
+```
+
+The reason is the one in the message. A `daily-collect` run advances no
+checkpoint until it ends, so a five-day catch-up holds all five days inside one
+process: hour three failing loses every day already read, and the next run
+starts exactly where the dead one did. Day-sized slices bank each finished day
+instead — which is how August was backfilled, and what the five-day run started
+on 2026-09-05 did not do; two hours in it was still going, with four finished
+days unbanked. A KST day is an expensive unit: one measured day of Notion cost
+6,053 `blocks/{id}/children` requests, which is why the width of the window is
+the thing worth checking rather than the number of sources.
+
+Two windows are deliberately outside the rule:
+
+* **26 hours.** The line is 48 rather than 24 so the nightly incremental
+  window, and the three KST days it rounds out to before 02:00 KST, keep
+  working untouched.
+* **Any run carrying `--until`.** That run is already one named slice, and the
+  day runner produces nothing else.
+
+`--allow-wide-window` runs it as one run anyway. The flag's help says what that
+costs, because anyone reaching for it is reaching past a refusal.
+
 ### Exit codes
 
 | Code | Meaning |
@@ -393,10 +431,16 @@ Notion additionally skips the link queue and the re-check sweep, because both
 target the live head (`notion_collector.py:521`).
 
 This mode is what makes a month-by-month backfill terminate, and `--until`
-exposes it on both `worklog collect` and `worklog daily-collect`:
+exposes it on both `worklog collect` and `worklog daily-collect`. A range of
+days is run through [`scripts/backfill-days.sh`](scripts.md#backfill-dayssh),
+which produces exactly these slices, one per KST day, and banks each one as it
+finishes:
 
 ```bash
-# one month, four sources, ledger and load included
+# a range of days, one bounded run each, resumable
+scripts/backfill-days.sh 2026-08-01 2026-08-31
+
+# one slice by hand: four sources, ledger and load included
 worklog daily-collect --environment production \
     --source slack --source notion --source github --source slurm \
     --since 2026-08-01 --until 2026-09-01
@@ -404,6 +448,11 @@ worklog daily-collect --environment production \
 # or one source at a time, capture only
 worklog collect slack --since 2026-08-01 --until 2026-09-01
 ```
+
+The middle command is a month in one run. It is legal — a run carrying
+`--until` is a named slice and is never refused for its width — but it banks
+nothing until it finishes, so a range worth more than a day or two belongs in
+the day runner.
 
 The bound is **exclusive**, and a bare `YYYY-MM-DD` means midnight *KST* that
 day (`slack_collector.py:94-121`) — so `--until 2026-09-01` covers exactly
