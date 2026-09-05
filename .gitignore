@@ -40,3 +40,6 @@ client_secret*.json
 credentials*.json
 google-token*.json
 token.json
+
+# Patches handed over from the cloud development side.
+incoming/
