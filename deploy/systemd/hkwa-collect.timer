@@ -1,0 +1,16 @@
+[Unit]
+Description=Daily collection at 01:00 KST
+
+[Timer]
+# KST is named rather than assumed: this unit must fire at 01:00 Seoul time
+# whatever the host's local timezone is set to.
+OnCalendar=*-*-* 01:00:00 Asia/Seoul
+# A machine that was asleep at 01:00 collects when it wakes rather than
+# skipping the day.
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=60s
+Unit=hkwa-collect.service
+
+[Install]
+WantedBy=timers.target

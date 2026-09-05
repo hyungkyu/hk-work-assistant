@@ -349,3 +349,58 @@ and does nothing.
 
 **State.** `incoming/last-deploy.json`, written on every path. Outcome table in
 [dev-prod-split.md](dev-prod-split.md).
+
+## `run-logged.sh`
+
+**What it does.** Runs a command and puts its output under
+`/data/rlwrld-worklog/logs/<name>/` — the data disk, which is a connected
+folder — instead of wherever the caller happened to redirect it.
+
+```bash
+scripts/run-logged.sh backfill-sep -- .venv/bin/worklog daily-collect --since 5d
+```
+
+Three files per name: the timestamped log, `latest.log`, and `last.json`
+carrying the exit code, the timings, the command, and the last 4 000
+characters. `last.json` is written whatever happens, including when the command
+could not be started at all — "no file" and "nothing happened" must never look
+the same from the other side.
+
+**Who invokes it.** Anyone running an ad-hoc or scheduled collection by hand.
+Use it instead of `> /tmp/something.log`: a log in `/tmp` exists only on the
+machine that wrote it, and on 2026-09-05 that meant a running backfill could be
+followed only by inspecting the archive it was writing.
+
+**What it refuses and why.** A `<name>` that is not a single path segment, so a
+log name can never escape the log root. Bad usage exits 64 rather than guessing.
+
+**Safe to re-run.** Yes. Each run gets its own file, named with the second and
+the pid so two runs in the same second cannot overwrite one another. The last
+30 logs per name are kept (`WORKLOG_LOG_KEEP`); older ones are deleted, because
+old logs are the first thing to fill a disk that also holds the archive.
+
+**Exit code** is the command's own, passed through.
+
+## The collection timer — `hkwa-collect`
+
+`deploy/systemd/hkwa-collect.{service,timer}`, installed by
+`install-incoming-timer.sh`. Fires at **01:00 Asia/Seoul** and runs
+
+```
+scripts/run-logged.sh daily-collect -- .venv/bin/worklog daily-collect
+```
+
+with **no `--source` flags**, so it collects all five sources. Naming sources
+in the unit is exactly how the previous batch fell three sources behind the
+code without anyone noticing.
+
+It replaces a batch that lived in the system unit directory, which the cloud
+side can neither read nor repair. This one lives in `deploy/systemd/`, is
+versioned with the code, and writes its log to
+`/data/rlwrld-worklog/logs/daily-collect/` where it can be read from either
+side. The old system unit or cron entry must be disabled, or both will run and
+contend for the same lock.
+
+`Persistent=true` so a machine asleep at 01:00 collects when it wakes rather
+than skipping the day, and the installer enables lingering so the timer fires
+whether or not anyone is logged in.

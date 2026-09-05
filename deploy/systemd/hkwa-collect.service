@@ -1,0 +1,17 @@
+[Unit]
+Description=Daily five-source collection, capture through ledger to database
+# The batch this replaces lived in the system unit directory, where the cloud
+# side cannot read or repair it -- so when it turned out to be running two of
+# five sources, nobody on this side could fix it. A batch nobody can inspect is
+# a batch that drifts.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Documents/ChatGPT/RLWRLD workspace
+# No --source flags: the default is all five. Naming them here is what let the
+# installed batch fall three sources behind the code without anyone noticing.
+ExecStart=/bin/bash "%h/Documents/ChatGPT/RLWRLD workspace/scripts/run-logged.sh" daily-collect -- "%h/Documents/ChatGPT/RLWRLD workspace/.venv/bin/worklog" daily-collect
+# A full five-source run walks every Slack channel and every Notion page it has
+# not seen. Six hours is well above the longest observed run and still bounded.
+TimeoutStartSec=21600

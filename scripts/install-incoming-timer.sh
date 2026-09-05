@@ -14,6 +14,7 @@ mkdir -p "$units"
 for u in hkwa-incoming.service hkwa-incoming.timer \
          hkwa-deploy.service hkwa-deploy.timer \
          hkwa-board-audit.service hkwa-board-audit.timer \
+         hkwa-collect.service hkwa-collect.timer \
          hkwa-wake.service hkwa-wake.timer; do
   [ -f "$root/deploy/systemd/$u" ] || continue
   sed "s#%h/Documents/ChatGPT/RLWRLD workspace#$root#g" \
@@ -22,6 +23,13 @@ done
 
 chmod +x "$root"/scripts/*.sh 2>/dev/null || true
 mkdir -p "$root/incoming/applied" "$root/incoming/failed"
+
+# A user timer only fires while this user's systemd manager is running. Without
+# lingering, the 01:00 collection would silently not happen on any night nobody
+# was logged in -- and a batch that skips a night without saying so is the
+# failure this whole subsystem exists to make impossible.
+loginctl enable-linger "$USER" 2>/dev/null || \
+  echo "could not enable lingering; hkwa-collect will only fire while logged in."
 
 # A systemd user service does not inherit the interactive shell's environment.
 # gh reads GH_TOKEN from it, and the wake script needs `claude` on PATH; both
@@ -44,7 +52,8 @@ else
 fi
 
 systemctl --user daemon-reload
-for t in hkwa-incoming.timer hkwa-deploy.timer hkwa-board-audit.timer hkwa-wake.timer; do
+for t in hkwa-incoming.timer hkwa-deploy.timer hkwa-board-audit.timer \
+         hkwa-collect.timer hkwa-wake.timer; do
   [ -f "$units/$t" ] || continue
   systemctl --user enable --now "$t"
   systemctl --user restart "$t"
