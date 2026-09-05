@@ -60,6 +60,10 @@ page and the `worklog work` CLI, stored as a single JSON file with an
 append-only history. See [docs/delegated-work.md](docs/delegated-work.md) and
 [docs/work-board-reference.md](docs/work-board-reference.md).
 
+**Board audit.** A half-hourly batch that measures the ways the board has
+drifted from the work and writes the count where it can be seen. See
+[docs/board-audit.md](docs/board-audit.md).
+
 **Agent coordination.** A directive validator and liveness marks used by the
 sessions that do work against the board. Parts of the written protocol are not
 implemented; that document says which. See

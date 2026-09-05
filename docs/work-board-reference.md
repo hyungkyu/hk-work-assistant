@@ -586,13 +586,38 @@ the moved file in the same subdirectory and is written **before** the move.
 ### Allowlists, quoted exactly
 
 ```python
-# Only these two fields are taken from a queued file. The others are the
-# executor's own account of the work: a queue that could set `status` or
-# `progress_summary` would let the requester write the report as well as the
-# request, and the board would no longer say who observed what.
-OUTBOX_FIELDS = ("next_action", "detail")
+# What a queued file may edit. One line divides this list from the fields left
+# out of it: the requester writes the request, and the executor writes the
+# report. `progress_summary`, `blocker`, `started_at` and `completed_at` are
+# the executor's account of the work, and a queue that could set them would
+# let whoever asked for the work also describe how it went.
+#
+# Re-queueing and re-assigning are on the request side. An item sitting in
+# `in_progress` that nobody is working is the exact defect P0 exists to
+# prevent, and until this list included `status` the requester could see it
+# and had no way to correct it.
+OUTBOX_FIELDS = (
+    "next_action",
+    "detail",
+    "assigned_to",
+    "priority",
+    "due_at",
+    "status",
+)
+
+# The four stages a requester may move an item to. All four mean "nobody has
+# started this, or nobody is going to" - they place work in the queue or take
+# it out. The four left out (`in_progress`, `waiting`, `blocked`, `done`) are
+# all claims about what happened, and only the executor may make those.
+#
+# Moving *out* of `in_progress` back into the queue is allowed and is not a
+# claim: it disclaims progress rather than asserting it.
+OUTBOX_STATUSES = ("backlog", "todo", "ready", "cancelled")
 ```
-(`work_cli.py:258-262`)
+
+A status outside `OUTBOX_STATUSES` **refuses the whole file** rather than
+being dropped from the payload: a queue that silently ignored the field would
+leave the sender believing the board says something it does not.
 
 ```python
 # A queued file may also create an item, with `"op": "create"`. Creation is the
@@ -626,18 +651,23 @@ OUTBOX_CREATE_STATUSES = ("backlog", "todo", "ready")
   "work_id": "wi_846fb2146674febb",
   "next_action": "…",
   "detail": "…",
+  "assigned_to": "local",
+  "status": "ready",
   "expected_revision": 7
 }
 ```
 
-- `op` optional, defaults to `"update"` (`work_cli.py:358`)
+- `op` optional, defaults to `"update"`
 - `work_id` required, a non-empty string
-- `next_action`, `detail` optional, each must be a `str`
+- `next_action`, `detail`, `assigned_to`, `priority`, `due_at`, `status`
+  optional, each must be a `str`
+- `status`, if present, must be one of `backlog`, `todo`, `ready`,
+  `cancelled`; anything else refuses the file
 - `expected_revision` optional; `int`, not `bool`
 
 Everything else lands in `ignored = sorted(set(payload) - set(OUTBOX_FIELDS) -
-{"work_id", "expected_revision"})` (`work_cli.py:371`) and is reported, not
-applied.  Applied as `store.update_item(work_id, fields, actor=actor,
+{"work_id", "expected_revision", "op"})` and is reported, not applied —
+`progress_summary`, `blocker`, `started_at` and `completed_at` among them.  Applied as `store.update_item(work_id, fields, actor=actor,
 expected_revision=expected)` (`work_cli.py:386`).
 
 ### Payload — create (`"op": "create"`)

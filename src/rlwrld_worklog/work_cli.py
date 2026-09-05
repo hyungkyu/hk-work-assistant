@@ -17,8 +17,10 @@ import json
 import os
 import sys
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
+from . import board_audit
 from .work_store import (
     PRIORITIES,
     describe_roles,
@@ -71,6 +73,11 @@ CLEARABLE_FIELDS = (
 )
 
 
+# One history read per audit, grouped in memory. Reading it per item would open
+# a file already hundreds of kilobytes wide, once per open item, every tick.
+_AUDIT_HISTORY_LIMIT = 20_000
+
+
 def add_work_parser(subparsers: Any) -> None:
     work = subparsers.add_parser("work", help="Track delegated work in the local shared store")
     commands = work.add_subparsers(dest="work_command", required=True)
@@ -119,6 +126,35 @@ def add_work_parser(subparsers: Any) -> None:
 
     meta = commands.add_parser("meta", help="Show the status schema and board layout")
     _add_common(meta)
+
+    audit = commands.add_parser(
+        "audit", help="Measure the ways this board currently disagrees with the work"
+    )
+    _add_common(audit)
+    audit.add_argument(
+        "--stalled-after-hours",
+        type=float,
+        default=board_audit.DEFAULT_STALLED_AFTER_HOURS,
+        help="How long an in_progress item may go without its assignee touching it",
+    )
+    audit.add_argument(
+        "--stale-ready-after-hours",
+        type=float,
+        default=board_audit.DEFAULT_STALE_READY_AFTER_HOURS,
+        help="How long a ready item may sit unchanged before it is reported",
+    )
+    audit.add_argument(
+        "--executor",
+        action="append",
+        default=[],
+        help="An executor that exists. Repeatable. Without any, the roster check is skipped, "
+        "because this command has no way to know who is there.",
+    )
+    audit.add_argument(
+        "--summary",
+        action="store_true",
+        help="Print only the one-line summary, short enough for next_action",
+    )
 
     apply_outbox = commands.add_parser(
         "apply-outbox",
@@ -255,11 +291,33 @@ def run_work(args: argparse.Namespace) -> int:
         return 2
 
 
-# Only these two fields are taken from a queued file. The others are the
-# executor's own account of the work: a queue that could set `status` or
-# `progress_summary` would let the requester write the report as well as the
-# request, and the board would no longer say who observed what.
-OUTBOX_FIELDS = ("next_action", "detail")
+# What a queued file may edit. One line divides this list from the fields left
+# out of it: the requester writes the request, and the executor writes the
+# report. `progress_summary`, `blocker`, `started_at` and `completed_at` are
+# the executor's account of the work, and a queue that could set them would
+# let whoever asked for the work also describe how it went.
+#
+# Re-queueing and re-assigning are on the request side. An item sitting in
+# `in_progress` that nobody is working is the exact defect P0 exists to
+# prevent, and until this list included `status` the requester could see it
+# and had no way to correct it.
+OUTBOX_FIELDS = (
+    "next_action",
+    "detail",
+    "assigned_to",
+    "priority",
+    "due_at",
+    "status",
+)
+
+# The four stages a requester may move an item to. All four mean "nobody has
+# started this, or nobody is going to" - they place work in the queue or take
+# it out. The four left out (`in_progress`, `waiting`, `blocked`, `done`) are
+# all claims about what happened, and only the executor may make those.
+#
+# Moving *out* of `in_progress` back into the queue is allowed and is not a
+# claim: it disclaims progress rather than asserting it.
+OUTBOX_STATUSES = ("backlog", "todo", "ready", "cancelled")
 
 # A queued file may also create an item, with `"op": "create"`. Creation is the
 # requester's own act, so the fields it may set are the request - what is
@@ -368,7 +426,9 @@ def _apply_one_outbox(store: WorkStore, path: Path, actor: str) -> dict[str, Any
         return _outbox_result(path.name, False, "work_id is required")
 
     fields = {key: payload[key] for key in OUTBOX_FIELDS if key in payload}
-    ignored = sorted(set(payload) - set(OUTBOX_FIELDS) - {"work_id", "expected_revision"})
+    ignored = sorted(
+        set(payload) - set(OUTBOX_FIELDS) - {"work_id", "expected_revision", "op"}
+    )
     if not fields:
         return _outbox_result(
             path.name, False, f"nothing to apply: only {', '.join(OUTBOX_FIELDS)} are read",
@@ -377,6 +437,20 @@ def _apply_one_outbox(store: WorkStore, path: Path, actor: str) -> dict[str, Any
     for key, value in fields.items():
         if not isinstance(value, str):
             return _outbox_result(path.name, False, f"{key} must be a string", ignored=ignored)
+
+    status = fields.get("status")
+    if status is not None and status not in OUTBOX_STATUSES:
+        # Refused outright rather than dropped from the payload. A queue that
+        # silently ignored an unwritable status would leave the sender
+        # believing the board says something it does not.
+        return _outbox_result(
+            path.name,
+            False,
+            f"status {status!r} may not be set from the queue: only "
+            f"{', '.join(OUTBOX_STATUSES)}. in_progress, waiting, blocked and done "
+            "are the executor's own report",
+            ignored=ignored,
+        )
 
     expected = payload.get("expected_revision")
     if expected is not None and (not isinstance(expected, int) or isinstance(expected, bool)):
@@ -561,6 +635,23 @@ def _dispatch(args: argparse.Namespace) -> int:
         return 0
     if command == "meta":
         _emit({"ok": True, **status_metadata()})
+        return 0
+    if command == "audit":
+        report = board_audit.audit(
+            store.list_items(include_archived=False)["items"],
+            # One read, grouped in memory. Reading the history once per item
+            # would open a file that is already hundreds of kilobytes, ninety
+            # times, every half hour.
+            store.read_history(limit=_AUDIT_HISTORY_LIMIT),
+            now=datetime.now(timezone.utc),
+            roster=args.executor,
+            stalled_after_hours=args.stalled_after_hours,
+            stale_ready_after_hours=args.stale_ready_after_hours,
+        )
+        if args.summary:
+            print(report["summary"])
+            return 0
+        _emit({"ok": True, **report})
         return 0
     if command == "show":
         item = store.get_item(args.item_id)

@@ -1,0 +1,12 @@
+[Unit]
+Description=Half-hourly board audit
+
+[Timer]
+OnBootSec=8min
+OnUnitInactiveSec=30min
+Persistent=true
+AccuracySec=60s
+Unit=hkwa-board-audit.service
+
+[Install]
+WantedBy=timers.target

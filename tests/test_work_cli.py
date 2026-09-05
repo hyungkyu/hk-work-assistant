@@ -285,7 +285,7 @@ def test_a_queued_edit_reaches_the_board_and_is_filed_as_applied(
     assert (outbox / "applied" / "a.json.reason.json").exists()
 
 
-def test_the_queue_writes_only_the_two_fields_it_is_allowed(
+def test_the_queue_never_writes_the_executors_report(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The requester writes the request; the executor writes the report."""
@@ -298,18 +298,87 @@ def test_the_queue_writes_only_the_two_fields_it_is_allowed(
         "next_action": "허용",
         "detail": "허용",
         "progress_summary": "남의 보고를 대신 쓰려는 것",
-        "status": "done",
         "blocker": "막혔다고 대신 말하려는 것",
     })
 
     _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
     entry = result["results"][0]
     assert entry["applied"] == ["detail", "next_action"]
-    assert entry["ignored"] == ["blocker", "progress_summary", "status"]
+    assert entry["ignored"] == ["blocker", "progress_summary"]
 
     _, shown = run(capsys, config, "show", item_id)
-    assert shown["item"]["status"] != "done"
     assert shown["item"]["progress_summary"] == ""
+    assert shown["item"]["blocker"] is None
+
+
+def test_the_queue_refuses_a_status_that_claims_work_happened(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """done, in_progress, waiting and blocked are all claims about what happened.
+
+    Refused rather than dropped: a queue that silently ignored the field would
+    leave the sender believing the board says something it does not.
+    """
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    _, created = run(capsys, config, "create", "--title", "티켓", "--assigned-to", "soa",
+                     "--requested-by", "mori")
+    item_id = created["item"]["id"]
+    for name, status in (
+        ("d.json", "done"),
+        ("p.json", "in_progress"),
+        ("w.json", "waiting"),
+        ("b.json", "blocked"),
+    ):
+        _queue(outbox, name, {"work_id": item_id, "status": status})
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (0, 4)
+    for entry in result["results"]:
+        assert "may not be set from the queue" in entry["reason"]
+
+    _, shown = run(capsys, config, "show", item_id)
+    assert shown["item"]["status"] == "backlog"
+
+
+def test_the_queue_can_take_back_work_nobody_is_doing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """P0 condition 3: an in_progress item nobody is working must be correctable.
+
+    Moving out of in_progress disclaims progress rather than asserting it, so
+    it belongs to the requester. Until the queue could do this, the requester
+    could see the defect and had no way to fix it.
+    """
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    _, created = run(capsys, config, "create", "--title", "티켓", "--assigned-to", "soa",
+                     "--requested-by", "mori", "--status", "in_progress")
+    item_id = created["item"]["id"]
+    _queue(outbox, "r.json", {"work_id": item_id, "status": "ready", "assigned_to": "local"})
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (1, 0)
+
+    _, shown = run(capsys, config, "show", item_id)
+    assert shown["item"]["status"] == "ready"
+    assert shown["item"]["assigned_to"] == "local"
+
+
+def test_the_queue_can_withdraw_its_own_request(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Taking back a request is not a report about how the work went."""
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    _, created = run(capsys, config, "create", "--title", "티켓", "--assigned-to", "soa",
+                     "--requested-by", "mori")
+    item_id = created["item"]["id"]
+    _queue(outbox, "c.json", {"work_id": item_id, "status": "cancelled",
+                              "next_action": "구멍이 메워져 용도가 끝났다"})
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (1, 0)
+
+    _, shown = run(capsys, config, "show", item_id)
+    assert shown["item"]["status"] == "cancelled"
 
 
 def test_a_stale_revision_is_refused_and_never_merged(

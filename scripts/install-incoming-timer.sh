@@ -13,6 +13,7 @@ mkdir -p "$units"
 
 for u in hkwa-incoming.service hkwa-incoming.timer \
          hkwa-deploy.service hkwa-deploy.timer \
+         hkwa-board-audit.service hkwa-board-audit.timer \
          hkwa-wake.service hkwa-wake.timer; do
   [ -f "$root/deploy/systemd/$u" ] || continue
   sed "s#%h/Documents/ChatGPT/RLWRLD workspace#$root#g" \
@@ -43,7 +44,7 @@ else
 fi
 
 systemctl --user daemon-reload
-for t in hkwa-incoming.timer hkwa-deploy.timer hkwa-wake.timer; do
+for t in hkwa-incoming.timer hkwa-deploy.timer hkwa-board-audit.timer hkwa-wake.timer; do
   [ -f "$units/$t" ] || continue
   systemctl --user enable --now "$t"
   systemctl --user restart "$t"
