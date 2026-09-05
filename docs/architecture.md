@@ -188,9 +188,12 @@ $APP_CONFIG_ROOT/credentials/  # 앱이 실제로 읽는 곳
 유닛 이름은 요청이 아니라 목록에서 온다. `systemctl show` 는 셸 없이 고정 인자와
 타임아웃으로 실행되며, 여기서 유닛을 설치·활성화·변경하는 일은 없다.
 
-목록이 이름 붙인 `worklog-daily.timer` / `worklog-daily.service` 는
-`deploy/systemd/` 에 **없다**. GitHub·Slurm 배치는 목록 항목 자체가 없어서 스케줄
-화면에 구조적으로 보이지 않는다.
+목록이 이름 붙인 `hkwa-collect.timer` / `hkwa-collect.service` 는
+`deploy/systemd/` 에 있고 `install-incoming-timer.sh` 가 설치한다. 앞선 판
+(`worklog-daily.*`)은 시스템 유닛 디렉터리에 있어 개발계에서 읽을 수도 고칠 수도
+없었고, 그래서 다섯 중 두 소스만 돌고 있다는 사실이 코드보다 오래 살아남았다.
+2026-09-05 에 껐다. GitHub·Slurm 은 이제 일일 수집 안에서 돌므로 별도 목록 항목이
+필요 없다.
 
 ## 아직 없는 것
 

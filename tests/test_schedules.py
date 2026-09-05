@@ -30,7 +30,10 @@ def installed(**properties: str):
 def test_the_catalogue_only_describes_batches_this_repository_defines() -> None:
     assert [batch.key for batch in CATALOGUE] == ["daily-collect"]
     batch = CATALOGUE[0]
-    assert batch.command == "worklog daily-collect"
+    # The command names the wrapper, not just the collector: the unit runs
+    # through run-logged.sh so the run's output lands under the data disk
+    # rather than wherever the caller redirected it.
+    assert batch.command == "scripts/run-logged.sh daily-collect -- worklog daily-collect"
     for field in (batch.purpose, batch.runner, batch.cadence, batch.scope,
                   batch.concurrency, batch.logs, batch.failure_check, batch.detail):
         assert field.strip()

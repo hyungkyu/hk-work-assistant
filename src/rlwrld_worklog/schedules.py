@@ -91,14 +91,18 @@ CATALOGUE: tuple[Batch, ...] = (
             "Slack · Google Calendar · GitHub · Slurm · Notion을 공식 읽기 전용 API로 증분 "
             "수집해 불변 원본 아카이브와 실행 manifest를 남기고, 표준 v1 원장으로 투영한다."
         ),
-        runner="systemd timer → oneshot service (Codex 세션이나 사람의 수동 실행이 아님)",
-        command="worklog daily-collect",
-        timer_unit="worklog-daily.timer",
-        service_unit="worklog-daily.service",
+        runner="systemd user timer → oneshot service (사람의 수동 실행이 아님)",
+        command="scripts/run-logged.sh daily-collect -- worklog daily-collect",
+        # 이 저장소의 deploy/systemd/ 에 있는 유닛이다. 앞선 판은 시스템 유닛
+        # 디렉터리에 있어 개발계에서 읽을 수도 고칠 수도 없었고, 그래서 다섯 중
+        # 두 소스만 돌고 있다는 사실이 코드보다 오래 살아남았다.
+        timer_unit="hkwa-collect.timer",
+        service_unit="hkwa-collect.service",
         cadence="하루 1회",
         schedule_description=(
-            "백오피스 설정의 '일일 수집 시작 시각'과 '타임존' 정각. systemd에 설치된 "
-            "OnCalendar 값이 실제 실행 시각을 결정하며, 설정과 다르면 systemd 쪽이 사실이다."
+            "유닛의 OnCalendar 는 01:00 Asia/Seoul 로, 시간대를 가정하지 않고 이름으로 "
+            "박아 두었다. 백오피스 설정의 '일일 수집 시작 시각'은 참고값이며, systemd에 "
+            "설치된 OnCalendar 가 실제 실행 시각을 결정한다 — 둘이 다르면 systemd 쪽이 사실이다."
         ),
         scope=(
             "환경 production, 소스 다섯 개 전부(slack · google-calendar · github · slurm · "
@@ -110,8 +114,9 @@ CATALOGUE: tuple[Batch, ...] = (
             "이전 실행이 아직 돌고 있으면 두 번째 실행은 아무것도 건드리지 않고 exit 3."
         ),
         logs=(
-            "journalctl -u worklog-daily.service · 실행별 manifest는 "
-            "<RAW_ARCHIVE_ROOT>/manifests/<source>/<environment>/<run_id>.json"
+            "<RAW_ARCHIVE_ROOT>/logs/daily-collect/ 의 timestamped.log · latest.log · "
+            "last.json(종료 코드와 꼬리). journalctl --user -u hkwa-collect.service 도 있다. "
+            "실행별 manifest는 <RAW_ARCHIVE_ROOT>/manifests/<source>/<environment>/<run_id>.json"
         ),
         failure_check=(
             "백오피스 '수집 현황'의 최근 실행 표에서 상태·skip·failure 수를 먼저 본다. "

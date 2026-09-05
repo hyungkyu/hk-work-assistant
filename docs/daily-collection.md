@@ -258,27 +258,33 @@ batch, `daily-collect`, and declares its runner to be a systemd timer driving a
 oneshot service — not a cron entry and not a manual run:
 
 ```
-timer unit:    worklog-daily.timer
-service unit:  worklog-daily.service
+timer unit:    hkwa-collect.timer
+service unit:  hkwa-collect.service
 cadence:       once a day, at the backoffice-configured hour and timezone
 concurrency:   non-blocking flock on <RAW_ARCHIVE_ROOT>/locks/daily-collect-<environment>.lock
-logs:          journalctl -u worklog-daily.service
+logs:          <RAW_ARCHIVE_ROOT>/logs/daily-collect/  (latest.log, last.json)
 ```
 
 systemd, not the backoffice setting, decides when the timer actually fires.
 `schedules.py` reports the configured hour and the systemd answer side by side
 and never merges them (`schedules.py:274-283`).
 
-Two gaps a contributor should know about:
+The unit files live in `deploy/systemd/` and `scripts/install-incoming-timer.sh`
+installs them into the user's systemd. `OnCalendar=*-*-* 01:00:00 Asia/Seoul`
+names the timezone rather than assuming the host's, and the unit carries **no
+`--source` flags**, so what runs is the default: all five sources.
 
-* **The unit files are not in this repository.** `worklog-daily.timer` and
-  `worklog-daily.service` are named in the catalogue (`schedules.py:53-54`) but
-  do not exist under `deploy/systemd/`, which currently holds only the
-  `hkwa-wake` and `hkwa-incoming` units. They have to be installed on the host
-  by hand.
-* **GitHub and Slurm have no catalogue entry.** `CATALOGUE` contains exactly
-  one `Batch` (`schedules.py:86`), so however `github-collect` and
-  `slurm-collect` are scheduled on a host, the schedule page cannot see them.
+That last point is the whole reason this unit exists. The batch it replaced
+(`worklog-daily.timer`) lived in the system unit directory, out of reach of the
+development side, and named two sources explicitly. When the code grew to five,
+the installed batch stayed at two, and three sources went uncollected for four
+days before anyone could see it. A batch nobody can read is a batch that
+drifts. It was disabled on 2026-09-05.
+
+GitHub and Slurm no longer need a catalogue entry of their own: they run inside
+the daily collection. `github-collect` and `slurm-collect` remain as hand-run
+commands for an explicit window, and anything captured that way still needs
+`ledger-live-convert` and `ledger-load` run by hand.
 
 Output is line-oriented JSON: one `daily_collect_config=` line before the run,
 one `daily_collect_source=` line as each source finishes, and a final
