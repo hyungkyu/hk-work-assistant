@@ -3,7 +3,7 @@
 One section per file. Each says what the script does, who invokes it, what it
 refuses to do and why, and whether it is safe to run twice.
 
-`scripts/` holds eight shell scripts and one Markdown file. The Markdown file,
+`scripts/` holds twelve shell scripts and one Markdown file. The Markdown file,
 `local-work-prompt.md`, is not a script — it is data read by `wake-local.sh`, and
 it is described at the end.
 
@@ -26,6 +26,10 @@ Quick index:
 | `prepare-admin-config.sh` | **nobody** — a person, by hand | yes |
 | `prepare-data-disk.sh` | **nobody** — a person, with `sudo` | no, refuses after the first run |
 | `worklog-local.sh` | a person, as the CLI entry point | yes |
+| `deploy-tick.sh` | `hkwa-deploy.service` (timer, 10 min) | yes, by design |
+| `board-audit-tick.sh` | `hkwa-board-audit.service` (timer, 30 min) | yes, by design |
+| `run-logged.sh` | anyone running a batch by hand or on a timer | yes |
+| `backfill-days.sh` | a person, for a range of KST days | yes — it skips the days already banked |
 
 ---
 
@@ -380,6 +384,85 @@ the pid so two runs in the same second cannot overwrite one another. The last
 old logs are the first thing to fill a disk that also holds the archive.
 
 **Exit code** is the command's own, passed through.
+
+## `backfill-days.sh`
+
+**What it does.** Collects a range of KST days as **one `daily-collect` run per
+day**, in order, each run bounded by that day and each logged through
+`run-logged.sh`.
+
+```bash
+scripts/backfill-days.sh 2026-09-01 2026-09-04
+scripts/backfill-days.sh 2026-09-01 2026-09-04 --source slack --source notion
+```
+
+Each day becomes
+
+```
+daily-collect --source ... --since <day>T00:00:00+09:00 --until <next day>T00:00:00+09:00
+```
+
+logged under `<log root>/backfill-<day>/`.
+
+**Why one run per day.** A `daily-collect` run advances no checkpoint until it
+ends, so a multi-day run banks nothing until it finishes. On 2026-09-05 a
+five-day catch-up was started as a single `--since 5d`; two hours later it was
+still going and a failure at that point would have lost all four finished days
+together. August was backfilled the other way, one KST day per run, where a
+failure costs one day and every day before it is already banked.
+
+**Who invokes it.** A person, for a range that is over. Nothing runs it on a
+timer: the nightly `hkwa-collect` covers the incremental front, and this is for
+the days that front missed.
+
+**Default sources** are `slack notion github slurm` — the four for which an
+upper bound can be expressed. **`google-calendar` is refused by name**, before
+the first day runs, because every run here carries `--until` and Calendar's
+incremental read is a per-calendar sync token: a bound cannot be expressed for
+it, only ignored. Leaving that to be discovered on the first day of a backfill
+would be discovering it late.
+
+**What it refuses, and why.**
+
+- **A reversed range** — swapping it silently would collect a different range
+  than the one asked for.
+- **A range that is not over.** The exclusive bound of the last day must
+  already have passed, which refuses tomorrow *and* today: a day still in
+  progress collected as a whole day is indistinguishable afterwards from a day
+  that was genuinely quiet.
+- **A date that is not `YYYY-MM-DD`**, and any argument it does not recognise.
+- **Continuing past a failed day.** It stops, names the day, points at that
+  day's log, and exits 1. Running the days after a failure would leave the gap
+  sitting under a row of successes — which is exactly how three sources went
+  uncollected for four days without anyone seeing it.
+
+Every refusal about the range happens before the state directory is created, so
+a request that was never going to work leaves nothing behind.
+
+**State**, under the log root beside the logs:
+
+| File | What it holds |
+|---|---|
+| `<log root>/backfill-days/days.log` | one append-only line per finished attempt: day, outcome, exit code, UTC stamp |
+| `<log root>/backfill-days/summary.json` | `outcome`, `succeeded`, `failed`, `remaining`, `failed_day`, the range and the sources |
+
+Both are written **after each day**, not at the end, so a backfill killed part
+way through leaves the same record a finished one does, and the cloud side
+reading `summary.json` mid-run sees the days already banked.
+
+**Safe to re-run?** Yes — re-running is the resume. A day whose last recorded
+word in `days.log` is `ok` is skipped, so the correct response to a failure is
+to fix the cause and run the same command again. A day that failed once and
+succeeded later reads as succeeded.
+
+**Environment.** `WORKLOG_LOG_ROOT` (shared with `run-logged.sh`),
+`WORKLOG_BACKFILL_COMMAND` (the per-day command, default
+`.venv/bin/worklog daily-collect`) and `WORKLOG_BACKFILL_RUNNER` (the logging
+wrapper). The last two exist so `tests/test_backfill_days.py` can drive the real
+script against a stub and reach no network.
+
+**Exit codes.** 0 every day collected, 1 a day failed, 64 the request was
+refused.
 
 ## The collection timer — `hkwa-collect`
 
