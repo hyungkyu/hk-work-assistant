@@ -1,11 +1,16 @@
 [Unit]
-Description=Daily collection at 01:00 KST
+Description=Daily collection at 06:00 KST
 
 [Timer]
-# KST is named rather than assumed: this unit must fire at 01:00 Seoul time
+# KST is named rather than assumed: this unit must fire at 06:00 Seoul time
 # whatever the host's local timezone is set to.
-OnCalendar=*-*-* 01:00:00 Asia/Seoul
-# A machine that was asleep at 01:00 collects when it wakes rather than
+#
+# 06:00 rather than 01:00 or the 03:10 the previous batch used. A long
+# catch-up holds the collection lock for hours, and a batch that fires into a
+# held lock records `locked` and collects nothing -- so the hour is chosen to
+# sit after the night's work rather than inside it.
+OnCalendar=*-*-* 06:00:00 Asia/Seoul
+# A machine that was asleep at 06:00 collects when it wakes rather than
 # skipping the day.
 Persistent=true
 RandomizedDelaySec=120
