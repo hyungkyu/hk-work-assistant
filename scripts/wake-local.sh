@@ -24,12 +24,28 @@ cd "$root" || exit 0
 
 config_root="${APP_CONFIG_ROOT:-$HOME/.config/hk-work-assistant}"
 items="$config_root/work/items.json"
-state="incoming/last-wake.json"
-lock="incoming/.wake.lock"
+# Overridable so the behaviour of this script can be exercised without a test
+# writing into the real carrier directory.
+state_dir="${WAKE_STATE_DIR:-incoming}"
+state="$state_dir/last-wake.json"
+lock="$state_dir/.wake.lock"
 log_dir="$config_root/cowork/logs"
 executor="${WAKE_EXECUTOR:-local}"
 
-mkdir -p incoming "$log_dir"
+# The prompt tells the session to run `worklog` and `python` by name, and the
+# allowlist below permits exactly those two names. Neither is on the user
+# manager's PATH on this machine -- `worklog` is a console script inside the
+# repository's virtualenv -- so put that virtualenv in front of PATH here
+# rather than teaching the prompt an absolute path that a human would then have
+# to keep in step with the allowlist. That hand-kept pair is precisely what
+# broke: the allowlist named a command that exists nowhere, and every board
+# write the prompt asked for was refused for some 300 ticks while the state
+# file reported `outcome=woke` each time. Prepending is also the only form that
+# survives a repository path containing a space, which this one has.
+PATH="$root/.venv/bin:$PATH"
+export PATH
+
+mkdir -p "$state_dir" "$log_dir"
 
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 outcome="idle"
@@ -56,6 +72,15 @@ fi
 if ! command -v claude >/dev/null 2>&1; then
   outcome="no-claude"
   detail="the claude CLI is not on PATH for the user manager; nothing can be woken"
+  finish
+fi
+
+# A session that cannot reach the board cannot claim, work, or close anything,
+# so waking one would burn a tick and change nothing. Refusing by name says
+# which half is missing; the silent version of this cost 300 ticks.
+if ! command -v worklog >/dev/null 2>&1; then
+  outcome="no-worklog"
+  detail="worklog is on neither PATH nor $root/.venv/bin; a woken session could not record anything on the board"
   finish
 fi
 
@@ -98,8 +123,9 @@ fi
 item_id="$pick"
 
 # A bounded allowlist rather than skipping permission checks outright. Override
-# in $config_root/wake-local.env if a task genuinely needs more.
-allowed='Read,Glob,Grep,Edit,Write,Bash(git:*),Bash(python3:*),Bash(pytest:*),Bash(docker:*),Bash(docker compose:*),Bash(work:*),Bash(systemctl:*),Bash(journalctl:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(sed:*),Bash(awk:*),Bash(find:*),Bash(wc:*),Bash(jq:*),Bash(sha256sum:*),Bash(ps:*)'
+# in $config_root/wake-local.env if a task genuinely needs more. Every command
+# the prompt prints has to appear here, which a test now checks.
+allowed='Read,Glob,Grep,Edit,Write,Bash(git:*),Bash(python:*),Bash(python3:*),Bash(pytest:*),Bash(worklog:*),Bash(docker:*),Bash(docker compose:*),Bash(systemctl:*),Bash(journalctl:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(sed:*),Bash(awk:*),Bash(find:*),Bash(wc:*),Bash(jq:*),Bash(sha256sum:*),Bash(ps:*)'
 wake_timeout="${WAKE_TIMEOUT:-3600}"
 # shellcheck source=/dev/null
 [ -f "$config_root/wake-local.env" ] && . "$config_root/wake-local.env"

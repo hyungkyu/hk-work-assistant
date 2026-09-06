@@ -4,6 +4,9 @@
 작업 디렉터리는 이 저장소다. 보드는 `~/.config/hk-work-assistant/work/items.json` 이고,
 `worklog work ...` 로 읽고 쓴다. 모든 명령에 `--actor {{EXECUTOR}}` 를 붙인다.
 
+`worklog` 와 `python` 은 저장소의 `.venv/bin` 에서 온다 — 깨운 스크립트가 `PATH`
+앞에 붙여 준다. 여기 적힌 이름 그대로 부른다. 경로를 붙이면 허용목록에 없다.
+
 ## 순서
 
 **1. 읽는다**
@@ -58,7 +61,7 @@ worklog work update {{ITEM_ID}} --actor {{EXECUTOR}} --status blocked \
 푸시 전에 반드시:
 
 ```
-.venv/bin/python -m pytest -q
+python -m pytest -q
 ```
 
 초록이 아니면 푸시하지 않는다. 빨간 채로 끝내려면 `--status blocked` 로 남긴다.
