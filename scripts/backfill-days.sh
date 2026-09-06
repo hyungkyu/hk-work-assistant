@@ -38,9 +38,21 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 LOG_ROOT=${WORKLOG_LOG_ROOT:-/data/rlwrld-worklog/logs}
 
 # The command each day runs, overridable so the day list, the refusals and the
-# resume can be tested without a network. It is split on whitespace, as
-# `run-logged.sh` receives it.
-COMMAND=${WORKLOG_BACKFILL_COMMAND:-$root/.venv/bin/worklog daily-collect}
+# resume can be tested without a network.
+#
+# The default is built as an array and never split. It used to be a string that
+# was word-split into argv, which meant the repository's own path could not
+# contain a space -- and it does: `~/Documents/ChatGPT/RLWRLD workspace`. Every
+# day of every backfill died at once with exit 127 trying to execute
+# `/home/hk/Documents/ChatGPT/RLWRLD`, the same defect that once put an
+# unquoted path in a systemd `ExecStart`. An override is still a string and is
+# still split, because a caller writing one is choosing the words; the path
+# this script computes for itself is not a caller's choice.
+if [ -n "${WORKLOG_BACKFILL_COMMAND:-}" ]; then
+  read -r -a command_parts <<< "$WORKLOG_BACKFILL_COMMAND"
+else
+  command_parts=("$root/.venv/bin/worklog" daily-collect)
+fi
 RUNNER=${WORKLOG_BACKFILL_RUNNER:-$root/scripts/run-logged.sh}
 
 # Google Calendar is deliberately absent. Every run here carries `--until`, and
@@ -236,7 +248,6 @@ already_collected() {
   [ "$verdict" = "ok" ]
 }
 
-read -r -a command_parts <<< "$COMMAND"
 source_flags=()
 for source in "${sources[@]}"; do
   source_flags+=(--source "$source")

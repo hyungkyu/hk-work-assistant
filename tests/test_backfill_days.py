@@ -280,3 +280,76 @@ def test_a_day_is_a_kst_day_whatever_the_hosts_timezone_is(tmp_path: Path) -> No
         "--since 2026-08-31T00:00:00+09:00 --until 2026-09-01T00:00:00+09:00"
         in calls(tmp_path)[0]
     )
+
+
+# ------------------------------------------------- the command it builds itself
+
+
+def repository_copy_at(tmp_path: Path, name: str) -> Path:
+    """A working copy of the scripts under a directory named `name`.
+
+    The point of the name is that the caller chooses it, and one caller chooses
+    a name with a space in it -- because the real repository lives at
+    `~/Documents/ChatGPT/RLWRLD workspace` and the script has to survive that.
+    """
+    root = tmp_path / name
+    (root / "scripts").mkdir(parents=True)
+    (root / ".venv" / "bin").mkdir(parents=True)
+    for script in ("backfill-days.sh", "run-logged.sh"):
+        target = root / "scripts" / script
+        target.write_text((SCRIPT.parent / script).read_text(encoding="utf-8"), encoding="utf-8")
+        target.chmod(0o755)
+    worklog = root / ".venv" / "bin" / "worklog"
+    worklog.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf "%s\\n" "$*" >> "{tmp_path}/calls.log"\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    worklog.chmod(0o755)
+    return root
+
+
+def test_the_default_command_survives_a_space_in_the_repository_path(tmp_path: Path) -> None:
+    """No override: the script builds its own command and must not split it.
+
+    Every test above hands the script a `WORKLOG_BACKFILL_COMMAND`, so none of
+    them ever ran the command the script computes for itself. That command was
+    a string word-split into argv, and the repository this runs in is at
+    `~/Documents/ChatGPT/RLWRLD workspace`: every day of a backfill died at
+    once with exit 127 trying to execute `/home/hk/Documents/ChatGPT/RLWRLD`.
+    A tested script is not a run script until something runs it as installed.
+    """
+    root = repository_copy_at(tmp_path, "RLWRLD workspace")
+    result = subprocess.run(
+        ["bash", str(root / "scripts" / "backfill-days.sh"), FIRST, FIRST],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "WORKLOG_LOG_ROOT": str(tmp_path / "logs")},
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "No such file or directory" not in result.stdout + result.stderr
+    assert calls(tmp_path) == [
+        "daily-collect --source slack --source notion --source github --source slurm "
+        f"--since {FIRST}T00:00:00+09:00 --until 2026-09-02T00:00:00+09:00"
+    ]
+
+
+def test_an_explicit_override_is_still_split_into_words(tmp_path: Path) -> None:
+    """A caller writing the string chooses its words; the script's own path does not."""
+    root = repository_copy_at(tmp_path, "plain")
+    override = stub(tmp_path)
+    result = subprocess.run(
+        ["bash", str(root / "scripts" / "backfill-days.sh"), FIRST, FIRST, "--source", "notion"],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "WORKLOG_LOG_ROOT": str(tmp_path / "logs"),
+            "WORKLOG_BACKFILL_COMMAND": f"{override} daily-collect",
+        },
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert calls(tmp_path)[0].startswith("daily-collect --source notion --since")
