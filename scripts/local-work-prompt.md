@@ -25,6 +25,10 @@ worklog work update {{ITEM_ID}} --actor {{EXECUTOR}} --status in_progress
 두 번째 세션을 깨우는 것을 막는 유일한 장치다. 표시 없이 일하면 세션이 겹친다.
 항목이 이미 `in_progress` 면 다른 세션이 잡은 것이다 — 손대지 말고 끝낸다.
 
+끝낸 뒤 깨운 스크립트가 보드를 다시 읽는다. 항목이 그대로면 `outcome=unclaimed`
+로 남고 그 항목은 한동안 다시 뽑히지 않는다. 그러니 못 잡았으면 못 잡은 채로
+끝내라 — 잡은 척 일하는 것보다 낫다.
+
 **3. 일한다**
 
 항목의 `detail` 과 `next_action` 이 지시다. 거기 쓰인 것만 한다.

@@ -3,16 +3,17 @@
 The script itself is run, with `bash`, exactly as `hkwa-wake.service` runs it.
 What is replaced is the one thing that would start a real agent: a stub `claude`
 goes in front of `PATH`, records every argument it was handed, and edits the
-board only when the test asked it to. Everything else -- the picker, the tool
-allowlist, the state file -- is the real thing, and the prompt handed to the
-stub is the real `scripts/local-work-prompt.md`.
+board only when the test asked it to. Everything else -- the picker, the
+cooling-off ledger, the board read after the session, the state file -- is the
+real thing, and the prompt is the real `scripts/local-work-prompt.md`.
 
 It follows `tests/test_backfill_days.py`: a few helpers and no framework.
 
-The incident these pin: the allowlist granted a command that exists on no
-machine, while the prompt told the session to run `worklog`. Every board write
-was refused for some three hundred ticks, and the only symptom was an item that
-never moved.
+The incident these pin: the allowlist granted `Bash(work:*)`, a command that
+exists on no machine, while the prompt told the session to run `worklog`. Every
+board write was refused, the item never moved, `outcome` said `woke` anyway, and
+the picker handed the same unclaimable item to the next tick three hundred times
+while newer work sat behind it.
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "wake-local.sh"
 
@@ -33,6 +36,22 @@ NEWER = "item-newer"
 # A stub session that does nothing at all -- the shape of every tick in the
 # incident: the CLI ran, exited zero, and the board was exactly as it was.
 DOES_NOTHING = "exit 0\n"
+
+
+def claims(item_id: str, tmp_path: Path) -> str:
+    """A stub session that performs the one board write the prompt asks for."""
+    return (
+        f'python3 - "{item_id}" <<PY\n'
+        "import json, sys\n"
+        f'path = "{tmp_path}/config/work/items.json"\n'
+        'doc = json.load(open(path, encoding="utf-8"))\n'
+        'for item in doc["items"]:\n'
+        '    if item["id"] == sys.argv[1]:\n'
+        '        item["status"] = "in_progress"\n'
+        '        item["revision"] += 1\n'
+        'json.dump(doc, open(path, "w", encoding="utf-8"))\n'
+        "PY\n"
+    )
 
 
 def board(tmp_path: Path, *items: dict, executor: str = "local") -> Path:
@@ -112,6 +131,11 @@ def last_wake(tmp_path: Path) -> dict:
     return json.loads((tmp_path / "state" / "last-wake.json").read_text(encoding="utf-8"))
 
 
+def ledger(tmp_path: Path) -> dict:
+    path = tmp_path / "state" / "wake-skips.json"
+    return json.loads(path.read_text(encoding="utf-8"))["skips"] if path.exists() else {}
+
+
 def session_argv(tmp_path: Path) -> dict[str, str]:
     """What the script actually handed `claude`, by flag."""
     arguments = []
@@ -123,6 +147,164 @@ def session_argv(tmp_path: Path) -> dict[str, str]:
         "prompt": arguments[arguments.index("-p") + 1],
         "allowed": arguments[arguments.index("--allowedTools") + 1],
     }
+
+
+# ------------------------------------------------ did the board actually move?
+
+
+def test_a_session_that_leaves_the_item_where_it_was_is_not_a_wake(tmp_path: Path) -> None:
+    """`claude` exiting zero says the CLI ended, not that anything happened."""
+    board(tmp_path)
+    wake(tmp_path)
+    state = last_wake(tmp_path)
+    assert state["outcome"] == "unclaimed"
+    assert state["item_id"] == OLDEST
+    assert "still ready 3" in state["detail"]
+
+
+def test_a_session_that_claims_the_item_is_a_wake(tmp_path: Path) -> None:
+    board(tmp_path)
+    wake(tmp_path, session=claims(OLDEST, tmp_path))
+    state = last_wake(tmp_path)
+    assert state["outcome"] == "woke"
+    assert state["item_id"] == OLDEST
+
+
+def test_a_claimed_item_is_not_cooled_off(tmp_path: Path) -> None:
+    """It moved, so the next tick has no reason to pass it over."""
+    board(tmp_path)
+    wake(tmp_path, session=claims(OLDEST, tmp_path))
+    assert ledger(tmp_path) == {}
+    assert last_wake(tmp_path)["skipped"] == []
+
+
+def test_an_item_that_leaves_the_board_counts_as_moved(tmp_path: Path) -> None:
+    """Archived or deleted is movement; only standing still is not."""
+    board(tmp_path, {"id": OLDEST, "created_at": "2026-09-01T00:00:00Z"})
+    wake(
+        tmp_path,
+        session=(
+            f'python3 -c \'import json; path="{tmp_path}/config/work/items.json"; '
+            'doc=json.load(open(path)); doc["items"]=[]; json.dump(doc, open(path,"w"))\'\n'
+        ),
+    )
+    assert last_wake(tmp_path)["outcome"] == "woke"
+
+
+def test_a_board_that_cannot_be_re_read_is_still_not_a_wake(tmp_path: Path) -> None:
+    """Not knowing whether the item moved is not the same as knowing it did."""
+    board(tmp_path)
+    wake(tmp_path, session=f'printf "{{" > "{tmp_path}/config/work/items.json"\n')
+    state = last_wake(tmp_path)
+    assert state["outcome"] == "unclaimed"
+    assert "could not be re-read" in state["detail"]
+    assert ledger(tmp_path) == {}, "nothing was learned, so nothing is held against it"
+
+
+def test_a_failed_session_keeps_its_own_outcome_and_still_cools_the_item(
+    tmp_path: Path,
+) -> None:
+    """`session-failed` says more than `unclaimed`; the starvation is the same."""
+    board(tmp_path)
+    wake(tmp_path, session="exit 3\n")
+    assert last_wake(tmp_path)["outcome"] == "session-failed"
+    assert OLDEST in ledger(tmp_path)
+
+
+# ------------------------------------------------------------ the queue moves
+
+
+def test_the_next_tick_picks_a_different_item(tmp_path: Path) -> None:
+    """The whole point: one unclaimable item must not freeze the queue."""
+    board(tmp_path)
+    wake(tmp_path)
+    assert last_wake(tmp_path)["item_id"] == OLDEST
+
+    wake(tmp_path)
+    assert last_wake(tmp_path)["item_id"] == NEWER
+
+
+def test_a_skipped_item_is_named_in_the_state_file(tmp_path: Path) -> None:
+    """Passed over is not the same as gone, so the tick says which and why."""
+    board(tmp_path)
+    wake(tmp_path)
+    first = last_wake(tmp_path)["skipped"]
+    assert [entry["item_id"] for entry in first] == [OLDEST]
+    assert first[0]["attempts"] == 1
+    assert "left the item at ready" in first[0]["reason"]
+
+    # The second tick passes the first item over and then fails on the second,
+    # so both are named: one still cooling, one newly cooled.
+    wake(tmp_path)
+    state = last_wake(tmp_path)
+    assert [entry["item_id"] for entry in state["skipped"]] == [OLDEST, NEWER]
+    assert state["item_id"] == NEWER
+
+
+def test_the_cooling_off_holds_for_the_whole_period(tmp_path: Path) -> None:
+    board(tmp_path, {"id": OLDEST, "created_at": "2026-09-01T00:00:00Z"})
+    wake(tmp_path)
+    assert last_wake(tmp_path)["outcome"] == "unclaimed"
+
+    wake(tmp_path)
+    assert last_wake(tmp_path)["outcome"] == "idle", "it is still cooling off"
+
+
+def test_the_cooling_off_expires_and_the_item_comes_back(tmp_path: Path) -> None:
+    """A transient failure must recover without anybody clearing a counter."""
+    board(tmp_path, {"id": OLDEST, "created_at": "2026-09-01T00:00:00Z"})
+    wake(tmp_path, WAKE_SKIP_HOURS=0)
+
+    wake(tmp_path, session=claims(OLDEST, tmp_path))
+    state = last_wake(tmp_path)
+    assert state["item_id"] == OLDEST and state["outcome"] == "woke"
+
+
+def test_repeated_failures_are_counted_not_forgotten(tmp_path: Path) -> None:
+    board(tmp_path, {"id": OLDEST, "created_at": "2026-09-01T00:00:00Z"})
+    wake(tmp_path, WAKE_SKIP_HOURS=0)
+    wake(tmp_path, WAKE_SKIP_HOURS=0)
+    assert ledger(tmp_path)[OLDEST]["attempts"] == 2
+
+
+def test_a_queue_where_everything_is_cooling_off_says_so(tmp_path: Path) -> None:
+    """Bare `idle` would read as "there is no work"."""
+    board(tmp_path, {"id": OLDEST, "created_at": "2026-09-01T00:00:00Z"})
+    wake(tmp_path)
+    wake(tmp_path)
+    state = last_wake(tmp_path)
+    assert state["outcome"] == "idle"
+    assert [entry["item_id"] for entry in state["skipped"]] == [OLDEST]
+    assert "cooling off" in state["detail"]
+
+
+def test_an_empty_queue_is_idle_with_nothing_skipped(tmp_path: Path) -> None:
+    board(tmp_path, {"id": OLDEST, "created_at": "2026-09-01T00:00:00Z", "status": "done"})
+    wake(tmp_path)
+    state = last_wake(tmp_path)
+    assert state["outcome"] == "idle" and state["skipped"] == []
+
+
+def test_a_cooled_item_that_leaves_the_board_leaves_the_ledger(tmp_path: Path) -> None:
+    """Otherwise the ledger grows one dead entry per closed item, forever."""
+    board(tmp_path)
+    wake(tmp_path)
+    assert OLDEST in ledger(tmp_path)
+
+    board(tmp_path, {"id": NEWER, "created_at": "2026-09-02T00:00:00Z"})
+    wake(tmp_path, session=claims(NEWER, tmp_path))
+    assert ledger(tmp_path) == {}
+
+
+def test_the_script_never_writes_to_the_board(tmp_path: Path) -> None:
+    """The launcher is not the executor. Marking the item blocked is the
+    session's job, and a launcher filing reports on its behalf is the exact
+    confusion the outbox rules exist to prevent."""
+    path = board(tmp_path)
+    before = path.read_bytes()
+    wake(tmp_path)
+    wake(tmp_path)
+    assert path.read_bytes() == before
 
 
 # ------------------------------------------ the prompt and the allowlist agree
@@ -228,3 +410,24 @@ def test_a_wake_with_no_worklog_anywhere_is_refused_by_name(tmp_path: Path) -> N
     state = last_wake(tmp_path)
     assert state["outcome"] == "no-worklog"
     assert not (tmp_path / "argv-1").exists(), "no session was started"
+
+
+# ------------------------------------------------------ the state file itself
+
+
+@pytest.mark.parametrize(
+    "field", ["started_at", "finished_at", "outcome", "item_id", "skipped", "detail"]
+)
+def test_the_state_carries_the_keys_a_reader_of_any_tick_file_expects(
+    tmp_path: Path, field: str
+) -> None:
+    board(tmp_path)
+    wake(tmp_path)
+    assert field in last_wake(tmp_path)
+
+
+def test_a_tick_that_does_nothing_still_writes_the_state_file(tmp_path: Path) -> None:
+    """A missing file means the unit never reached its own bookkeeping."""
+    board(tmp_path, {"id": OLDEST, "created_at": "2026-09-01T00:00:00Z", "status": "done"})
+    wake(tmp_path)
+    assert (tmp_path / "state" / "last-wake.json").is_file()
