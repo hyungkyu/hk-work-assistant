@@ -11,6 +11,21 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./sql/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    # Reachable from the host, and only from the host. The nightly collection
+    # runs as a systemd user service on this machine, not in this network, so
+    # with no published port its load stage could never have succeeded: the
+    # `.env` URL names `postgres`, which resolves inside the compose network
+    # and nowhere else. On 2026-09-06 the host resolved it to
+    # `Temporary failure in name resolution` -- after a `DATABASE_URL` had
+    # already been found missing from the batch's environment. Two separate
+    # reasons the database was empty, stacked, neither of them visible in a
+    # run that reported `ok`.
+    #
+    # `127.0.0.1:` is not decoration. Written as `5432:5432` the port binds
+    # every interface, which on a tailnet host means the database answers the
+    # network.
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s

@@ -26,6 +26,21 @@
 실제로 그 상태였다. `scripts/install-incoming-timer.sh`가 이 파일을 확인해 알려주고,
 값 없이 적재를 요청받은 실행은 `degraded`로 떨어진다.
 
+**`collect.env`의 값은 `.env`의 값과 다르다.** `.env`의 `DATABASE_URL`은 호스트가
+`postgres`인데, 이건 compose 서비스 이름이라 compose 네트워크 안에서만 풀린다.
+호스트에서 도는 것 — 야간 수집의 load 단계, 손으로 치는 `worklog ledger-load` —
+은 같은 URL의 호스트를 `127.0.0.1:5432`로 바꾼 것이 필요하다. 2026-09-06에
+`.env` 줄을 그대로 복사했더니 `failed to resolve host 'postgres'`가 났다.
+그리고 그때까지 `postgres` 서비스에는 published port 자체가 없었으므로, 설령
+변수가 있었어도 호스트에서는 어차피 닿지 못했다 — 데이터베이스가 비어 있던
+이유는 하나가 아니라 둘이었고, 둘 다 `ok`로 끝나는 실행 안에 숨어 있었다.
+
+```bash
+grep '^DATABASE_URL=' .env | sed 's#@postgres:#@127.0.0.1:#' \
+  > ~/.config/hk-work-assistant/collect.env
+chmod 600 ~/.config/hk-work-assistant/collect.env
+```
+
 `.env`에 값을 적었다고 앱 컨테이너가 그것을 보는 것이 아니다. `compose.yaml`의 각
 서비스 `environment:` 블록에 나열된 이름만 컨테이너 안으로 들어간다. 예를 들어
 `LEDGER_ROOT`는 `.env.example`에 있지만 어떤 서비스의 `environment:`에도 없으므로
