@@ -52,6 +52,19 @@ else
        "wake nothing until it is."
 fi
 
+# The collection's own environment file, read by hkwa-collect.service. Say
+# whether it exists, because its absence is the quietest failure this system
+# has: the run captures everything, skips the load, and finishes -- and the
+# manifests and the coverage grid read clean either way.
+collect_env="$HOME/.config/hk-work-assistant/collect.env"
+if [ -f "$collect_env" ] && grep -q '^DATABASE_URL=' "$collect_env"; then
+  echo "collect.env carries DATABASE_URL; the nightly run will load into the database."
+else
+  echo "NO DATABASE_URL in $collect_env -- the nightly collection will capture" \
+       "and then skip the database load. Write it there (one line," \
+       "DATABASE_URL=postgresql://...) and re-run this installer." >&2
+fi
+
 systemctl --user daemon-reload
 for t in hkwa-incoming.timer hkwa-deploy.timer hkwa-board-audit.timer \
          hkwa-collect.timer hkwa-collection-audit.timer hkwa-wake.timer; do

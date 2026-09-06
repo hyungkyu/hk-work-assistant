@@ -9,6 +9,18 @@ StartLimitIntervalSec=0
 [Service]
 Type=oneshot
 WorkingDirectory=%h/Documents/ChatGPT/RLWRLD workspace
+# `DATABASE_URL` and nothing else lives here. A systemd user service inherits
+# nothing from a login shell, so without this the load stage finds no database,
+# skips, and the run still finishes -- captured everything, stored none of it,
+# with the manifests and the coverage grid reading clean either way. That is
+# how it stood on 2026-09-06.
+#
+# A file rather than `systemctl --user import-environment`, which is held in
+# the running manager and is gone after a reboot; and a leading `-` so the unit
+# still starts when the file is absent, because a collection that captures
+# without loading is worth more than one that does not run. The file is not in
+# this repository and must not be: it holds a password.
+EnvironmentFile=-%h/.config/hk-work-assistant/collect.env
 # No --source flags: the default is all five. Naming them here is what let the
 # installed batch fall three sources behind the code without anyone noticing.
 ExecStart=/bin/bash "%h/Documents/ChatGPT/RLWRLD workspace/scripts/run-logged.sh" daily-collect -- "%h/Documents/ChatGPT/RLWRLD workspace/.venv/bin/worklog" daily-collect

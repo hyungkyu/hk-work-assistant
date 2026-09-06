@@ -8,14 +8,23 @@
 
 ## 값이 전달되는 경로
 
-변수가 프로세스까지 도달하는 경로는 네 가지이고, 서로 겹치지 않는다.
+변수가 프로세스까지 도달하는 경로는 다섯 가지이고, 서로 겹치지 않는다.
 
 | 경로 | 무엇이 읽나 | 무엇에 닿나 |
 |---|---|---|
 | `.env` (저장소 루트) | `docker compose`가 자동으로 읽음 | compose 파일 안의 `${...}` 치환. 컨테이너 안으로는 `environment:` 에 적힌 것만 들어간다 |
 | `secrets/slack.env` | `compose.slack.yaml:6`의 `env_file` | `collector-slack` 컨테이너 **한 개**뿐 |
 | 셸 환경 | `.venv/bin/worklog`를 직접 실행할 때 | 그 프로세스 |
-| `systemctl --user import-environment` | `scripts/install-incoming-timer.sh:28-30` | `hkwa-incoming` / `hkwa-wake` 유닛 |
+| `systemctl --user import-environment` | `scripts/install-incoming-timer.sh:39-41` | `hkwa-incoming` / `hkwa-wake` 유닛. 실행 중인 매니저가 들고 있으므로 **재부팅하면 사라진다** |
+| `~/.config/hk-work-assistant/collect.env` | `hkwa-collect.service`의 `EnvironmentFile=-` | `hkwa-collect` 유닛 하나. `DATABASE_URL` 전용이고 저장소에 두지 않는다 |
+
+야간 수집이 DB에 적재하려면 `DATABASE_URL`이 마지막 경로로 들어와야 한다. systemd
+유저 서비스는 로그인 셸 환경을 물려받지 않으므로 셸에 export 해둔 값은 타이머가
+깨운 실행에 닿지 않는다. 값이 없으면 capture와 ledger는 정상으로 돌고 load 단계만
+건너뛴다 — 매니페스트는 수집됐다고 기록하고 커버리지 그리드도 매니페스트로
+만들어지므로 **화면은 깨끗한데 DB만 비어 있는** 상태가 유지된다. 2026-09-06에
+실제로 그 상태였다. `scripts/install-incoming-timer.sh`가 이 파일을 확인해 알려주고,
+값 없이 적재를 요청받은 실행은 `degraded`로 떨어진다.
 
 `.env`에 값을 적었다고 앱 컨테이너가 그것을 보는 것이 아니다. `compose.yaml`의 각
 서비스 `environment:` 블록에 나열된 이름만 컨테이너 안으로 들어간다. 예를 들어
