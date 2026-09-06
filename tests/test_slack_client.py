@@ -5,15 +5,21 @@ import http.client
 import json
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from rlwrld_worklog.archive import RawArchive
+from rlwrld_worklog.github_collector import KST
 from rlwrld_worklog.slack_client import HttpResponse, SlackApiError, SlackClient
-from rlwrld_worklog.slack_collector import SlackCollector, _is_expected_search_match, parse_since
+from rlwrld_worklog.slack_collector import (
+    SlackCollector,
+    _is_expected_search_match,
+    parse_since,
+    parse_until,
+)
 
 
 class QueueTransport:
@@ -148,6 +154,35 @@ class SlackClientTests(unittest.TestCase):
         now = datetime(2026, 8, 25, 0, 0, tzinfo=timezone.utc)
         self.assertEqual(parse_since("24h", now=now), datetime(2026, 8, 24, 0, 0, tzinfo=timezone.utc))
         self.assertEqual(parse_since("2d", now=now), datetime(2026, 8, 23, 0, 0, tzinfo=timezone.utc))
+
+    def test_parse_since_reads_a_bare_date_as_midnight_kst(self) -> None:
+        self.assertEqual(parse_since("2026-08-25"), datetime(2026, 8, 25, 0, 0, tzinfo=KST))
+
+    def test_bare_date_bounds_span_exactly_one_kst_day(self) -> None:
+        # The regression this pins: `parse_since` read a bare date as UTC while
+        # `parse_until` read one as KST, so a window written with two bare dates
+        # ran fifteen hours and was filed as a whole day -- and across a
+        # run-per-day backfill the first nine hours of every day belonged to no
+        # slice at all. Compare the two bounds rather than either alone: a
+        # change that moves both together is a new convention, and one that
+        # moves only one is this defect returning.
+        since = parse_since("2026-08-25")
+        until = parse_until("2026-08-26")
+        self.assertEqual(until - since, timedelta(days=1))
+        self.assertEqual(since.astimezone(KST).time(), time.min)
+        self.assertEqual(until.astimezone(KST).time(), time.min)
+
+    def test_parse_since_keeps_instants_offset_and_all(self) -> None:
+        self.assertEqual(
+            parse_since("2026-08-25T00:00:00+09:00"), datetime(2026, 8, 25, 0, 0, tzinfo=KST)
+        )
+        # A time of day makes it an instant, not a date: no offset still means UTC.
+        self.assertEqual(
+            parse_since("2026-08-25T00:00:00"), datetime(2026, 8, 25, 0, 0, tzinfo=timezone.utc)
+        )
+        self.assertEqual(
+            parse_since("2026-08-25T00:00:00Z"), datetime(2026, 8, 25, 0, 0, tzinfo=timezone.utc)
+        )
 
     def test_search_context_results_are_filtered(self) -> None:
         self.assertTrue(

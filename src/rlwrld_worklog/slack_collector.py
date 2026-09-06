@@ -79,13 +79,37 @@ COVERAGE_NOTES = (
 
 
 def parse_since(value: str, *, now: datetime | None = None) -> datetime:
+    """An inclusive lower bound, from a duration, a KST date, or an instant.
+
+    A bare `YYYY-MM-DD` is midnight KST that day, the same reading `parse_until`
+    below gives it. The two bounds have to read a date the same way or a run
+    asked for with two bare dates is not the day it names: this function read
+    the lower bound as UTC while `parse_until` read the upper as KST, so
+    `--since 2026-08-25 --until 2026-08-26` covered 09:00 KST to midnight --
+    fifteen hours filed as a whole day, and across a run-per-day backfill the
+    first nine hours of every day would belong to no slice at all. That is the
+    nine-hour defect `parse_until` was written to avoid, committed by the
+    function beside it.
+
+    A duration (`26h`, `5d`) is an offset from now and carries no calendar. An
+    ISO 8601 datetime is read offset and all; written without one it is UTC,
+    because a value carrying a time of day is an instant rather than a date,
+    and giving it a second zone convention is one more thing to remember.
+    """
     current = now or datetime.now(timezone.utc)
-    lowered = value.strip().casefold()
+    text = value.strip()
+    lowered = text.casefold()
     if lowered.endswith(("h", "d")) and lowered[:-1].isdigit():
         amount = int(lowered[:-1])
         delta = timedelta(hours=amount) if lowered.endswith("h") else timedelta(days=amount)
         return current - delta
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    try:
+        day = date.fromisoformat(text)
+    except ValueError:
+        pass
+    else:
+        return datetime.combine(day, time.min, tzinfo=KST)
+    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)

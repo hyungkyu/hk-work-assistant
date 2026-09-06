@@ -462,6 +462,18 @@ nine hours out. An ISO 8601 instant is accepted too and keeps the offset it
 carries, as `--since` does. A duration is refused: "everything before 26 hours
 ago" is a window nobody means to ask for.
 
+`--since` reads a bare date the same way, and for the same reason
+(`slack_collector.py:81-113`). It has not always: it read one as UTC while
+`--until` read one as KST, so `--since 2026-08-25 --until 2026-08-26` ran from
+09:00 KST to midnight — fifteen hours captured, filed under the name of a whole
+day, and across a run-per-day backfill the first nine hours of *every* day
+belonging to no slice at all. `scripts/backfill-days.sh` was never exposed to
+it, because it writes both bounds with an explicit `+09:00`; a slice typed by
+hand was. `--since` still accepts a duration (`26h`, `5d`), which is an offset
+from now and carries no calendar, and an ISO 8601 instant, which keeps the
+offset it carries and means UTC without one — a value with a time of day on it
+is an instant, not a date.
+
 Note the collision of names. `github-collect --until` and `slurm-collect
 --until` predate this flag and name the **last day, inclusive**; the flag on
 `collect` and `daily-collect` is an exclusive bound. Both help strings say so.

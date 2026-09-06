@@ -33,6 +33,15 @@ UNTIL_HELP = (
     "unlike github-collect/slurm-collect --until, which name the last day inclusive"
 )
 
+# Both bounds read a bare date the same way. They did not always: `--since`
+# read one as UTC and `--until` as KST, so a window written with two bare dates
+# was fifteen hours long and filed as a whole day. Saying so in both help
+# strings is what makes the shared convention checkable from the command line.
+SINCE_HELP = (
+    "Inclusive lower bound: a KST date (YYYY-MM-DD, meaning midnight KST that day), an "
+    "ISO 8601 instant (no offset means UTC), or a duration such as 24h or 730d"
+)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="worklog")
@@ -49,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--expected-team-id", default=None)
     collect = subparsers.add_parser("collect", help="Collect source data into the local archive")
     collect.add_argument("source", choices=["slack", "google-calendar", "notion"])
-    collect.add_argument("--since", required=True, help="UTC/offset ISO time, or duration such as 24h or 730d")
+    collect.add_argument("--since", required=True, help=SINCE_HELP)
     collect.add_argument("--until", default=None, help=UNTIL_HELP)
     collect.add_argument("--environment", choices=["test", "production"], default="test")
     collect.add_argument("--archive-root", type=Path, default=None)
@@ -232,7 +241,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Repeatable. Default: all five, always run in link-queue order.",
     )
     daily.add_argument("--environment", choices=["test", "production"], default="production")
-    daily.add_argument("--since", default=DEFAULT_SINCE, help="Floor for sources with no checkpoint")
+    daily.add_argument(
+        "--since", default=DEFAULT_SINCE, help=f"Floor for sources with no checkpoint. {SINCE_HELP}"
+    )
     daily.add_argument("--until", default=None, help=UNTIL_HELP)
     daily.add_argument("--archive-root", type=Path, default=None)
     daily.add_argument("--ledger-root", type=Path, default=None)
