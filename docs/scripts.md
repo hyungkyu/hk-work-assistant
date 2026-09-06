@@ -78,11 +78,17 @@ two gaps worth knowing before you trust the file.
 
 **What it does.** Wakes one headless Claude Code session for one board item that
 only the production machine can do. Picks the oldest non-archived item whose
-`status` is `ready` and whose `assigned_to` equals `$WAKE_EXECUTOR` (default
-`local`), renders `local-work-prompt.md` with that item's id, and runs
-`claude -p` under `timeout(1)` with a bounded tool allowlist. Writes
-`incoming/last-wake.json` on every path and a full transcript to
+`status` is `ready`, whose `assigned_to` equals `$WAKE_EXECUTOR` (default
+`local`), and which is not cooling off; renders `local-work-prompt.md` with that
+item's id; runs `claude -p` under `timeout(1)` with a bounded tool allowlist;
+and then **reads the board again** to see whether the item actually moved.
+Writes `incoming/last-wake.json` on every path and a full transcript to
 `$APP_CONFIG_ROOT/cowork/logs/wake-<UTC stamp>-<item_id>.log`.
+
+It never writes to the board. Claiming an item, and saying an item is blocked,
+are the executor's job; a launcher filing reports on the executor's behalf is
+the confusion `docs/cowork-mailbox.md` exists to prevent. This script reads,
+compares, and records in its own files.
 
 **Who invokes it.** `hkwa-wake.service`, driven by `hkwa-wake.timer` roughly
 every three minutes (`deploy/systemd/hkwa-wake.service:8`).
@@ -90,39 +96,51 @@ every three minutes (`deploy/systemd/hkwa-wake.service:8`).
 **What it refuses, and why.**
 
 - **A second concurrent session.** `flock -n 8` on `incoming/.wake.lock`, else
-  `outcome=busy` (`:49-54`). "A second session started while the first is
-  mid-edit would fight it over the same working tree" (`:47-48`).
+  `outcome=busy` (`:71-76`). "A second session started while the first is
+  mid-edit would fight it over the same working tree" (`:69-70`).
 - **More than one item per wake.** The picker returns exactly one id
-  (`:81-91`) — "one item per wake, the oldest ready one" (`:14`).
-- **Running with no `claude` on `PATH`** → `outcome=no-claude` (`:56-60`), rather
-  than failing silently inside the unit.
-- **Running with no board** → `outcome=no-board` (`:62-66`), and with no prompt
-  file → `outcome=no-prompt` (`:109-113`).
+  (`:129-209`) — "one item per wake, the oldest ready one that is not cooling
+  off" (`:12`).
+- **Running with no `claude` on `PATH`** → `outcome=no-claude` (`:78-82`).
+- **Running with no `worklog` reachable** → `outcome=no-worklog` (`:87-91`).
+  A session that cannot reach the board can only burn a tick; this refusal is
+  what the 2026-09-06 incident cost three hundred ticks to learn.
+- **Running with no board** → `outcome=no-board` (`:93-97`), and with no prompt
+  file → `outcome=no-prompt` (`:223-226`).
 - **Blanket permission.** It passes an explicit `--allowedTools` list rather
   than skipping permission checks — "A bounded allowlist rather than skipping
-  permission checks outright" (`:100`).
+  permission checks outright" (`:99`). Every command the prompt prints must
+  appear in that list, which `tests/test_wake_local.py` checks by rendering the
+  real prompt through the real script.
+- **Calling a session that changed nothing a wake.** The item's `status` and
+  `revision` are compared before and after; unchanged is `outcome=unclaimed`
+  (`:340-345`), and the item is passed over for `$WAKE_SKIP_HOURS` (default 6)
+  so the next tick reaches the item behind it.
 - **An unbounded session.** `timeout "$wake_timeout"` (default 3600s) caps it,
-  and 124 is reported as `outcome=timeout` (`:118-126`).
+  and 124 is reported as `outcome=timeout` (`:232-333`).
 
 It notably does **not** refuse a malformed board: the picker swallows every
-exception and exits silently (`:74-76`), so a corrupt `items.json` is reported as
-`outcome=idle`, indistinguishable from an empty queue. That is deliberate — "the
-next tick is three minutes away" (`:68-69`).
+exception and exits silently (`:134-137`), so a corrupt `items.json` is reported
+as `outcome=idle`, indistinguishable from an empty queue. That is deliberate —
+"the next tick is three minutes away" (`:127-128`).
 
 **Safe to re-run?** Yes, with two caveats a reader must know:
 
-1. The allowlist and timeout are set at `:102-103` and `$APP_CONFIG_ROOT/wake-local.env`
-   is sourced at `:105`, i.e. **after** them. That file lives outside this
-   repository and can widen the allowlist arbitrarily.
+1. The allowlist, timeout and cooling-off period are set at `:103-107` and
+   `$APP_CONFIG_ROOT/wake-local.env` is sourced at `:109`, i.e. **after** them.
+   That file lives outside this repository and can widen the allowlist
+   arbitrarily — or narrow it below what the prompt needs, which no test here
+   can see.
 2. Re-running does not by itself avoid waking a second session for the same
    item. The lock only covers the time a session is running. What prevents a
    duplicate is the session's own first action — `worklog work update … --status
-   in_progress` (`local-work-prompt.md:15-23`) — so the guarantee lives in the
-   prompt, not in the script.
+   in_progress` (`local-work-prompt.md:18-26`) — so the guarantee lives in the
+   prompt, not in the script. What the script now does is *notice* when that
+   action did not happen.
 
-Both points, and every `outcome` value, are in `docs/dev-prod-split.md`. The
-authority question this script raises is recorded in `docs/cowork-mailbox.md`,
-Part 3.
+Both points, every `outcome` value, and the cooling-off ledger are in
+`docs/dev-prod-split.md`. The authority question this script raises is recorded
+in `docs/cowork-mailbox.md`, Part 3.
 
 ---
 
@@ -308,29 +326,38 @@ invocation is safe depends entirely on the subcommand you pass it.
 ## `local-work-prompt.md` (not a script)
 
 **What it is.** The prompt text `wake-local.sh` hands to the session it starts.
-It is read and templated at `wake-local.sh:107-108`, with `{{ITEM_ID}}` and
+It is read and templated at `wake-local.sh:221-222`, with `{{ITEM_ID}}` and
 `{{EXECUTOR}}` substituted. If it is missing or unreadable the wake records
-`outcome=no-prompt` and starts nothing (`:109-113`).
+`outcome=no-prompt` and starts nothing (`:223-226`).
+
+Every command it prints must appear in the allowlist `wake-local.sh` passes.
+Those two strings are in two files and were kept in step by hand until
+2026-09-06, when it turned out they had not been: the allowlist granted
+`Bash(work:*)` and the prompt said `worklog`. `tests/test_wake_local.py` now
+extracts the first word of every fenced command in the rendered prompt and
+fails if the allowlist does not permit it.
 
 **Why it matters here.** Several properties people assume the script enforces
 are actually stated only in this file, and hold only insofar as the session
 follows them:
 
-- **Claim the item before working** (`:15-23`), which is what stops the next
+- **Claim the item before working** (`:18-26`), which is what stops the next
   timer tick from waking a second session for the same item. The file says so
   itself: "착수 표시가 다음 타이머 틱이 같은 일로 두 번째 세션을 깨우는 것을 막는
-  유일한 장치다."
+  유일한 장치다." The script cannot enforce this, but since 2026-09-06 it can
+  tell afterwards whether it happened (`:28-30`).
 - **An item with empty `detail` and `next_action` is `blocked`, not `done`**
-  (`:27-31`) — "지시 없는 항목을 완료로 닫으면 보드는 조용해지지만 일은
+  (`:36-38`) — "지시 없는 항목을 완료로 닫으면 보드는 조용해지지만 일은
   사라진다."
 - **Touch no other item, reassign nobody, delete no data, restart no container
-  unless the item says to** (`:66-72`).
-- **Commit and push after a green suite** (`:57-64`). This is the instruction
+  unless the item says to** (`:73-79`).
+- **Commit and push after a green suite** (`:64-71`). This is the instruction
   that collides with `cowork.py:269`, where `push` is listed as never
   autonomous. See `docs/cowork-mailbox.md`, Part 3.
 
 Editing this file changes what an unattended session on the production machine
-will do, with no code change and no test covering it.
+will do. One test covers it — the allowlist agreement above — and nothing else
+does.
 
 ## `deploy-tick.sh`
 

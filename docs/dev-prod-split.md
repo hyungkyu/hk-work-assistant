@@ -100,7 +100,7 @@ never kills it between the session ending and the state being recorded"
 ## 상태는 종료 코드가 아니라 파일에 있다
 
 **두 스크립트 다 모든 경로에서 `exit 0` 이다**
-(`incoming-tick.sh:34`, `wake-local.sh:44`). `systemctl --user status` 가
+(`incoming-tick.sh:34`, `wake-local.sh:66`). `systemctl --user status` 가
 초록인 것은 아무 의미가 없다. 봐야 할 것은 두 파일이다:
 
 ```bash
@@ -109,7 +109,7 @@ cat incoming/last-wake.json   # 깨우기
 ```
 
 둘 다 **아무것도 하지 않은 경로를 포함해 매 틱마다** 쓰인다
-(`incoming-tick.sh:9-11`, `wake-local.sh:17-18`). 파일이 아예 없다면 그것은
+(`incoming-tick.sh:9-11`, `wake-local.sh:21-22`). 파일이 아예 없다면 그것은
 "할 일이 없었다"가 아니라 "서비스가 자기 상태 기록에 도달하지 못했다"이고,
 설치 스크립트가 마지막에 확인하는 것도 정확히 그것이다
 (`install-incoming-timer.sh:59-66`).
@@ -177,73 +177,142 @@ systemd 유닛에는 손댈 수 없다. 그런 항목은 보드에 로컬 실행
 원래는 사람이 프롬프트를 붙여넣을 때까지 기다린다. 이 스크립트가 그 붙여넣기다
 (`scripts/wake-local.sh:5-8`).
 
-- 읽는 것: 보드 `$APP_CONFIG_ROOT/work/items.json` (`:26`)
+- 읽는 것: 보드 `$APP_CONFIG_ROOT/work/items.json` (`:30`), 그리고 자기
+  냉각 대장 `incoming/wake-skips.json` (`:35`)
 - 고르는 것: `status == "ready"` 이고 `assigned_to` 가 `$WAKE_EXECUTOR` (기본
-  `local`, `:30`) 이며 아카이브되지 않은 항목 중 `created_at` 이 가장 오래된
-  하나 (`:81-91`)
+  `local`, `:38`) 이며 아카이브되지 않았고 **냉각 중이 아닌** 항목 중
+  `created_at` 이 가장 오래된 하나 (`:129-209`)
 - 하는 것: `timeout "$wake_timeout" claude -p "$prompt" --permission-mode
-  acceptEdits --allowedTools "$allowed"` (`:118-121`)
+  acceptEdits --allowedTools "$allowed"` (`:232-235`)
+- **세션이 끝난 뒤 보드를 다시 읽는 것**: 그 항목의 `status` 와 `revision` 을
+  세션 전 값과 대조한다 (`:241-323`)
 - 남기는 것: 전사 `$APP_CONFIG_ROOT/cowork/logs/wake-<UTC>-<item_id>.log`
-  (`:116`) 와 `incoming/last-wake.json`
+  (`:230`) 와 `incoming/last-wake.json`
+
+보드에는 **쓰지 않는다.** 항목을 잡는 것도 막혔다고 표시하는 것도 실행자인
+세션의 일이다. 런처가 실행자를 대신해 보고서를 쓰기 시작하면 아웃박스 규칙이
+막으려는 바로 그 혼동이 된다. 이 스크립트가 하는 것은 읽고, 재고, 자기 파일에
+적는 것뿐이다.
+
+## 왜 `woke` 가 다시 정의됐나 — 2026-09-06
+
+`wake-local.sh` 는 설치된 뒤 3분마다 꼬박꼬박 돌았고, `incoming/last-wake.json`
+은 매번 `outcome: woke` 였고, **한 일은 아무것도 없었다.** 마지막 전사가 그
+이유를 적어 두었다:
+
+> `worklog work show` 가 거부됐다 (`This command requires approval`) — 앞선
+> 300 틱에 걸쳐 기록된 것과 같은 게이트다. 2단계 규칙대로 항목을 작업하지
+> 않았다. `items.json` 을 직접 읽었다: 보드 리비전 671, 그런데 이 항목은
+> 여전히 `status=ready`, 항목 리비전 3 … 주변은 움직이는데 이 항목만 얼어 있다.
+
+결함 둘이 겹쳐 있었다.
+
+1. **허용목록이 존재하지 않는 명령을 적고 있었다.** `Bash(work:*)` 였는데
+   프롬프트는 `worklog work …` 를 시킨다. 두 문자열은 서로 다른 파일에 있고
+   사람이 맞춰 두는 것 말고는 맞는지 확인할 방법이 없었다. 지금은
+   `$root/.venv/bin` 을 `PATH` 앞에 붙이고 (`:40-51`) 허용목록은 `Bash(worklog:*)`
+   와 `Bash(python:*)` 를 적으며, 프롬프트가 인쇄하는 모든 명령이 허용목록에
+   있는지를 `tests/test_wake_local.py` 가 확인한다. 절대경로를 프롬프트에
+   심는 방법은 택하지 않았다 — 운영계의 저장소 경로에는 공백이 있고, 따옴표 친
+   경로는 허용목록 접두사 매칭이 살아남지 못한다.
+2. **잡히지 않는 항목 하나가 큐 전체를 굶겼다.** 고르는 것은 가장 오래된
+   `ready` 항목이었고, 세션이 영영 잡지 못하므로 다음 틱이 같은 항목을 다시
+   골랐다. 더 새로운 `local` 일감은 그 뒤에서 손도 닿지 않은 채 앉아 있었다.
+
+`woke` 는 이제 "CLI 가 0 으로 끝났다"가 아니라 **"항목이 움직였다"** 는 뜻이다.
 
 ## `wake-local.sh` 의 outcome 전부
 
-`incoming/last-wake.json` 의 모양 (`wake-local.sh:40-43`):
+`incoming/last-wake.json` 의 모양 (`wake-local.sh:61-67`):
 
 ```json
-{"started_at":"…","finished_at":"…","outcome":"…","item_id":"…","detail":"…"}
+{"started_at":"…","finished_at":"…","outcome":"…","item_id":"…",
+ "skipped":[{"item_id":"…","attempts":2,"until":"…","reason":"…"}],"detail":"…"}
 ```
+
+`skipped` 는 **이 틱이 손대지 않기로 한 항목들**이다. 냉각 중이라 건너뛴 것과,
+방금 시도했는데 움직이지 않아 새로 냉각에 들어간 것이 함께 들어간다. 빈 배열이
+정상이다.
 
 | outcome | 줄 | 뜻 | 남는 상태 |
 |---|---|---|---|
-| `idle` | `:36` 기본값, `:95-97` 도달 | 나머지는 정상인데 `$executor` 앞으로 온 `ready` 항목이 없다 | 세션 안 뜸. `item_id` 는 빈 문자열 |
-| `busy` | `:51-53` | `flock -n` 실패 — 앞 틱이 깨운 세션이 아직 돌고 있다 | 세션 안 뜸. 한 워크트리를 두 세션이 다투는 것을 막는 장치 (`:47-48`) |
-| `no-claude` | `:57-59` | 사용자 매니저의 `PATH` 에 `claude` 가 없다 | 세션 안 뜸. 설치 스크립트가 설치 시점에 같은 것을 경고한다 (`install-incoming-timer.sh:37-42`) |
-| `no-board` | `:63-65` | `$APP_CONFIG_ROOT/work/items.json` 이 없다 | 세션 안 뜸 |
-| `no-prompt` | `:110-112` | `scripts/local-work-prompt.md` 가 없거나 못 읽는다 | 세션 안 뜸. 검사가 `-z` 라서 `python3` 실패도 여기로 온다 |
-| `timeout` | `:125-126` | `timeout(1)` 이 124 반환 — 세션이 `$WAKE_TIMEOUT` (기본 3600초, `:103`) 를 넘겼다 | **세션이 도중에 잘렸다.** 워크트리와 보드는 그 세션이 남긴 중간 상태 그대로. `detail` 에 전사 경로 |
-| `session-failed` | `:128-129` | `claude` 가 그 밖의 사유로 0 이 아닌 코드 반환 | 마찬가지로 중간 상태. `detail` 에 종료 코드와 전사 마지막 5줄 |
-| `woke` | `:131-132` | `claude` 가 0 으로 끝났다 | **CLI 가 깨끗하게 끝났다는 것만 말한다.** 항목을 잡았는지, 일을 했는지, 닫았는지는 말하지 않는다. 그것은 보드에만 있다 |
+| `idle` | `:56` 기본값, `:211-218` 도달 | 나머지는 정상인데 `$executor` 앞으로 온 뽑을 수 있는 `ready` 항목이 없다 | 세션 안 뜸. `item_id` 는 빈 문자열. `skipped` 가 비어 있지 않다면 큐가 빈 것이 아니라 **전부 냉각 중**이고 `detail` 이 그렇게 말한다 |
+| `busy` | `:72-75` | `flock -n` 실패 — 앞 틱이 깨운 세션이 아직 돌고 있다 | 세션 안 뜸. 한 워크트리를 두 세션이 다투는 것을 막는 장치 (`:69-70`) |
+| `no-claude` | `:78-81` | 사용자 매니저의 `PATH` 에 `claude` 가 없다 | 세션 안 뜸. 설치 스크립트가 설치 시점에 같은 것을 경고한다 (`install-incoming-timer.sh:37-42`) |
+| `no-worklog` | `:87-90` | `PATH` 에도 `$root/.venv/bin` 에도 `worklog` 가 없다 | 세션 안 뜸. 보드에 아무것도 못 쓰는 세션은 틱만 태운다 |
+| `no-board` | `:93-96` | `$APP_CONFIG_ROOT/work/items.json` 이 없다 | 세션 안 뜸 |
+| `no-prompt` | `:223-225` | `scripts/local-work-prompt.md` 가 없거나 못 읽는다 | 세션 안 뜸. 검사가 `-z` 라서 `python3` 실패도 여기로 온다 |
+| `timeout` | `:331-333` | `timeout(1)` 이 124 반환 — 세션이 `$WAKE_TIMEOUT` (기본 3600초, `:104`) 를 넘겼다 | **세션이 도중에 잘렸다.** 워크트리는 그 세션이 남긴 중간 상태 그대로. 항목이 안 움직였으면 냉각도 걸린다 |
+| `session-failed` | `:334-336` | `claude` 가 그 밖의 사유로 0 이 아닌 코드 반환 | 마찬가지. `detail` 에 종료 코드와 전사 마지막 5줄. 안 움직였으면 냉각 |
+| `woke` | `:337-339` | `claude` 가 0 으로 끝났고 **그 항목의 `status`/`revision` 이 세션 전과 다르다** — 보드에서 사라진 것(아카이브·삭제)도 움직인 것으로 센다 | 항목이 실제로 움직였다. 냉각 대장에서 빠진다. 무엇이 됐는지는 여전히 보드에만 있다 |
+| `unclaimed` | `:340-345` | `claude` 는 0 으로 끝났는데 항목이 **그대로다**. 또는 세션 뒤 보드를 다시 읽을 수 없어 움직였다고 말할 수 없다 | 세션은 돌았고 보드는 그대로. 앞의 경우는 냉각이 걸리고, 뒤의 경우는 아무것도 알아낸 것이 없으므로 걸리지 않는다 |
 
 `idle` 에는 하나가 더 섞여 있다. 보드를 고르는 인라인 파이썬은 어떤 예외에서든
-출력 없이 0 으로 끝난다 (`:74-76`). 그래서 **깨졌거나 반쯤 쓰인 `items.json` 은
+출력 없이 0 으로 끝난다 (`:134-137`). 그래서 **깨졌거나 반쯤 쓰인 `items.json` 은
 빈 큐와 구별되지 않는다.** 일부러 그렇게 뒀다: "A partially written board is not
-an error worth reporting: the next tick is three minutes away" (`:68-69`).
+an error worth reporting: the next tick is three minutes away" (`:127-128`).
 대신 `outcome=idle` 이 길게 이어질 때 큐가 빈 것인지 보드가 깨진 것인지는 이
 파일이 알려주지 못한다.
 
+## 냉각: 움직이지 않은 항목은 잠시 뒤로 간다
+
+항목이 움직이지 않은 채 세션이 끝나면 그 항목은 `$WAKE_SKIP_HOURS` (기본 6시간,
+`:107`) 동안 뽑히지 않는다. 대장은 `incoming/wake-skips.json` 이고 항목마다
+`attempts` · `first_at` · `last_at` · `until` · `reason` 을 담는다.
+
+**횟수 상한이 아니라 기간인 이유.** 항목이 안 움직이는 두 가지 방식이 서로 반대
+되는 것을 원한다. 영구적인 원인(세션이 실행할 수 없는 도구, 따를 수 없는 지시)은
+3분마다 틱을 태우는 것을 멈춰야 하고, 일시적인 원인(중간에 죽은 세션)은 저절로
+돌아와야 한다 — 이 기계에는 카운터를 지워 줄 사람이 앉아 있지 않다. 기간은 둘 다
+한다. 영구적으로 막힌 항목이 하루에 480번이 아니라 4번의 깨우기를 쓴다.
+
+**조용히 사라지지는 않는다.** 세 군데에 남는다.
+
+1. `incoming/last-wake.json` 의 `skipped` — 어느 항목을 왜, 몇 번째로,
+   언제까지 건너뛰는지.
+2. `incoming/wake-skips.json` — 대장 자체. 항목이 보드를 떠나면 그 줄도 지워진다.
+3. **보드**. 냉각된 항목은 `ready` 인 채로 아무도 손대지 않은 채 남는다.
+   그것이 정확히 `worklog work audit` 의 `ready_untouched` 가 하루 뒤에 보고하는
+   것이다 (`docs/board-audit.md`). 감사가 이미 보고 있는 것을 스크립트가 보드에
+   다시 적을 이유가 없다.
+
 ## 도구 허용목록은 저장소 밖에서 넓혀진다
 
-`:102` 에서 허용목록을, `:103` 에서 타임아웃을 정하고, **그다음** `:105` 에서
-설정 파일을 읽는다:
+`:103` 에서 허용목록을, `:104` 에서 타임아웃을, `:107` 에서 냉각 시간을 정하고,
+**그다음** `:109` 에서 설정 파일을 읽는다:
 
 ```bash
-allowed='Read,Glob,Grep,Edit,Write,Bash(git:*),…,Bash(systemctl:*),…'
+allowed='Read,Glob,Grep,Edit,Write,Bash(git:*),…,Bash(worklog:*),…'
 wake_timeout="${WAKE_TIMEOUT:-3600}"
+skip_hours="${WAKE_SKIP_HOURS:-6}"
 [ -f "$config_root/wake-local.env" ] && . "$config_root/wake-local.env"
 ```
 
-순서가 그러므로 `$APP_CONFIG_ROOT/wake-local.env` 는 두 값을 **덮어쓴다**.
+순서가 그러므로 `$APP_CONFIG_ROOT/wake-local.env` 는 세 값을 **덮어쓴다**.
 그 파일은 이 저장소에 없고, `~/.config` 아래 있으며, 리뷰도 diff 도 거치지
 않는다. 거기 한 줄이면 `allowed` 가 `Bash(sudo:*)` 를 포함하도록 넓어진다.
 스크립트 본문만 읽어서는 그 기계의 세션이 무엇을 할 수 있는지 알 수 없다.
 실제로 무엇이 실렸는지는 파일을 직접 봐야 한다:
 
 ```bash
-cat ~/.config/hk-work-assistant/wake-local.env   # 없으면 :102 값 그대로다
+cat ~/.config/hk-work-assistant/wake-local.env   # 없으면 :103 값 그대로다
 ```
 
-의도된 확장 지점이다 — `:101` 주석: "Override in $config_root/wake-local.env if
-a task genuinely needs more". 여기 적는 이유는 그 범위가 스크립트가 아니라 그
+의도된 확장 지점이다 — `:99-102` 주석: "Override in $config_root/wake-local.env
+if a task genuinely needs more". 여기 적는 이유는 그 범위가 스크립트가 아니라 그
 기계에 있다는 사실 자체다.
+
+**이 파일이 `allowed` 를 좁히면 프롬프트와의 합의도 같이 깨진다.** 테스트는
+저장소 안의 기본값을 검사하지 그 기계에 실린 값을 검사하지 못한다. 넓히는 데
+쓰고 좁히는 데 쓰지 마라.
 
 ## 이중 기동을 막는 것은 스크립트가 아니라 프롬프트다
 
-`flock` (`:49`) 은 **세션이 도는 동안만** 두 번째 기동을 막는다. 세션이 끝나면
+`flock` (`:71`) 은 **세션이 도는 동안만** 두 번째 기동을 막는다. 세션이 끝나면
 락은 풀리고, 3분 뒤 다음 틱이 같은 보드를 다시 읽는다.
 
 같은 항목으로 두 번 깨우지 않게 하는 것은 세션 자신의 첫 동작이다
-(`scripts/local-work-prompt.md:15-23`):
+(`scripts/local-work-prompt.md:18-26`):
 
 ```
 worklog work update {{ITEM_ID}} --actor {{EXECUTOR}} --status in_progress
@@ -254,13 +323,14 @@ worklog work update {{ITEM_ID}} --actor {{EXECUTOR}} --status in_progress
 
 **그래서 이 보장은 코드가 아니라 세션이 지시를 따르는지에 걸려 있다.** 세션이
 그 단계를 건너뛰거나, 그 명령이 실패하거나, 그 전에 죽으면 항목은 `ready` 로
-남고 다음 틱이 같은 항목으로 새 세션을 깨운다. `outcome=timeout` 과
-`outcome=session-failed` 가 정확히 그 경우다 — 둘 다 항목이 어떤 상태로
-남았는지 모른 채 끝난다.
-
-`worklog work update` 가 실패하면 아무것도 하지 말고 끝내라고 프롬프트가
-지시하지만 (`local-work-prompt.md:21`), 그 지시를 강제하는 것 역시 스크립트가
+남는다. `worklog work update` 가 실패하면 아무것도 하지 말고 끝내라고 프롬프트가
+지시하지만 (`local-work-prompt.md:24`), 그 지시를 강제하는 것 역시 스크립트가
 아니다.
+
+바뀐 것은 그 다음이다. 예전에는 다음 틱이 같은 항목으로 새 세션을 깨웠고 그것이
+영원히 반복됐다. 지금은 스크립트가 세션 뒤에 보드를 다시 읽으므로 **잡히지
+않았다는 사실 자체는 기계가 안다** — `outcome=unclaimed`, 그리고 냉각. 여전히
+모르는 것은 왜 안 잡혔는지이고, 그것은 전사에만 있다.
 
 ## 권한 충돌
 
