@@ -651,6 +651,11 @@ def capture_notion(config: DailyConfig, credentials: Credentials) -> CaptureOutc
             # comments that misses, at one request per block.
             comment_strategy=DEFAULT_COMMENT_STRATEGY,
             advance_checkpoint=_advance_checkpoint(config),
+            # The operator's list of pages that must never be missed, managed
+            # in the backoffice. A smoke run skips it: it is bounded by
+            # construction and a seed list would make its cost depend on how
+            # many pages someone happened to add.
+            seed_pages=() if config.smoke else _notion_seed_pages(config),
         )
     except Exception as error:
         raise CaptureFailed(archive, error) from error
@@ -680,6 +685,24 @@ def capture_notion(config: DailyConfig, credentials: Credentials) -> CaptureOutc
             "events": len(result.events),
         },
     )
+
+
+def _notion_seed_pages(config: DailyConfig) -> tuple[str, ...]:
+    """Seed page ids from the backoffice, or none if they cannot be read.
+
+    A seed list is insurance. Failing a collection because the insurance could
+    not be loaded would trade a whole day for a list that may well be empty, so
+    an unreadable list costs the run its seeds and nothing else.
+    """
+    from .admin_store import AdminStore
+
+    try:
+        root = config.config_root or Path(
+            os.environ.get("APP_CONFIG_ROOT") or Path.home() / ".config/hk-work-assistant"
+        )
+        return tuple(AdminStore(root).notion_seed_ids())
+    except Exception:
+        return ()
 
 
 def _notion_degraded_reason(result: Any) -> str | None:

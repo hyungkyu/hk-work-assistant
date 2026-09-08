@@ -103,6 +103,8 @@ class FakeNotionClient:
         transient_retries: int = 0,
         retry_counts: dict[str, int] | None = None,
         exhausted_requests: int = 0,
+        data_source_rows: dict[str, list[Any]] | None = None,
+        data_source_row_errors: dict[str, Any] | None = None,
     ) -> None:
         self.search_results = (
             search_results
@@ -152,6 +154,8 @@ class FakeNotionClient:
         self.transient_retries = transient_retries
         self.retry_counts = dict(retry_counts or {})
         self.exhausted_requests = exhausted_requests
+        self.data_source_rows = data_source_rows or {}
+        self.data_source_row_errors = data_source_row_errors or {}
         self.call_counts: dict[str, int] = {}
 
     def iter_search(self, *, object_filter: str | None = None):
@@ -195,6 +199,14 @@ class FakeNotionClient:
     def iter_property_items(self, page_id, property_id):
         self.calls.append(("properties", page_id))
         for page in self.property_pages.get(page_id, [[]]):
+            _maybe_raise(page)
+            yield {"results": page, "has_more": False}
+
+    def iter_data_source_rows(self, data_source_id, *, since, until=None):
+        self.calls.append(("data_source_rows", data_source_id))
+        if data_source_id in self.data_source_row_errors:
+            _maybe_raise(self.data_source_row_errors[data_source_id])
+        for page in self.data_source_rows.get(data_source_id, [[]]):
             _maybe_raise(page)
             yield {"results": page, "has_more": False}
 
@@ -1132,3 +1144,190 @@ def test_a_clean_run_still_reports_complete_coverage(tmp_path: Path) -> None:
     manifest = json.loads(result.manifest_path.read_text())
     assert manifest["counters"]["objects_failed_by_phase"] == {}
     assert UNRESOLVED_FAILURE_NOTE not in manifest["coverage_notes"]
+
+
+# ------------------------------------------- what a day's documents are made of
+
+
+CHILD_PAGE_ID = "11111111-1111-4111-8111-111111111111"
+DATA_SOURCE_ID = "22222222-2222-4222-8222-222222222222"
+ROW_ID = "33333333-3333-4333-8333-333333333333"
+SEED_ID = "44444444-4444-4444-8444-444444444444"
+
+
+def _client_with_child_page(**kwargs: Any) -> FakeNotionClient:
+    """A page holding one child page, which itself holds content."""
+    return FakeNotionClient(
+        blocks={
+            PAGE_ID: [
+                [
+                    {
+                        "id": CHILD_PAGE_ID,
+                        "type": "child_page",
+                        "has_children": True,
+                        "child_page": {"title": "nested"},
+                    }
+                ]
+            ],
+            CHILD_PAGE_ID: [
+                [
+                    {
+                        "id": "nested-block",
+                        "type": "paragraph",
+                        "has_children": False,
+                        "paragraph": {"rich_text": [{"plain_text": "not this day's work"}]},
+                    }
+                ]
+            ],
+        },
+        **kwargs,
+    )
+
+
+def test_the_walk_records_a_child_page_without_entering_it(tmp_path: Path) -> None:
+    """The defect this pins: `has_children` is true on a child_page block.
+
+    A walk that consults only that flag descends through every nested page and
+    files the result under the day the parent was edited. Measured on two
+    collected days, that descent was a third to two thirds of the block
+    requests and the blocks it reached under pages /search had not listed were
+    0% and 2.2% in-window.
+    """
+    archive, _, result = collect(tmp_path, _client_with_child_page())
+
+    assert result.blocks_collected == 1, "the child_page block itself is kept"
+    assert result.counters["child_object_refs"] == 1
+    # /search listed only the parent, so the child counts as unlisted.
+    assert result.counters["child_object_refs_unlisted"] == 1
+
+
+def test_the_child_pages_own_blocks_are_never_requested(tmp_path: Path) -> None:
+    client = _client_with_child_page()
+    collect(tmp_path, client)
+    walked = [target for kind, target in client.calls if kind == "blocks"]
+    assert PAGE_ID in walked
+    assert CHILD_PAGE_ID not in walked, (
+        "entering the child page is the request this change exists to stop making"
+    )
+
+
+def test_a_child_page_search_already_listed_is_not_counted_as_a_miss(tmp_path: Path) -> None:
+    """The counter measures what discovery missed, not what the walk saw."""
+    client = _client_with_child_page(
+        search_results=[
+            {"object": "page", "id": PAGE_ID, "last_edited_time": "2026-08-26T01:00:00Z"},
+            {"object": "page", "id": CHILD_PAGE_ID, "last_edited_time": "2026-08-26T02:00:00Z"},
+        ],
+        pages={PAGE_ID: page_body(PAGE_ID), CHILD_PAGE_ID: page_body(CHILD_PAGE_ID)},
+    )
+    _, _, result = collect(tmp_path, client)
+    assert result.counters["child_object_refs"] == 1
+    assert result.counters["child_object_refs_unlisted"] == 0
+    # And it is still collected -- as its own root, which is the point.
+    assert result.pages_collected == 2
+
+
+def test_data_source_rows_are_queried_rather_than_assumed(tmp_path: Path) -> None:
+    """A row /search did not list still arrives, from the data source itself."""
+    client = FakeNotionClient(
+        search_results=[
+            {
+                "object": "data_source",
+                "id": DATA_SOURCE_ID,
+                "last_edited_time": "2026-08-26T01:00:00Z",
+            }
+        ],
+        data_sources={DATA_SOURCE_ID: {"object": "data_source", "id": DATA_SOURCE_ID}},
+        pages={ROW_ID: page_body(ROW_ID)},
+        data_source_rows={
+            DATA_SOURCE_ID: [
+                [{"object": "page", "id": ROW_ID, "last_edited_time": "2026-08-26T03:00:00Z"}]
+            ]
+        },
+        blocks={},
+    )
+    _, _, result = collect(tmp_path, client)
+    stats = result.counters["data_source_query"]
+    assert stats["data_sources_queried"] == 1
+    assert stats["rows_new"] == 1
+    assert result.pages_collected == 1, "the row is collected as a page"
+
+
+def test_a_data_source_that_refuses_the_query_narrows_the_pass_not_the_run(
+    tmp_path: Path,
+) -> None:
+    client = FakeNotionClient(
+        search_results=[
+            {
+                "object": "data_source",
+                "id": DATA_SOURCE_ID,
+                "last_edited_time": "2026-08-26T01:00:00Z",
+            }
+        ],
+        data_sources={DATA_SOURCE_ID: {"object": "data_source", "id": DATA_SOURCE_ID}},
+        data_source_row_errors={
+            DATA_SOURCE_ID: NotionApiError("no", status=403, code="restricted_resource")
+        },
+        blocks={},
+    )
+    _, _, result = collect(tmp_path, client)
+    stats = result.counters["data_source_query"]
+    assert stats["failed"] == 1
+    assert stats["complete"] is False
+    assert result.status != "failed"
+
+
+def test_a_client_without_the_row_query_says_so_instead_of_finding_nothing(
+    tmp_path: Path,
+) -> None:
+    """A run that could not query must not read like one with nothing to query."""
+    client = FakeNotionClient(
+        search_results=[
+            {
+                "object": "data_source",
+                "id": DATA_SOURCE_ID,
+                "last_edited_time": "2026-08-26T01:00:00Z",
+            }
+        ],
+        data_sources={DATA_SOURCE_ID: {"object": "data_source", "id": DATA_SOURCE_ID}},
+        blocks={},
+    )
+    # A client predating the method, as an older build or a scripted fake is.
+    client.iter_data_source_rows = None  # type: ignore[assignment]
+    _, _, result = collect(tmp_path, client)
+    stats = result.counters["data_source_query"]
+    assert stats["complete"] is False
+    assert "reason" in stats
+
+
+def test_a_seed_page_edited_in_the_window_is_collected(tmp_path: Path) -> None:
+    seed = page_body(SEED_ID)
+    seed["last_edited_time"] = "2026-08-26T04:00:00Z"
+    client = FakeNotionClient(
+        search_results=[], pages={SEED_ID: seed}, blocks={}
+    )
+    _, _, result = collect(tmp_path, client, seed_pages=[SEED_ID])
+    stats = result.counters["seed_pages"]
+    assert stats["configured"] == 1 and stats["in_window"] == 1 and stats["added"] == 1
+    assert result.pages_collected == 1
+
+
+def test_a_seed_page_untouched_in_the_window_costs_one_request_and_nothing_else(
+    tmp_path: Path,
+) -> None:
+    """A seed is insurance, not a standing instruction to re-capture daily."""
+    seed = page_body(SEED_ID)
+    seed["last_edited_time"] = "2020-01-01T00:00:00Z"
+    client = FakeNotionClient(search_results=[], pages={SEED_ID: seed}, blocks={})
+    _, _, result = collect(tmp_path, client, seed_pages=[SEED_ID])
+    stats = result.counters["seed_pages"]
+    assert stats["checked"] == 1 and stats["in_window"] == 0 and stats["added"] == 0
+    assert result.pages_collected == 0
+    assert [target for kind, target in client.calls if kind == "blocks"] == []
+
+
+def test_an_unreachable_seed_is_recorded_and_survived(tmp_path: Path) -> None:
+    client = FakeNotionClient(search_results=[], pages={}, blocks={})
+    _, _, result = collect(tmp_path, client, seed_pages=["no-such-page"])
+    assert result.counters["seed_pages"]["failed"] == 1
+    assert result.status != "failed"

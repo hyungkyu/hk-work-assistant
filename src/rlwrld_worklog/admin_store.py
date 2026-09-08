@@ -87,6 +87,10 @@ class AdminStore:
         self.session_key_path = self.credentials / "admin-session-key"
         self.agent_generations_path = self.credentials / "agent-session-generations.json"
         self.oauth_pkce_dir = self.credentials / "oauth-pkce"
+        # Not a setting. A setting is one value edited in place; this is a list
+        # that grows and shrinks, and each entry records when and by whom it
+        # was added, which a flat settings map has no room for.
+        self.notion_seeds_path = root / "notion-seeds.json"
         self.audit_path = root / "audit.jsonl"
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.root.chmod(0o700)
@@ -438,6 +442,94 @@ class AdminStore:
             return None
         path.unlink(missing_ok=True)
         return value or None
+
+    # ------------------------------------------------- Notion seed pages
+
+    MAX_NOTION_SEEDS = 200
+
+    def load_notion_seeds(self) -> list[dict[str, Any]]:
+        """The operator's list of Notion pages that must never be missed.
+
+        A day's documents come from `/search` plus the data-source row query.
+        A seed is the answer to "and check this one anyway": the collector
+        retrieves each seed every run and captures it only if it changed in the
+        window, so the list is cheap to hold and its cost is one request per
+        entry per run.
+        """
+        if not self.notion_seeds_path.exists():
+            return []
+        stored = json.loads(self.notion_seeds_path.read_text(encoding="utf-8"))
+        entries = stored.get("seeds") if isinstance(stored, dict) else stored
+        if not isinstance(entries, list):
+            raise RuntimeError("notion-seeds.json must hold a list of seeds")
+        seeds: list[dict[str, Any]] = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry.get("page_id"):
+                continue
+            seeds.append(
+                {
+                    "page_id": str(entry["page_id"]),
+                    "label": str(entry.get("label") or ""),
+                    "added_at": str(entry.get("added_at") or ""),
+                    "added_by": str(entry.get("added_by") or ""),
+                }
+            )
+        return seeds
+
+    def notion_seed_ids(self) -> list[str]:
+        """Just the ids, for the collector. Never raises on a malformed file."""
+        try:
+            return [seed["page_id"] for seed in self.load_notion_seeds()]
+        except (OSError, ValueError, RuntimeError):
+            # A seed list that cannot be read must not stop a collection. The
+            # run loses its insurance, not its day.
+            return []
+
+    def add_notion_seed(
+        self, value: str, *, label: str = "", actor: str = "owner"
+    ) -> dict[str, Any]:
+        """Add one seed from a Notion URL or a page id.
+
+        A person pastes a URL; the collector needs an id. Accepting both and
+        canonicalising here means the two never diverge, and a typo is refused
+        at the moment it is typed rather than becoming a 404 in a nightly run.
+        """
+        from .links import canonical_notion_page_id
+
+        text = (value or "").strip()
+        page_id = canonical_notion_page_id(text)
+        if page_id is None:
+            raise ValueError("a Notion page URL or 32-character page id is required")
+        seeds = self.load_notion_seeds()
+        if any(seed["page_id"] == page_id for seed in seeds):
+            raise ValueError("that page is already a seed")
+        if len(seeds) >= self.MAX_NOTION_SEEDS:
+            raise ValueError(f"at most {self.MAX_NOTION_SEEDS} seeds")
+        entry = {
+            "page_id": page_id,
+            "label": (label or "").strip()[:200],
+            "added_at": _utc_now(),
+            "added_by": actor,
+        }
+        seeds.append(entry)
+        self._write_notion_seeds(seeds)
+        self.audit("notion_seed.added", actor=actor, details={"page_id": page_id})
+        return entry
+
+    def remove_notion_seed(self, page_id: str, *, actor: str = "owner") -> bool:
+        seeds = self.load_notion_seeds()
+        remaining = [seed for seed in seeds if seed["page_id"] != page_id]
+        if len(remaining) == len(seeds):
+            return False
+        self._write_notion_seeds(remaining)
+        self.audit("notion_seed.removed", actor=actor, details={"page_id": page_id})
+        return True
+
+    def _write_notion_seeds(self, seeds: list[dict[str, Any]]) -> None:
+        _atomic_private_write(
+            self.notion_seeds_path,
+            json.dumps({"seeds": seeds}, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        )
 
     def audit(self, action: str, *, actor: str, details: Mapping[str, Any] | None = None) -> None:
         entry = {"at": _utc_now(), "actor": actor, "action": action, "details": dict(details or {})}

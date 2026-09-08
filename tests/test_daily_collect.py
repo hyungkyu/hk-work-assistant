@@ -943,3 +943,55 @@ def test_every_collector_factory_publishes_progress_under_the_configured_root(
         archive_root=archive_root, environment="test", token="xoxp-synthetic-not-a-real-token"
     )
     assert bare.progress.enabled is False
+
+
+def test_the_daily_run_hands_the_collector_the_seeds_the_backoffice_holds(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The seed list is only insurance if the run that needs it actually reads it.
+
+    A seed added in the backoffice and never passed to the collector would be
+    a list an operator maintains for nothing -- and it would look maintained,
+    which is worse than absent.
+    """
+    import rlwrld_worklog.notion_collector as collector_module
+    from rlwrld_worklog.admin_store import AdminStore
+    from rlwrld_worklog.daily import capture_notion
+
+    config_root = tmp_path / "config"
+    store = AdminStore(config_root)
+    entry = store.add_notion_seed("2e1d872b594c817fb0650002b5686f9e", actor="hk")
+
+    seen: list[tuple] = []
+
+    class Recorder:
+        def collect(self, **kwargs):
+            seen.append(tuple(kwargs.get("seed_pages") or ()))
+            raise CaptureFailed(self.archive, RuntimeError("stop after recording"))
+
+    def fake_factory(
+        *, token, archive_root, environment, capture_density, dry_run, config_root=None
+    ):
+        from rlwrld_worklog.archive import RawArchive
+
+        recorder = Recorder()
+        recorder.archive = RawArchive(
+            archive_root, "notion", f"seed-{capture_density}", environment, config_root=config_root
+        )
+        return recorder.archive, recorder
+
+    monkeypatch.setattr(collector_module, "make_notion_collector", fake_factory)
+
+    for run_config in (
+        config(tmp_path, config_root=config_root),
+        config(tmp_path, config_root=config_root, smoke=True),
+    ):
+        try:
+            capture_notion(run_config, credentials(tmp_path))
+        except CaptureFailed:
+            pass
+
+    assert seen == [(entry["page_id"],), ()], (
+        "a production run carries the configured seeds; a smoke run is bounded "
+        "by construction and must not inherit a list of unknown length"
+    )

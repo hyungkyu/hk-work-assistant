@@ -348,6 +348,21 @@
             </div>
             <div class="actions"><button class="button primary" id="save-notion-secret" disabled>토큰 저장</button><button class="button" id="test-notion">연결 시험</button></div>
             <div class="result" id="result-notion">아직 시험하지 않았습니다.</div>
+
+            <div class="field" style="margin-top:18px">
+              <label for="notion-seed-input">명시 시드 페이지</label>
+              <div class="help">하루치 수집은 검색이 그날 편집됐다고 알려준 문서를 모읍니다.
+                검색이 놓치면 안 되는 페이지를 여기 등록하면, 매 실행 그 페이지를 직접 확인해서
+                그날 바뀌었으면 함께 수집합니다. 바뀌지 않았으면 요청 한 번으로 끝나므로
+                목록이 길어져도 부담이 적습니다. Notion 페이지 URL을 그대로 붙여넣어도 됩니다.</div>
+              <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+                <input id="notion-seed-input" style="flex:2 1 320px" placeholder="https://www.notion.so/… 또는 페이지 ID">
+                <input id="notion-seed-label" style="flex:1 1 160px" placeholder="메모 (선택)">
+                <button class="button primary" id="notion-seed-add">추가</button>
+              </div>
+              <p class="work-state" id="notion-seed-state" style="margin-top:8px"></p>
+              <table class="audit" style="margin-top:8px"><thead><tr><th>페이지</th><th>메모</th><th>추가</th><th></th></tr></thead><tbody id="notion-seed-body"></tbody></table>
+            </div>
           </article>
           <article class="card">
             <div class="card-header"><h2>GitHub</h2><span id="github-secret-badge" class="badge wait">토큰 미설정</span></div>
@@ -575,6 +590,7 @@
       const body = await api('/api/v1/admin/settings');
       state.settings = body.settings; state.secrets = body.secrets;
       renderSettings();
+      await loadNotionSeeds();
       await loadAudit();
     }
 
@@ -682,6 +698,8 @@
     }
 
     $('save-notion-secret').addEventListener('click', () => saveToken('notion', 'notion-token', 'Notion'));
+    $('notion-seed-add').addEventListener('click', addNotionSeed);
+    $('notion-seed-input').addEventListener('keydown', (event) => { if (event.key === 'Enter') addNotionSeed(); });
     $('save-github-secret').addEventListener('click', async () => { await saveSettings(); await saveToken('github', 'github-token', 'GitHub'); });
 
     function summarizeConnection(name, result) {
@@ -710,6 +728,55 @@
     ['google', 'slack', 'notion', 'github'].forEach((name) => {
       $(`test-${name}`).addEventListener('click', () => testConnection(name));
     });
+
+    // Notion seed pages. The list is the operator's answer to "and check this
+    // one whatever search says", so it is edited where the Notion token is
+    // configured rather than on a page of its own.
+    async function loadNotionSeeds() {
+      const table = $('notion-seed-body');
+      const state_line = $('notion-seed-state');
+      try {
+        const body = await api('/api/v1/admin/notion-seeds');
+        table.textContent = '';
+        if (!body.seeds.length) {
+          state_line.textContent = '등록된 시드가 없습니다. 검색 결과만으로 하루치를 모읍니다.';
+          return;
+        }
+        state_line.textContent = `${body.seeds.length}개. 매 실행 이만큼의 요청이 더 듭니다.`;
+        body.seeds.forEach((seed) => {
+          const row = document.createElement('tr');
+          [seed.page_id, seed.label || '-', seed.added_at ? new Date(seed.added_at).toLocaleDateString() : '-']
+            .forEach((value) => { const cell = document.createElement('td'); cell.textContent = value; row.appendChild(cell); });
+          const actions = document.createElement('td');
+          const remove = document.createElement('button');
+          remove.className = 'button'; remove.textContent = '삭제';
+          remove.addEventListener('click', async () => {
+            remove.disabled = true;
+            try {
+              await api(`/api/v1/admin/notion-seeds/${encodeURIComponent(seed.page_id)}`, {method: 'DELETE'});
+              await loadNotionSeeds();
+            } catch (error) { state_line.textContent = error.message; remove.disabled = false; }
+          });
+          actions.appendChild(remove); row.appendChild(actions);
+          table.appendChild(row);
+        });
+      } catch (error) { state_line.textContent = error.message; }
+    }
+
+    async function addNotionSeed() {
+      const input = $('notion-seed-input');
+      const label = $('notion-seed-label');
+      const state_line = $('notion-seed-state');
+      if (!input.value.trim()) { state_line.textContent = 'Notion 페이지 URL 또는 ID가 필요합니다.'; return; }
+      try {
+        await api('/api/v1/admin/notion-seeds', {
+          method: 'POST',
+          body: JSON.stringify({value: input.value, label: label.value}),
+        });
+        input.value = ''; label.value = '';
+        await loadNotionSeeds();
+      } catch (error) { state_line.textContent = error.message; }
+    }
 
     async function loadAudit() {
       try {

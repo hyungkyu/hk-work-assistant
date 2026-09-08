@@ -474,6 +474,43 @@ async def put_settings(request: Request) -> dict[str, Any]:
     return {"settings": settings, "secrets": store().secret_status()}
 
 
+@router.get("/api/v1/admin/notion-seeds")
+def get_notion_seeds(request: Request) -> dict[str, Any]:
+    require_super_admin_session(request)
+    return {"seeds": store().load_notion_seeds()}
+
+
+@router.post("/api/v1/admin/notion-seeds")
+async def post_notion_seed(request: Request) -> dict[str, Any]:
+    """Add a Notion page the daily collection checks whatever /search says.
+
+    The body carries whatever was pasted -- a Notion URL or a bare page id --
+    and the store canonicalises it. A malformed value is refused here, where a
+    person is looking at it, rather than becoming a 404 in a 06:00 batch.
+    """
+    current = require_super_admin_session(request)
+    _require_csrf(request, current)
+    body = await _json_object(request)
+    try:
+        seed = store().add_notion_seed(
+            str(body.get("value", "")),
+            label=str(body.get("label", "")),
+            actor=session_actor(current),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"seed": seed, "seeds": store().load_notion_seeds()}
+
+
+@router.delete("/api/v1/admin/notion-seeds/{page_id}")
+def delete_notion_seed(page_id: str, request: Request) -> dict[str, Any]:
+    current = require_super_admin_session(request)
+    _require_csrf(request, current)
+    if not store().remove_notion_seed(page_id, actor=session_actor(current)):
+        raise HTTPException(status_code=404, detail="no such seed")
+    return {"seeds": store().load_notion_seeds()}
+
+
 @router.put("/api/v1/admin/secrets/{name}")
 async def put_secret(name: str, request: Request) -> dict[str, Any]:
     current = require_super_admin_session(request)

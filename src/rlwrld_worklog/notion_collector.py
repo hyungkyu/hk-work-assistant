@@ -42,7 +42,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Protocol
+from typing import Any, Iterator, Protocol, Sequence
 
 from .archive import RawArchive
 from .link_queue import NotionLinkQueue
@@ -75,14 +75,44 @@ MAX_TRACKED_OBJECTS = 20_000
 COMMENT_STRATEGIES = ("page_first", "every_block")
 DEFAULT_COMMENT_STRATEGY = "page_first"
 
+# Block types that are another object rather than content of this one. The
+# block walk records them and stops; see `_collect_blocks`.
+PAGE_BOUNDARY_BLOCK_TYPES = frozenset({"child_page", "child_database"})
+
 COVERAGE_NOTES = (
     "notion.search_is_not_a_change_feed: /search omits archived and trashed objects and "
     "anything not shared with the integration, and can lag an edit. Deletion and "
     "un-sharing are observable only through the bounded re-check of known objects.",
-    "notion.database_rows_come_from_search: data-source rows are pages and are captured "
-    "through /search rather than by querying every data source daily.",
     "notion.attachments_are_metadata_only: file blocks and file properties are preserved as "
     "JSON with their (expiring) URLs; no file body is downloaded.",
+)
+
+# What a day's set of documents is made of, and where each part can fail. This
+# replaces a note that claimed data-source rows arrive through /search alone,
+# which was an assumption nobody had checked.
+DOCUMENT_SET_NOTE = (
+    "notion.document_set_is_search_plus_seeds: the documents attributed to a day are what "
+    "/search listed inside the window, plus every row a data source seen in that window "
+    "reports as edited in it, plus the operator's explicit seed pages checked one by one. "
+    "The block walk stops at child_page and child_database blocks, so no object is pulled "
+    "in merely because its parent was edited. counters.child_object_refs_unlisted says how "
+    "many child objects a run saw that /search had not listed: it is the run's own measure "
+    "of whether search is still finding what it should, and a jump in it is the signal to "
+    "look again."
+)
+
+SEED_PAGES_NOTE = (
+    "notion.seed_pages_are_checked_not_walked: each configured seed page is retrieved once "
+    "per run and collected only if its own last_edited_time falls in the window. A seed is "
+    "insurance against /search missing a page that matters, not a standing instruction to "
+    "re-capture it daily."
+)
+
+DATA_SOURCE_QUERY_NOTE = (
+    "notion.data_source_rows_are_queried: every data source listed in the window is queried "
+    "for rows edited in it, rather than trusting /search to have listed them. The query "
+    "reaches only data sources the run saw; a database edited in the window whose own object "
+    "/search did not list is not queried, and its rows are covered by /search alone."
 )
 
 # One of these two is always recorded, so a manifest names the sweep that
@@ -167,6 +197,11 @@ class NotionApi(Protocol):
     def iter_block_children(self, block_id: str) -> Iterator[dict[str, Any]]: ...
     def iter_comments(self, block_id: str) -> Iterator[dict[str, Any]]: ...
     def iter_property_items(self, page_id: str, property_id: str) -> Iterator[dict[str, Any]]: ...
+    # Optional: a client without it makes the run record the gap in coverage
+    # rather than fail, because a scripted fake in a test predates the method.
+    # def iter_data_source_rows(
+    #     self, data_source_id: str, *, since: str, until: str | None = None
+    # ) -> Iterator[dict[str, Any]]: ...
 
 
 @dataclass(frozen=True)
@@ -205,7 +240,7 @@ def _parse_time(value: Any) -> datetime | None:
 class _Candidate:
     object_id: str
     object_type: str  # page | data_source | database
-    source: str  # search | link_queue | recheck
+    source: str  # search | link_queue | recheck | data_source_row | seed
     last_edited_time: str | None = None
 
 
@@ -314,6 +349,146 @@ class NotionCollector:
         stats["pages_walked"] = cursor_pages
         return stats
 
+    def _query_data_sources(
+        self,
+        candidates: dict[str, _Candidate],
+        *,
+        since: datetime,
+        until: datetime | None,
+    ) -> dict[str, Any]:
+        """Ask each data source in the window which of its rows changed.
+
+        Runs after `_search`, over the data sources search itself listed, and
+        adds any row it reports that search did not already name. A row is a
+        page, so it joins the same queue as everything else.
+
+        A client without the method -- an older scripted fake, or a build
+        predating it -- makes the run record the gap in coverage and carry on.
+        A failed query is the same: it narrows this pass, not the run.
+        """
+        stats: dict[str, Any] = {
+            "data_sources_queried": 0,
+            "requests": 0,
+            "rows_seen": 0,
+            "rows_new": 0,
+            "failed": 0,
+            "complete": True,
+        }
+        query = getattr(self.client, "iter_data_source_rows", None)
+        sources = sorted(
+            identifier
+            for identifier, candidate in candidates.items()
+            if candidate.object_type in {"data_source", "database"}
+        )
+        if query is None:
+            if sources:
+                stats["complete"] = False
+                stats["reason"] = "client has no iter_data_source_rows"
+                self.archive.note_coverage(
+                    "notion.data_source_query_unavailable: this run's client could not query "
+                    "data sources, so rows are covered by /search alone."
+                )
+            return stats
+        since_iso = since.isoformat()
+        until_iso = until.isoformat() if until is not None else None
+        for data_source_id in sources:
+            stats["data_sources_queried"] += 1
+            try:
+                for page in query(data_source_id, since=since_iso, until=until_iso):
+                    stats["requests"] += 1
+                    results = page.get("results") or []
+                    self.archive.write_page(
+                        f"rows-{data_source_id}",
+                        page,
+                        endpoint="POST /data_sources/{id}/query",
+                        request={"data_source_id": data_source_id, "since": since_iso},
+                        item_count=len(results),
+                    )
+                    for row in results:
+                        if not isinstance(row, dict) or not row.get("id"):
+                            continue
+                        stats["rows_seen"] += 1
+                        row_id = str(row["id"])
+                        if row_id in candidates:
+                            continue
+                        stats["rows_new"] += 1
+                        candidates[row_id] = _Candidate(
+                            object_id=row_id,
+                            object_type=str(row.get("object") or "page"),
+                            source="data_source_row",
+                            last_edited_time=row.get("last_edited_time"),
+                        )
+            except NotionApiError as error:
+                # One inaccessible data source is a hole in this pass, named
+                # and survived. `/search` still covered whatever it listed.
+                stats["failed"] += 1
+                stats["complete"] = False
+                self.archive.note_skip(
+                    "data_source_query_failed",
+                    data_source_id=data_source_id,
+                    status=error.status,
+                    code=error.code,
+                )
+        return stats
+
+    def _check_seeds(
+        self,
+        candidates: dict[str, _Candidate],
+        seeds: Sequence[str],
+        *,
+        since: datetime,
+        until: datetime | None,
+    ) -> dict[str, Any]:
+        """Retrieve each configured seed page and keep the ones edited in the window.
+
+        A seed is the operator's answer to "what must never be missed". It
+        costs one retrieval per run whether or not it changed, and it earns a
+        full capture only when its own `last_edited_time` lands in the window
+        -- so a long seed list stays cheap and a seed never inflates a quiet
+        day into a busy one.
+        """
+        stats: dict[str, Any] = {
+            "configured": len(seeds),
+            "checked": 0,
+            "in_window": 0,
+            "added": 0,
+            "failed": 0,
+        }
+        if not seeds:
+            return stats
+        self.archive.note_coverage(SEED_PAGES_NOTE)
+        for seed in seeds:
+            seed_id = str(seed).strip()
+            if not seed_id:
+                continue
+            stats["checked"] += 1
+            try:
+                obj, resolved = self._retrieve(
+                    _Candidate(object_id=seed_id, object_type="page", source="seed")
+                )
+            except NotionApiError as error:
+                stats["failed"] += 1
+                self.archive.note_skip(
+                    "seed_inaccessible", object_id=seed_id, status=error.status, code=error.code
+                )
+                continue
+            edited = _parse_time(obj.get("last_edited_time"))
+            if edited is None:
+                continue
+            if edited < since or (until is not None and edited >= until):
+                continue
+            stats["in_window"] += 1
+            if seed_id in candidates:
+                continue
+            stats["added"] += 1
+            candidates[seed_id] = _Candidate(
+                object_id=seed_id,
+                object_type=resolved,
+                source="seed",
+                last_edited_time=obj.get("last_edited_time"),
+            )
+        return stats
+
     def _retrieve(self, candidate: _Candidate) -> tuple[dict[str, Any], str]:
         """Retrieve one object, resolving an unknown id across object types.
 
@@ -345,15 +520,38 @@ class NotionCollector:
                     raise
         raise last_error or NotionApiError("no retrieval path for object", status=404)
 
-    def _collect_blocks(self, root_id: str) -> tuple[list[dict[str, Any]], list[str]]:
-        """Every descendant block, plus the id of each one.
+    def _collect_blocks(
+        self, root_id: str
+    ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+        """This object's own blocks, their ids, and the child objects not entered.
 
         The ids matter beyond traversal: a Notion comment hangs off the block
         it was left on, so a leaf paragraph can carry a discussion that a
         page-level /comments query never returns.
+
+        **The walk stops at a page boundary.** A `child_page` or
+        `child_database` block declares `has_children`, so a walk that only
+        consults that flag descends into the whole tree beneath an object and
+        files it under the day the *parent* was edited. Measured on two
+        collected days, that descent was two thirds of the block requests on
+        the heavier one and it bought almost nothing: of the blocks below a
+        child page that `/search` had not itself returned for that day, none
+        on 2026-08-25 and 2.2% on 2026-09-02 had been edited in the window.
+        Nearly every in-window block it did find sat under a child page
+        `/search` *had* returned -- which this collector walks as its own root
+        anyway. So the descent was mostly duplicate work, and where it was not
+        duplicate it was attributing untouched pages to a day nobody touched
+        them.
+
+        The child object is still recorded: its block sits in the parent's
+        children response like any other, so "this document linked to that one"
+        survives. Only the descent stops. The ids are returned so the caller
+        can count how many of them `/search` did not list, which is the run's
+        own measure of whether search is still finding what it should.
         """
         blocks: list[dict[str, Any]] = []
         block_ids: list[str] = []
+        child_objects: list[str] = []
         seen: set[str] = set()
         pending = [root_id]
         while pending:
@@ -382,6 +580,13 @@ class NotionCollector:
                         block_id = block.get("id")
                         if block_id:
                             block_ids.append(str(block_id))
+                        if block_id and block.get("type") in PAGE_BOUNDARY_BLOCK_TYPES:
+                            # A page boundary. Recorded, not entered -- see the
+                            # docstring. `has_children` is deliberately not
+                            # consulted: it is true here, and consulting it is
+                            # exactly what made the walk unbounded.
+                            child_objects.append(str(block_id))
+                            continue
                         if block_id and block.get("has_children"):
                             pending.append(str(block_id))
                         meeting = block.get("meeting_notes") or block.get("transcription") or {}
@@ -401,7 +606,11 @@ class NotionCollector:
                     )
                     continue
                 raise
-        return blocks, sorted(set(block_ids) | (seen - {root_id}))
+        return (
+            blocks,
+            sorted(set(block_ids) | (seen - {root_id})),
+            sorted(set(child_objects)),
+        )
 
     def _comments_for(self, block_id: str) -> list[dict[str, Any]]:
         """One /comments query, or none at all once the budget is spent."""
@@ -528,6 +737,7 @@ class NotionCollector:
         comment_strategy: str = DEFAULT_COMMENT_STRATEGY,
         advance_checkpoint: bool = True,
         until: datetime | None = None,
+        seed_pages: Sequence[str] = (),
     ) -> NotionCollectionResult:
         if comment_strategy not in COMMENT_STRATEGIES:
             # Refused before the first API call: a misspelled strategy that
@@ -612,6 +822,20 @@ class NotionCollector:
                 archive.note_skip("link_queue_unresolved", url_hash=_url_fingerprint(item["url"]))
 
         search_stats = self._search(candidates, since=effective_since, until=until)
+        archive.note_coverage(DOCUMENT_SET_NOTE)
+        # Order matters: the data-source pass reads what search listed, and the
+        # seed pass is checked against the same window as everything else.
+        archive.note_coverage(DATA_SOURCE_QUERY_NOTE)
+        data_source_stats = self._query_data_sources(
+            candidates, since=effective_since, until=until
+        )
+        seed_stats = self._check_seeds(
+            candidates, seed_pages, since=effective_since, until=until
+        )
+        # Every id the run knows about before the walk starts. The walk's
+        # `child_object_refs_unlisted` counter is measured against this, so a
+        # child page that search *did* list is not counted as a miss.
+        listed_object_ids = set(candidates)
 
         known_objects: dict[str, dict[str, Any]] = {
             str(key): dict(value)
@@ -649,6 +873,8 @@ class NotionCollector:
         # ordering is unknown, so no failure time can bound the watermark.
         hold_watermark = False
         databases_collected = 0
+        child_object_refs = 0
+        child_object_refs_unlisted = 0
         blocks_collected = 0
         comments_collected = 0
         properties_collected = 0
@@ -684,7 +910,11 @@ class NotionCollector:
                     item_count=1,
                 )
                 phase = "blocks"
-                blocks, block_ids = self._collect_blocks(object_id)
+                blocks, block_ids, child_refs = self._collect_blocks(object_id)
+                child_object_refs += len(child_refs)
+                child_object_refs_unlisted += sum(
+                    1 for ref in child_refs if ref not in listed_object_ids
+                )
                 phase = "comments"
                 comments = self._collect_comments(
                     object_id, block_ids, strategy=comment_strategy
@@ -810,6 +1040,14 @@ class NotionCollector:
             ),
             "comment_budget_exhausted": self._comment_budget_exhausted,
             "property_pages_collected": properties_collected,
+            # The walk stops at page boundaries, so these two say what it chose
+            # not to enter. `unlisted` is the one to watch: it counts child
+            # objects no discovery pass had already named, which is what a
+            # leaking /search would look like from inside a run.
+            "child_object_refs": child_object_refs,
+            "child_object_refs_unlisted": child_object_refs_unlisted,
+            "data_source_query": data_source_stats,
+            "seed_pages": seed_stats,
             "archived_observed": archived_observed,
             "users_seen": users_seen,
             "link_queue_fetched": link_fetched,

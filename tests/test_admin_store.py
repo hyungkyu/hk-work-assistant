@@ -240,3 +240,70 @@ def test_the_token_is_never_written_into_the_audit_trail(tmp_path: Path) -> None
     trail = store.audit_path.read_text(encoding="utf-8")
     assert "agent.session_issued" in trail
     assert token not in trail
+
+
+# ------------------------------------------------ Notion seed pages
+
+
+def test_a_seed_is_stored_as_a_canonical_page_id_whatever_was_pasted(tmp_path: Path) -> None:
+    """A person pastes a URL; the collector needs an id. One of them has to convert.
+
+    Doing it here means the stored value is always the shape the collector
+    calls with, and a typo is refused while somebody is looking at it rather
+    than becoming a 404 in a 06:00 batch.
+    """
+    store = AdminStore(tmp_path / "config")
+    url = "https://www.notion.so/rlwrld/Weekly-2e1d872b594c817fb0650002b5686f9e"
+    entry = store.add_notion_seed(url, label="주간", actor="hk")
+    assert entry["page_id"] == "2e1d872b-594c-817f-b065-0002b5686f9e"
+    assert store.notion_seed_ids() == ["2e1d872b-594c-817f-b065-0002b5686f9e"]
+
+    bare = "2e1d872b594c817fb0650002b5686f9e"
+    with pytest.raises(ValueError):
+        store.add_notion_seed(bare)  # same page, already a seed
+
+
+def test_a_value_that_is_not_a_notion_page_is_refused(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "config")
+    for value in ("", "   ", "https://example.com/nope", "not-an-id"):
+        with pytest.raises(ValueError):
+            store.add_notion_seed(value)
+    assert store.load_notion_seeds() == []
+
+
+def test_removing_a_seed_reports_whether_there_was_one(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "config")
+    entry = store.add_notion_seed("2e1d872b594c817fb0650002b5686f9e")
+    assert store.remove_notion_seed(entry["page_id"]) is True
+    assert store.remove_notion_seed(entry["page_id"]) is False
+    assert store.notion_seed_ids() == []
+
+
+def test_adding_and_removing_a_seed_is_audited(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "config")
+    entry = store.add_notion_seed("2e1d872b594c817fb0650002b5686f9e", actor="hk")
+    store.remove_notion_seed(entry["page_id"], actor="hk")
+    trail = store.audit_path.read_text(encoding="utf-8")
+    assert "notion_seed.added" in trail
+    assert "notion_seed.removed" in trail
+
+
+def test_an_unreadable_seed_list_costs_the_run_its_seeds_and_nothing_else(
+    tmp_path: Path,
+) -> None:
+    """A seed list is insurance. Losing the insurance must not lose the day."""
+    store = AdminStore(tmp_path / "config")
+    store.notion_seeds_path.write_text("{ not json", encoding="utf-8")
+    assert store.notion_seed_ids() == []
+    with pytest.raises(ValueError):
+        store.load_notion_seeds()
+
+
+def test_the_seed_list_is_not_a_setting(tmp_path: Path) -> None:
+    """It grows and shrinks and records who added what; settings do neither."""
+    store = AdminStore(tmp_path / "config")
+    store.add_notion_seed("2e1d872b594c817fb0650002b5686f9e", actor="hk")
+    assert "notion_seed_pages" not in store.load_settings()
+    stored = json.loads(store.notion_seeds_path.read_text(encoding="utf-8"))
+    assert stored["seeds"][0]["added_by"] == "hk"
+    assert stored["seeds"][0]["added_at"]

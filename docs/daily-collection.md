@@ -150,6 +150,7 @@ Credentials come from the admin-managed config root, which is
 <config root>/credentials/google-token.json
 <config root>/credentials/github-token
 <config root>/settings.json          # slack_expected_team_id, ...
+<config root>/notion-seeds.json      # Notion pages the run checks whatever search says
 ```
 
 A file wins over the matching environment variable (`SLACK_USER_TOKEN`,
@@ -532,10 +533,63 @@ watermark.
   and links. No file body is ever fetched.
 
 **Notion.** `/search` with no object filter (pages, databases, data sources),
-full page and data-source properties, every descendant block recursively,
-comments under one of two named sweep strategies, users, and the
-archived/in-trash flags.
+full page and data-source properties, each object's own blocks, comments under
+one of two named sweep strategies, users, and the archived/in-trash flags.
 
+* **A day's documents are search, plus queried rows, plus seeds.** Three
+  passes decide what a run collects, and none of them is "whatever the block
+  walk reached":
+
+  1. `/search`, ordered by `last_edited_time` descending, walked until results
+     fall below the window.
+  2. Every data source that search listed in the window is asked which of its
+     rows changed, through `POST /data_sources/{id}/query` with a
+     `last_edited_time` filter. Whether search lists every row of every
+     database used to be an assumption; now it is not load-bearing. On a day
+     with 69 data sources this is under one percent of the run.
+  3. Each **seed page** the operator configured in the backoffice is retrieved
+     once and collected only if its own `last_edited_time` is in the window. A
+     seed is insurance against search missing a page that matters, at one
+     request per seed per run.
+
+     The list is managed in the backoffice, on the **연결** page's Notion card:
+     paste a Notion URL or a page id, and the store canonicalises it so a typo
+     is refused while somebody is looking at it rather than becoming a 404 at
+     06:00. It is held in `<config root>/notion-seeds.json` — not in
+     `settings.json`, because it grows and shrinks and records who added each
+     entry, which a flat settings map has no room for. Adding and removing are
+     both audited. A seed list that cannot be read costs a run its seeds and
+     nothing else: failing a collection over unreadable insurance would trade a
+     day for a list that may well be empty.
+
+* **The block walk stops at a page boundary.** A `child_page` or
+  `child_database` block declares `has_children`, so a walk consulting only
+  that flag descends through every nested page and files the result under the
+  day the *parent* was edited. It did. Two collected days were measured by
+  attributing each block to its nearest child-page ancestor:
+
+  | | 2026-08-25 | 2026-09-02 |
+  |---|---|---|
+  | child objects entered | 37 | 419 |
+  | blocks below one search **had** listed | 219 (216 in-window) | 5,134 (3,250 in-window) |
+  | blocks below one search had **not** listed | 2,767 (**0** in-window) | 25,809 (566, **2.2%**, in-window) |
+  | share of the run's block requests | 34% | 67% |
+
+  Nearly all of the in-window content the descent found sat under a child page
+  `/search` had listed — which the run walks as its own root anyway, so it was
+  duplicate work. Where the descent was not duplicate, it was attributing
+  untouched pages to a day nobody touched them, which is worse than absent.
+  The child block itself is still recorded, so "this document linked to that
+  one" survives; only the descent stops.
+
+* **The run counts what it declined to enter.** `counters.child_object_refs`
+  is every child object seen, and `counters.child_object_refs_unlisted` is the
+  subset no discovery pass had already named. The second is the watch: it is
+  what a leaking `/search` looks like from inside a run, and a jump in it is
+  the signal to look again rather than a number to explain away. The 566
+  in-window blocks measured on 2026-09-02 are unexplained — index lag is the
+  likeliest cause and is not distinguishable from a permanent omission without
+  asking Notion for the same day twice, days apart.
 * `/search` is **not a change feed**: it omits archived and trashed objects and
   anything not shared with the integration, and it can lag an edit. Deletion,
   trashing and a lost share become observable only through the bounded

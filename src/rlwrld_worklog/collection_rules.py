@@ -1207,11 +1207,12 @@ NOTION_V7 = replace(
 V7 = CollectionRule(
     version="V7",
     title="공식 API 원본 원장 + 노션 멘션·페이지 우선 댓글 (Notion mentions and a page-first comment sweep)",
-    # Active from the day the collector changed, which is this one. A version
-    # describing what the collector already does belongs in force: a stamp that
-    # does not describe the run is worth less than no stamp, because it is
-    # believed. The version above it stays pending until its own code lands.
-    status="active",
+    # Superseded by V8 on 2026-09-08, when the Notion document set stopped
+    # being whatever the block walk reached. The runs stamped V7 between
+    # 2026-09-05 and then followed this rule and still verify against its
+    # pinned digest; a version's end is derived from its successor rather than
+    # written in here.
+    status="superseded",
     effective=EffectivePeriod(
         start="2026-09-05",
         end=None,
@@ -1255,6 +1256,123 @@ V7 = CollectionRule(
 
 # --------------------------------------------------------------------- V8
 
+# What a day's set of Notion documents is, decided by measurement rather than
+# by what the walk happened to reach.
+NOTION_V8 = replace(
+    V7.source_rule("notion"),
+    includes=V7.source_rule("notion").includes
+    + (
+        "Every row a data source seen in the window reports as edited in it, read from "
+        "POST /data_sources/{id}/query with a last_edited_time filter rather than trusted to "
+        "/search",
+        "Each operator-configured seed page, retrieved once per run and collected when its "
+        "own last_edited_time falls in the window",
+    ),
+    excludes=V7.source_rule("notion").excludes
+    + (
+        "Everything beneath a child_page or child_database block. The block itself is "
+        "recorded; the walk does not enter it",
+    ),
+    known_limitations=V7.source_rule("notion").known_limitations
+    + (
+        "notion.document_set_is_search_plus_seeds: a day's documents are what /search "
+        "listed in the window, plus queried data-source rows, plus seed pages that changed. "
+        "Nothing is collected merely because its parent was edited. Measured on two "
+        "collected days before the change: of the blocks below a child page that /search had "
+        "not itself listed for that day, 0 of 2,767 on 2026-08-25 and 566 of 25,809 (2.2%) "
+        "on 2026-09-02 had been edited in the window, while that descent cost 34% and 67% of "
+        "the run's block requests. Almost every in-window block it found sat under a child "
+        "page /search had listed, which the run walks as its own root anyway. The residual "
+        "is real and unexplained -- search lag is the likeliest cause -- and "
+        "counters.child_object_refs_unlisted is what makes a change in it visible.",
+        "notion.data_source_rows_are_queried: every data source /search listed in the window "
+        "is asked which of its rows changed in it, rather than trusting /search to have "
+        "listed them all. The pass reaches listed sources only: a database whose own object "
+        "search did not list is not queried, and its rows are covered by /search alone.",
+        "notion.data_source_query_unavailable: a client build without the row query records "
+        "this and the run carries on with /search alone, so a run that could not query says "
+        "so instead of looking like one that found nothing to query.",
+        "notion.seed_pages_are_checked_not_walked: a seed page is retrieved every run and "
+        "captured only when it changed in the window, so a seed list is insurance against a "
+        "missed page rather than a standing re-capture.",
+    ),
+    evidence=V7.source_rule("notion").evidence
+    + (
+        "src/rlwrld_worklog/notion_collector.py (PAGE_BOUNDARY_BLOCK_TYPES, "
+        "`_collect_blocks`, `_query_data_sources`, `_check_seeds`)",
+        "src/rlwrld_worklog/notion_client.py (`iter_data_source_rows`)",
+        "manifest fields: counters.child_object_refs, counters.child_object_refs_unlisted, "
+        "counters.data_source_query, counters.seed_pages",
+        "measured from collected ledgers: live-20260906T121439Z-35a7acf7178c (2026-08-25) "
+        "and live-20260906T130520Z-a496a1b444ed (2026-09-02), by attributing each block to "
+        "its nearest child-page ancestor and splitting on whether /search had listed that "
+        "ancestor",
+    ),
+    unknowns=V7.source_rule("notion").unknowns
+    + (
+        "Why /search had not listed the child pages holding the 566 in-window blocks "
+        "measured on 2026-09-02. Index lag is the likeliest explanation and is not "
+        "distinguishable from a permanent omission without asking Notion for the same day "
+        "twice, days apart.",
+    ),
+)
+
+
+V8 = CollectionRule(
+    version="V8",
+    title="공식 API 원본 원장 + 검색·시드로 정의된 문서 집합 (a day's documents are search plus seeds)",
+    # Active from the day the collector changed, which is this one. The pending
+    # Slack repair above it moved up a number rather than this one queueing
+    # behind it: a stamp that does not describe the run is worth less than no
+    # stamp, so the version describing what the collector now does takes force
+    # immediately.
+    status="active",
+    effective=EffectivePeriod(
+        start="2026-09-08",
+        end=None,
+        basis=(
+            "observed: notion_collector stopped entering child_page and child_database "
+            "blocks (PAGE_BOUNDARY_BLOCK_TYPES), gained a per-data-source row query "
+            "(`_query_data_sources`) and an operator seed list (`_check_seeds`)."
+        ),
+    ),
+    summary=(
+        "V7 with the Notion document set stated instead of inherited. A day's documents are "
+        "what /search listed inside the window, plus the rows each data source in that "
+        "window reports as edited, plus the operator's seed pages that changed; the block "
+        "walk stops at child_page and child_database rather than descending through them. "
+        "The descent was not coverage: measured on two collected days, the blocks it reached "
+        "under pages search had not listed were 0% and 2.2% in-window while costing a third "
+        "to two thirds of the run's block requests, and what it did find in-window sat under "
+        "pages search had listed and the run walks anyway. Every run now counts the child "
+        "objects it declined to enter that no discovery pass had named, so a search that "
+        "starts leaking is visible from inside the run rather than inferred later. Slack, "
+        "Google Calendar, GitHub and Slurm are unchanged from V7."
+    ),
+    manifest_schema_version=2,
+    ledger_schema_version="1.0",
+    source_schema_version=None,
+    capture_profiles=V7.capture_profiles,
+    storage_layout=V7.storage_layout,
+    unknowns=V7.unknowns
+    + (
+        "Whether an unlisted child object is ever a page /search will never return, as "
+        "opposed to one it returns a run later. counters.child_object_refs_unlisted measures "
+        "the population; only re-asking for an old day would separate the two.",
+    ),
+    sources=(
+        V7.source_rule("slack"),
+        NOTION_V8,
+        V7.source_rule("google_calendar"),
+        V7.source_rule("github"),
+        V7.source_rule("slurm"),
+    ),
+    supersedes="V7",
+)
+
+
+# --------------------------------------------------------------------- V9
+
 # V6 wrote the slice's shortcuts down as facts: in a bounded window the
 # watched-thread re-poll and the lookback are skipped. Measurement says those
 # shortcuts are why a whole class of message never arrives. The production
@@ -1271,7 +1389,7 @@ V7 = CollectionRule(
 # that needs a pass that reads backwards from the window's start looking for
 # parents, which is a change in what gets collected, so it is a new version
 # rather than an edit to a published one.
-SLACK_V8 = replace(
+SLACK_V9 = replace(
     V7.source_rule("slack"),
     includes=V7.source_rule("slack").includes
     + (
@@ -1330,8 +1448,8 @@ SLACK_V8 = replace(
 )
 
 
-V8 = CollectionRule(
-    version="V8",
+V9 = CollectionRule(
+    version="V9",
     title="공식 API 원본 원장 + 창 앞 부모 탐색 (slice recovers pre-window parents)",
     # Pending, not active. The repair this version describes is being written
     # by another hand; publishing it as active would make every run between now
@@ -1341,12 +1459,13 @@ V8 = CollectionRule(
     # effect when the collector does.
     #
     # A pending version is the tip of the registry, never a rule an already
-    # landed change has to queue behind. This one was first published as V7,
-    # while it was the only unlanded work in flight; when the Notion repair
-    # landed, that number went to the version describing what the collector
-    # actually does and this one moved up. Nothing was lost in the move: a
-    # pending version stamps no manifest and cannot pin a digest, so no run and
-    # no PUBLISHED_DIGESTS entry ever carried the number V7 for this rule.
+    # landed change has to queue behind. This one has moved up twice for that
+    # reason: published as V7, renumbered to V8 when the Notion mention and
+    # comment repair landed and took V7, and renumbered again to V9 when the
+    # Notion document-set repair landed and took V8. Nothing is lost in a move:
+    # a pending version stamps no manifest and cannot pin a digest, so no run
+    # and no PUBLISHED_DIGESTS entry ever carried either earlier number for
+    # this rule.
     status="pending",
     effective=EffectivePeriod(
         start=None,
@@ -1358,42 +1477,42 @@ V8 = CollectionRule(
         ),
     ),
     summary=(
-        "V7 with the Slack slice corrected. A bounded window run now recovers replies whose "
+        "V8 with the Slack slice corrected. A bounded window run now recovers replies whose "
         "parent predates it, by reading backwards from the window's start for thread "
         "parents and by re-polling watched threads inside the window instead of skipping "
         "the re-poll. V6 described the skips as deliberate; measurement showed they are why "
         "a month-by-month backfill silently misses replies to older threads. Notion, Google "
-        "Calendar, GitHub and Slurm are unchanged from V7. Published first under the number "
-        "V7 while it was the only unlanded change in flight, and renumbered when the Notion "
-        "repair landed and took that number; it had stamped nothing and pinned no digest."
+        "Calendar, GitHub and Slurm are unchanged from V8. Published first as V7 and "
+        "renumbered twice as Notion repairs landed and took the numbers below it; it had "
+        "stamped nothing and pinned no digest either time."
     ),
     manifest_schema_version=2,
     ledger_schema_version="1.0",
     source_schema_version=None,
-    capture_profiles=V7.capture_profiles,
-    storage_layout=V7.storage_layout,
-    unknowns=V7.unknowns
+    capture_profiles=V8.capture_profiles,
+    storage_layout=V8.storage_layout,
+    unknowns=V8.unknowns
     + (
         "How far before a window a parent can sit and still be recovered. The backward pass "
         "has to stop somewhere, and a thread whose parent is older than it reaches is missed "
         "the same way it is missed today -- less often, but not never.",
     ),
     sources=(
-        SLACK_V8,
-        V7.source_rule("notion"),
-        V7.source_rule("google_calendar"),
-        V7.source_rule("github"),
-        V7.source_rule("slurm"),
+        SLACK_V9,
+        V8.source_rule("notion"),
+        V8.source_rule("google_calendar"),
+        V8.source_rule("github"),
+        V8.source_rule("slurm"),
     ),
-    supersedes="V7",
+    supersedes="V8",
 )
 
 
 # --------------------------------------------------------------- registry
 
-RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3, V4, V5, V6, V7, V8)
+RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3, V4, V5, V6, V7, V8, V9)
 
-ACTIVE_RULE_VERSION = "V7"
+ACTIVE_RULE_VERSION = "V8"
 
 # Content digests of every published version. A published rule is frozen: if
 # editing one changes its meaning, the digest moves and import fails here,
@@ -1465,6 +1584,7 @@ PUBLISHED_DIGESTS: dict[str, str] = {
     "V5": "sha256:ba77758f618dc29f60d48adc3a47f8b17867aa6b9683ada5e3d63a15ae213941",
     "V6": "sha256:ddbf228989f159091e7b02f9fc6ce7acd73713e26f3fdaa39ca92d2cb637a5f3",
     "V7": "sha256:09b4586496cc1f2a403b112e30e6b3ff81409ff325cb72391dc35dccc43b78fc",
+    "V8": "sha256:0c44b9e1e3c3abe12801f3543f5a7b4ccf4adcc5ddba1bc4dd47021cd3e89aaa",
 }
 
 

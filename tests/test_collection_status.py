@@ -192,14 +192,18 @@ def test_a_stamped_manifest_reports_its_rule_as_declared(paths: status.Collectio
 def test_a_declared_version_the_registry_does_not_know_is_flagged(
     paths: status.CollectionPaths,
 ) -> None:
+    # A version number far above anything the registry will plausibly reach.
+    # This test used "V9" until the registry published V8 and renumbered the
+    # pending rule to V9, at which point the "unknown version" case was quietly
+    # testing a known one.
     write_manifest(
         paths,
         run_id="20260901T000001Z-aaaaab",
-        collection_rule_version="V9",
+        collection_rule_version="V999",
         collection_rule_digest="sha256:deadbeef",
     )
     run = find_run(status.build_run_index(paths, now=NOW), "20260901T000001Z-aaaaab")
-    assert run["rule"]["version"] == "V9"
+    assert run["rule"]["version"] == "V999"
     assert run["rule"]["attribution"] == "declared"
     assert run["rule"]["known_version"] is False
     assert run["rule"]["digest_matches_registry"] is None

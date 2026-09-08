@@ -25,7 +25,7 @@ every source collected at that time:
 
 | Field | Meaning |
 |---|---|
-| `version` | `V0` … `V8`. The string written into manifests. |
+| `version` | `V0` … `V9`. The string written into manifests. |
 | `title`, `summary` | What changed and why, in prose. |
 | `status` | `pending`, `active`, or `superseded`. |
 | `effective` | `EffectivePeriod(start, end, basis)`. `end` is **always** `None` in the registry. |
@@ -107,7 +107,7 @@ digest.
 `RawArchive.finish` writes into every manifest:
 
 ```
-collection_rule_version          e.g. "V7"
+collection_rule_version          e.g. "V8"
 collection_rule_digest           e.g. "sha256:09b45864..."
 collection_rule_schema_version   RULE_REGISTRY_SCHEMA_VERSION, currently 2
 ```
@@ -125,22 +125,29 @@ is not wrong and must never be rewritten; the dashboard reports
 ## Current state
 
 ```
-RULES              = (V0, V1, V2, V3, V4, V5, V6, V7, V8)   collection_rules.py:1394
-ACTIVE_RULE_VERSION = "V7"                                  collection_rules.py:1396
+RULES              = (V0, V1, V2, V3, V4, V5, V6, V7, V8, V9)
+ACTIVE_RULE_VERSION = "V8"
 ```
 
-`V7` is **active**, effective from 2026-09-05. It is `V6` with the Notion
-capture corrected: the comment sweep asks each object for its own comments and
-walks its blocks only when that answered, in place of a per-block sweep that
-spent 1,500 requests in one measured day to return one comment; and the user
-mentions already sitting in the blocks and comments a run fetches are extracted
-rather than discarded. The first is a narrowing of coverage — an inline comment
-on a page carrying no page-level comment is missed — so every run names the
-sweep it used in `counters.comment_strategy`.
+`V8` is **active**, effective from 2026-09-08. It is `V7` with the Notion
+document set stated rather than inherited from whatever the block walk reached.
+A day's documents are what `/search` listed inside the window, plus the rows
+each data source in that window reports as edited, plus the operator's seed
+pages that changed; the block walk stops at `child_page` and `child_database`
+instead of descending through them.
 
-`V6` is superseded, and its window closes at `V7`'s start.
+The descent it removes was not coverage. Measured on two collected days, the
+blocks it reached under pages `/search` had not listed were 0% and 2.2%
+in-window while costing a third to two thirds of the run's block requests, and
+what it did find in-window sat under pages search *had* listed and the run
+walks anyway. Every run now records `counters.child_object_refs_unlisted` —
+child objects it declined to enter that no discovery pass had named — so a
+search that starts leaking is visible from inside a run rather than inferred
+from a gap months later.
 
-`V8` is **pending**, not active. It is a Slack slice that recovers replies whose
+`V7` is superseded, and its window closes at `V8`'s start.
+
+`V9` is **pending**, not active. It is a Slack slice that recovers replies whose
 thread parent predates the window, by reading backwards from the window's start
 and by re-polling watched threads inside the window instead of skipping the
 re-poll. `V6` described those skips as deliberate; measurement showed they are
@@ -149,17 +156,19 @@ collector change has **not** landed — see [the date-slice section of
 daily-collection.md](daily-collection.md#date-slice-capture) for what the
 collector does today.
 
-Because `V8` is pending, it has no `effective.start` and no pinned digest, and
-it does not close `V7`'s window.
+Because `V9` is pending, it has no `effective.start` and no pinned digest, and
+it does not close `V8`'s window.
 
-`V8` was first published under the number `V7`, while it was the only unlanded
-change in flight. When the Notion repair landed, that number went to the version
-describing what the collector actually does and the Slack version moved up. The
-renumber cost nothing recoverable: a pending version stamps no manifest and
-cannot pin a digest (`_validate_registry` forbids it), so no run and no
-`PUBLISHED_DIGESTS` entry ever carried `V7` for that rule. `V8`'s own summary
-records the move, so the number is not made to look as if it were always this
-one.
+`V9` has been renumbered twice. It was published as `V7` while it was the only
+unlanded change in flight, moved to `V8` when the Notion mention and comment
+repair landed, and to `V9` when the Notion document-set repair landed. A
+pending version is the tip of the registry, never a rule a landed change queues
+behind: a stamp that does not describe the run is worth less than no stamp. The
+renumbering costs nothing recoverable, because a pending version stamps no
+manifest and cannot pin a digest (`_validate_registry` forbids it), so no run
+and no `PUBLISHED_DIGESTS` entry ever carried an earlier number for that rule.
+`V9`'s own summary records the moves, so the number is not made to look as if
+it were always this one.
 
 ## Invariants `_validate_registry` enforces
 
@@ -235,7 +244,7 @@ quiet re-labelling of historical runs.
 
 To find the digest of a rule you just wrote, read it off the
 `RuleRegistryError` the import raises, or print
-`rule_for_version("V8").digest`.
+`rule_for_version("V9").digest`.
 
 ## Reading a rule back
 

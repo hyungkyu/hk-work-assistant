@@ -370,6 +370,45 @@ class NotionClient:
     def retrieve_database(self, database_id: str) -> dict[str, Any]:
         return self.call("GET", f"/databases/{database_id}")
 
+    def iter_data_source_rows(
+        self, data_source_id: str, *, since: str, until: str | None = None
+    ) -> Iterator[dict[str, Any]]:
+        """Rows of one data source edited inside a window, newest first.
+
+        `/search` is the only enumeration this collector had, and whether it
+        lists every row of every database was an assumption rather than a
+        measurement. This asks the data source itself, which is authoritative
+        for its own rows and costs one request per hundred rows in the window
+        -- on a day with 69 data sources, under one percent of the run.
+
+        The bounds are the same instants the run's window uses: `on_or_after`
+        is inclusive and `before` is exclusive, matching `--since`/`--until`.
+        """
+        conditions: list[dict[str, Any]] = [
+            {"timestamp": "last_edited_time", "last_edited_time": {"on_or_after": since}}
+        ]
+        if until is not None:
+            conditions.append(
+                {"timestamp": "last_edited_time", "last_edited_time": {"before": until}}
+            )
+        filter_body: dict[str, Any] = (
+            conditions[0] if len(conditions) == 1 else {"and": conditions}
+        )
+        cursor = None
+        while True:
+            body: dict[str, Any] = {
+                "page_size": 100,
+                "filter": filter_body,
+                "sorts": [{"timestamp": "last_edited_time", "direction": "descending"}],
+            }
+            if cursor:
+                body["start_cursor"] = cursor
+            page = self.call("POST", f"/data_sources/{data_source_id}/query", body=body)
+            yield page
+            cursor = page.get("next_cursor") if page.get("has_more") else None
+            if not cursor:
+                return
+
     def iter_block_children(self, block_id: str) -> Iterator[dict[str, Any]]:
         cursor = None
         while True:
