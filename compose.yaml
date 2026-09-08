@@ -2,7 +2,12 @@ name: rlwrld-worklog
 
 services:
   postgres:
-    image: postgres:17-bookworm
+    # pgvector's image is the official postgres image plus the `vector`
+    # extension, same major version, so the data volume carries over
+    # untouched. e-2 needs the extension and the official image does
+    # not ship it; running a second database to hold embeddings would
+    # be the mistake this replaced OpenSearch to avoid.
+    image: pgvector/pgvector:pg17
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
@@ -33,28 +38,6 @@ services:
       retries: 20
     networks: [backend]
 
-  opensearch:
-    image: opensearchproject/opensearch:3
-    restart: unless-stopped
-    environment:
-      discovery.type: single-node
-      bootstrap.memory_lock: "true"
-      DISABLE_INSTALL_DEMO_CONFIG: "true"
-      DISABLE_SECURITY_PLUGIN: "true"
-      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    volumes:
-      - opensearch_data:/usr/share/opensearch/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health >/dev/null"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-    networks: [backend]
-
   app:
     build: .
     image: hk-work-assistant-app:local
@@ -62,7 +45,6 @@ services:
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     environment:
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
-      OPENSEARCH_URL: ${OPENSEARCH_URL:-http://opensearch:9200}
       RAW_ARCHIVE_ROOT: ${RAW_ARCHIVE_ROOT:-/data/rlwrld-worklog}
       ALLOWED_GOOGLE_EMAIL: ${ALLOWED_GOOGLE_EMAIL:?set ALLOWED_GOOGLE_EMAIL in .env}
       APP_CONFIG_ROOT: ${APP_CONFIG_ROOT:-/config/hk-work-assistant}
@@ -78,8 +60,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      opensearch:
-        condition: service_healthy
     networks: [frontend, backend]
 
   backoffice-local:
@@ -89,7 +69,6 @@ services:
     command: ["uvicorn", "rlwrld_worklog.web:app", "--host", "0.0.0.0", "--port", "8081"]
     environment:
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
-      OPENSEARCH_URL: ${OPENSEARCH_URL:-http://opensearch:9200}
       RAW_ARCHIVE_ROOT: ${RAW_ARCHIVE_ROOT:-/data/rlwrld-worklog}
       ALLOWED_GOOGLE_EMAIL: ${ALLOWED_GOOGLE_EMAIL:?set ALLOWED_GOOGLE_EMAIL in .env}
       APP_CONFIG_ROOT: ${APP_CONFIG_ROOT:-/config/hk-work-assistant}
@@ -106,8 +85,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      opensearch:
-        condition: service_healthy
     networks: [frontend, backend]
 
   # Same backoffice UI on the trusted LAN, but without the emergency password
@@ -119,7 +96,6 @@ services:
     command: ["uvicorn", "rlwrld_worklog.web:app", "--host", "0.0.0.0", "--port", "8081"]
     environment:
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
-      OPENSEARCH_URL: ${OPENSEARCH_URL:-http://opensearch:9200}
       RAW_ARCHIVE_ROOT: ${RAW_ARCHIVE_ROOT:-/data/rlwrld-worklog}
       ALLOWED_GOOGLE_EMAIL: ${ALLOWED_GOOGLE_EMAIL:?set ALLOWED_GOOGLE_EMAIL in .env}
       APP_CONFIG_ROOT: ${APP_CONFIG_ROOT:-/config/hk-work-assistant}
@@ -133,8 +109,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      opensearch:
-        condition: service_healthy
     networks: [frontend, backend]
 
 networks:
@@ -144,4 +118,3 @@ networks:
 
 volumes:
   postgres_data:
-  opensearch_data:

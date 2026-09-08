@@ -202,6 +202,8 @@ def test_every_reporting_route_is_a_read_only_get() -> None:
         "/api/v1/admin/collection/refresh",
         "/api/v1/admin/collection/rules",
         "/api/v1/admin/collection/runs",
+        "/api/v1/admin/collection/search",
+        "/api/v1/admin/collection/search/status",
     ]
     for path in collection_paths:
         expected = {"post"} if path.endswith("/refresh") else {"get"}

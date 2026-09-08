@@ -103,7 +103,6 @@ chmod 600 ~/.config/hk-work-assistant/collect.env
 | 이름 | 선언 위치 | 실제 동작 |
 |---|---|---|
 | `ALLOWED_GOOGLE_EMAIL` | `compose.yaml:52`, `:79`, `:109` — `:?` 필수 | 저장소의 어떤 Python 코드도 읽지 않는다. 실제 허용 계정은 `APP_CONFIG_ROOT/settings.json`의 `allowed_google_email` 키다(`admin_store.py:17`, `:131`). 값이 비어 있으면 compose가 뜨지 않으므로 채워야 하지만, 무엇을 채우든 로그인 허용 대상은 바뀌지 않는다 |
-| `OPENSEARCH_URL` | `compose.yaml:50`, `:77`, `:107` | 세 서비스에 전달되지만 읽는 코드가 없다. `opensearch` 컨테이너는 뜨고 애플리케이션은 그것을 사용하지 않는다 |
 
 ## compose 파일만 쓰는 변수
 

@@ -34,6 +34,49 @@ _DATE_PATTERN = "^\\d{4}-\\d{2}-\\d{2}$"
 DEFAULT_COVERAGE_DAYS = 30
 
 
+def _database_url() -> str:
+    import os
+
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        # A 503 rather than a 500: nothing is broken, the service simply has no
+        # database configured, and the page can say so instead of showing an
+        # empty result that looks like "nothing matched".
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
+    return url
+
+
+@router.get("/search")
+def search(
+    request: Request,
+    q: Annotated[str, Query(min_length=1, max_length=200)],
+    matcher: Annotated[str, Query(pattern="^(auto|words|substring)$")] = "auto",
+    source: Annotated[list[str] | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 25,
+) -> dict[str, Any]:
+    """Search the collected text. Read-only, like every route on this page."""
+    from .search import search_text
+
+    require_super_admin_session(request)
+    sources = [item for item in (source or []) if item in set(SOURCES)]
+    try:
+        result = search_text(
+            _database_url(), q, matcher=matcher, sources=sources, limit=limit
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return result.as_dict()
+
+
+@router.get("/search/status")
+def search_corpus_status(request: Request) -> dict[str, Any]:
+    """What the corpus holds, so an empty result is not read as an empty index."""
+    from .search import search_status
+
+    require_super_admin_session(request)
+    return search_status(_database_url())
+
+
 def _paths() -> collection_status.CollectionPaths:
     return collection_status.paths_from_environment()
 

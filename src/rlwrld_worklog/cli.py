@@ -12,6 +12,7 @@ from .collection_audit import DEFAULT_DAYS as COLLECTION_AUDIT_DEFAULT_DAYS
 from .daily import DEFAULT_SINCE, MAX_WINDOW_HOURS, SOURCE_ORDER
 from .models import Source, TimelineEvent
 from .normalizers import normalize_records
+from .search import MATCHERS as SEARCH_MATCHERS
 from .slurm_collector import CLOUDS as SLURM_CLOUDS
 from .work_cli import add_work_parser, run_work
 
@@ -201,6 +202,36 @@ def build_parser() -> argparse.ArgumentParser:
     ledger_load.add_argument("--apply", action="store_true", help="Commit; default is dry-run")
     ledger_load.add_argument("--batch-size", type=_positive_int, default=500)
     ledger_load.add_argument("--reload-unchanged", action="store_true")
+
+    search_cmd = subparsers.add_parser(
+        "search", help="Search collected text in the service database"
+    )
+    search_cmd.add_argument("query", help="What to look for")
+    search_cmd.add_argument(
+        "--matcher",
+        choices=list(SEARCH_MATCHERS),
+        default="auto",
+        help="auto: whole words first, substrings only if that found nothing. "
+        "Postgres has no Korean stemmer, so a word search does not match "
+        "across agglutination and a substring search does",
+    )
+    search_cmd.add_argument(
+        "--source",
+        action="append",
+        default=[],
+        choices=["slack", "notion", "google_calendar", "github", "slurm"],
+        help="Repeatable. Without any, every source is searched",
+    )
+    search_cmd.add_argument("--since", default=None, help="Ingested on or after: a KST date or an instant")
+    search_cmd.add_argument("--until", default=None, help="Ingested before: a KST date or an instant")
+    search_cmd.add_argument("--limit", type=_positive_int, default=25)
+    search_cmd.add_argument("--database-url", default=None)
+    search_cmd.add_argument(
+        "--status",
+        action="store_true",
+        help="Report what the corpus holds instead of searching, so an empty "
+        "result can be told from an empty index",
+    )
 
     ledger_verify = subparsers.add_parser(
         "ledger-verify", help="Verify counts, duplicates, and provenance"
@@ -850,6 +881,35 @@ def ledger_migrate(args: argparse.Namespace) -> int:
     return 1 if result["checksum_mismatch"] else 0
 
 
+def search_command(args: argparse.Namespace) -> int:
+    from .search import search_status, search_text
+    from .slack_collector import parse_since, parse_until
+
+    database_url = args.database_url or os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise SystemExit("DATABASE_URL or --database-url is required")
+    if args.status:
+        _print_json("search_status", search_status(database_url))
+        return 0
+    try:
+        result = search_text(
+            database_url,
+            args.query,
+            matcher=args.matcher,
+            sources=args.source,
+            since=parse_since(args.since) if args.since else None,
+            until=parse_until(args.until) if args.until else None,
+            limit=args.limit,
+        )
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    _print_json("search", result.as_dict())
+    # No hits is not a failure. It is an answer, and the exit code says so:
+    # a caller that treats "nothing matched" as an error cannot tell it from
+    # "the database was unreachable", which is the distinction that matters.
+    return 0
+
+
 def ledger_load(args: argparse.Namespace) -> int:
     from .ledger.load import load_source
 
@@ -1027,6 +1087,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return ledger_migrate(args)
     if args.command == "ledger-load":
         return ledger_load(args)
+    if args.command == "search":
+        return search_command(args)
     if args.command == "ledger-verify":
         return ledger_verify(args)
     if args.command == "ledger-schema":

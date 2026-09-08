@@ -189,6 +189,7 @@
         <div class="nav-group">
           <span class="nav-label">운영</span>
           <button data-page="collection">수집 현황</button>
+          <button data-page="search">검색</button>
           <button data-page="server">서버 상태</button>
           <button data-page="schedules">스케줄</button>
         </div>
@@ -257,6 +258,43 @@
           <p class="help">확정이 필요한 것: 로드맵의 원본 시스템(예: Notion 데이터베이스 또는 업무 저장소 자체),
              항목 단위와 기간 필드, 팀·부서 구분, 업무 현황과의 연결 방식.</p>
         </article>
+      </section>
+
+      <section class="page" id="page-search">
+        <h1>검색</h1>
+        <p class="lead">수집해서 DB에 들어간 본문을 찾습니다. 결과마다 어느 소스의 무엇에서 나왔는지가 함께 나옵니다 —
+          출처 없는 결과는 검색 결과가 아니라 주장입니다.</p>
+        <div class="collection-toolbar">
+          <div class="work-filters">
+            <input id="search-q" style="min-width:280px" placeholder="찾을 말">
+            <select id="search-matcher">
+              <option value="auto">자동 (낱말 먼저, 없으면 부분일치)</option>
+              <option value="words">낱말</option>
+              <option value="substring">부분일치</option>
+            </select>
+            <select id="search-source">
+              <option value="">모든 소스</option>
+              <option value="slack">Slack</option>
+              <option value="notion">Notion</option>
+              <option value="google_calendar">Google Calendar</option>
+              <option value="github">GitHub</option>
+              <option value="slurm">Slurm</option>
+            </select>
+            <button class="button primary" id="search-run">검색</button>
+          </div>
+          <span class="badge" id="search-corpus-badge">-</span>
+        </div>
+        <p class="work-state" id="search-state">찾을 말을 넣고 검색을 누르세요.</p>
+        <div class="card">
+          <div class="card-header"><h2>결과</h2><span class="badge" id="search-count-badge">-</span></div>
+          <div style="overflow-x:auto">
+            <table class="audit">
+              <thead><tr><th>소스</th><th>종류</th><th>본문</th><th>일치</th><th>적재</th></tr></thead>
+              <tbody id="search-body"></tbody>
+            </table>
+          </div>
+          <p class="help" id="search-note"></p>
+        </div>
       </section>
 
       <section class="page" id="page-collection">
@@ -776,6 +814,60 @@
         input.value = ''; label.value = '';
         await loadNotionSeeds();
       } catch (error) { state_line.textContent = error.message; }
+    }
+
+    // 검색. Read-only, and every hit carries its provenance -- the table shows
+    // source and kind next to the snippet so a reader can tell a Slack message
+    // from a Notion page without opening anything.
+    async function loadSearchCorpus() {
+      try {
+        const body = await api('/api/v1/admin/collection/search/status');
+        const badge = $('search-corpus-badge');
+        badge.textContent = `문서 ${body.documents.toLocaleString()}건`;
+        badge.className = body.documents ? 'badge ok' : 'badge wait';
+      } catch (error) {
+        const badge = $('search-corpus-badge');
+        badge.textContent = '집계 실패'; badge.className = 'badge wait';
+      }
+    }
+
+    async function runSearch() {
+      const query = $('search-q').value.trim();
+      const line = $('search-state');
+      const table = $('search-body');
+      if (!query) { line.textContent = '찾을 말을 넣으세요.'; return; }
+      line.textContent = '찾는 중…';
+      const parameters = new URLSearchParams({q: query, matcher: $('search-matcher').value, limit: '50'});
+      const source = $('search-source').value;
+      if (source) parameters.append('source', source);
+      try {
+        const body = await api(`/api/v1/admin/collection/search?${parameters}`);
+        table.textContent = '';
+        $('search-count-badge').textContent = `${body.count}건`;
+        // "아무것도 없다"와 "느슨한 쪽으로 내려가서 찾았다"는 다른 답이다.
+        const how = body.fell_back
+          ? '낱말로는 없어서 부분일치로 찾았습니다'
+          : (body.matcher === 'substring' ? '부분일치' : '낱말 일치');
+        line.textContent = body.count
+          ? `${how} · ${body.took_ms}ms`
+          : `찾은 것이 없습니다 (${how} 기준). 부분일치로 바꿔 보세요.`;
+        body.hits.forEach((hit) => {
+          const row = document.createElement('tr');
+          const ref = hit.source_ref && Object.keys(hit.source_ref).length
+            ? JSON.stringify(hit.source_ref).slice(0, 60) : '';
+          [hit.source, hit.kind, hit.snippet, hit.matcher,
+           hit.inserted_at ? new Date(hit.inserted_at).toLocaleDateString() : '-'
+          ].forEach((value, index) => {
+            const cell = document.createElement('td');
+            cell.textContent = value;
+            if (index === 2) { cell.style.maxWidth = '520px'; cell.title = ref; }
+            row.appendChild(cell);
+          });
+          table.appendChild(row);
+        });
+        $('search-note').textContent = body.count >= 50
+          ? '상위 50건만 보여줍니다. 검색어를 좁히세요.' : '';
+      } catch (error) { line.textContent = error.message; }
     }
 
     async function loadAudit() {
@@ -1954,6 +2046,7 @@
       closeTimeline();
       stopWorkPolling();
       stopCollectionPolling();
+      if (page === 'search') { loadSearchCorpus(); }
       if (page === 'audit') loadAudit();
       if (page === 'work') { loadWork(); startWorkPolling(); }
       if (page === 'collection') { loadCollection({ coverage: true }); startCollectionPolling(); }
@@ -2096,6 +2189,9 @@
       const target = `#/${button.dataset.page}`;
       if (location.hash === target) applyHash(); else location.hash = target;
     });
+
+    $('search-run').addEventListener('click', runSearch);
+    $('search-q').addEventListener('keydown', (event) => { if (event.key === 'Enter') runSearch(); });
 
     $('logout').addEventListener('click', async () => {
       stopWorkPolling();

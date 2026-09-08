@@ -41,7 +41,15 @@ def test_the_menu_is_grouped_and_ordered_as_the_operator_asked() -> None:
     ]
     assert parsed == [
         ("업무", [("work", "업무 현황"), ("roadmap", "로드맵")]),
-        ("운영", [("collection", "수집 현황"), ("server", "서버 상태"), ("schedules", "스케줄")]),
+        (
+            "운영",
+            [
+                ("collection", "수집 현황"),
+                ("search", "검색"),
+                ("server", "서버 상태"),
+                ("schedules", "스케줄"),
+            ],
+        ),
         (
             "설정",
             [

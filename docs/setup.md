@@ -172,8 +172,6 @@ cp .env.example .env
 (`src/rlwrld_worklog/admin_store.py:17`, `:131`), 백오피스 화면에서 설정한다.
 `.env`의 값을 바꿔도 로그인 허용 대상은 달라지지 않는다.
 
-`OPENSEARCH_URL`도 세 서비스에 전달되지만 읽는 코드가 없다. OpenSearch 컨테이너는
-뜨지만 애플리케이션은 아직 그것을 사용하지 않는다.
 
 ## 7. 컨테이너 빌드와 기동
 
@@ -189,8 +187,10 @@ docker compose ps
 (`compose.yaml:71`, `:101`). 이미지가 로컬에 없으면 Docker는 레지스트리에서 받으려
 시도하고 실패한다. 그 이미지를 만드는 것은 `app` 서비스의 `build: .` 뿐이다.
 
-`up`은 다섯 개 서비스를 올린다: `postgres`, `opensearch`, `app`,
-`backoffice-local`, `backoffice-lan`.
+`up`은 네 개 서비스를 올린다: `postgres`, `app`, `backoffice-local`,
+`backoffice-lan`. `postgres` 이미지는 `pgvector/pgvector:pg17` — 공식 postgres
+이미지에 `vector` 확장만 더한 것이고 메이저 버전이 같으므로 데이터 볼륨은 그대로
+쓴다.
 
 | 서비스 | 게시 포트 | 비고 |
 |---|---|---|
@@ -211,7 +211,7 @@ docker compose ps
 띄우려면 서로 다른 주소여야 한다. LAN 노출이 필요 없으면 서비스를 지정해서 올린다.
 
 ```bash
-docker compose up -d postgres opensearch app backoffice-local
+docker compose up -d postgres app backoffice-local
 ```
 
 비상 로그인(초기 슈퍼관리자 비밀번호 생성)은 `backoffice-local`에서만 켜져 있다
