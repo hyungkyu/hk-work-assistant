@@ -213,6 +213,27 @@ class RawArchive:
     def set_checkpoint_in(self, checkpoint: dict[str, Any] | None) -> None:
         self.checkpoint_in = dict(checkpoint or {})
 
+    def partial_counters(self) -> dict[str, Any]:
+        """Observable progress that survives a collector failing mid-run.
+
+        Source-specific counters are normally assembled by a collector only
+        after its walk completes.  A failed run cannot honestly reconstruct
+        those values, but it must not turn already archived pages and API
+        calls into zeroes either.  These generic counters come from the
+        archive as it is written, so they remain truthful at every point in a
+        run.
+        """
+        return {
+            "pages_archived": len(self.files),
+            "bytes_archived": self.bytes_archived,
+            "api_calls": sum(bucket.get("pages", 0) for bucket in self.api_coverage.values()),
+            "api_items": sum(bucket.get("items", 0) for bucket in self.api_coverage.values()),
+            "skips_recorded": len(self.skips),
+            "errors_recorded": len(self.errors),
+            "rate_limit_hits": self.rate_limit_hits,
+            "coverage_complete": False,
+        }
+
     # ------------------------------------------------------------ manifest
 
     @property

@@ -10,6 +10,8 @@ fake cursor from the loader tests.
 from __future__ import annotations
 
 import json
+import os
+import signal
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -378,6 +380,12 @@ def test_a_failed_capture_still_leaves_a_manifest_on_disk(tmp_path: Path) -> Non
         from rlwrld_worklog.archive import RawArchive
 
         archive = RawArchive(config_value.archive_root, "slack", "slack-broken", "test")
+        archive.write_page(
+            "history",
+            {"ok": True, "messages": [{"ts": "1.0"}]},
+            endpoint="conversations.history",
+            item_count=1,
+        )
         raise CaptureFailed(archive, RuntimeError("synthetic Slack outage"))
 
     summary = run_daily(
@@ -387,6 +395,46 @@ def test_a_failed_capture_still_leaves_a_manifest_on_disk(tmp_path: Path) -> Non
 
     assert manifest["status"] == "failed"
     assert "synthetic Slack outage" in manifest["error"]
+    assert manifest["counters"]["pages_archived"] == 1
+    assert manifest["counters"]["api_calls"] == 1
+    assert manifest["counters"]["api_items"] == 1
+    assert manifest["counters"]["coverage_complete"] is False
+
+
+def test_sigterm_finishes_the_open_manifest_and_stops_later_sources(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def interrupted(config_value: DailyConfig, _credentials: Credentials) -> CaptureOutcome:
+        from rlwrld_worklog.archive import RawArchive
+
+        calls.append("slack")
+        archive = RawArchive(config_value.archive_root, "slack", "slack-term", "test")
+        archive.write_page("history", {"ok": True}, endpoint="conversations.history")
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)
+        except daily.TerminationRequested as error:
+            # The real capture adapters already turn ordinary Exceptions into
+            # CaptureFailed with their open archive attached.
+            raise CaptureFailed(archive, error) from error
+        raise AssertionError("SIGTERM handler did not interrupt the capture")
+
+    def should_not_run(config_value: DailyConfig, _credentials: Credentials) -> CaptureOutcome:
+        calls.append("notion")
+        raise AssertionError("a source after SIGTERM must not start")
+
+    summary = run_daily(
+        config(tmp_path),
+        credentials=credentials(tmp_path),
+        captures={"slack": interrupted, "notion": should_not_run},
+    )
+
+    manifest = json.loads(Path(source(summary, "slack")["manifest"]).read_text())
+    assert calls == ["slack"]
+    assert summary["status"] == "failed"
+    assert summary["termination_signal"] == signal.SIGTERM
+    assert "notion" in summary["sources_not_started"]
+    assert manifest["status"] == "failed"
+    assert manifest["counters"]["pages_archived"] == 1
 
 
 def test_a_failing_source_cannot_touch_another_source_checkpoint(tmp_path: Path) -> None:

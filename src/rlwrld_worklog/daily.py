@@ -38,6 +38,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import signal
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -736,6 +737,14 @@ class CaptureFailed(RuntimeError):
         self.error = error
 
 
+class TerminationRequested(RuntimeError):
+    """Raised by the scoped SIGTERM handler so collectors can finalize."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(f"termination requested by signal {signum}")
+        self.signum = signum
+
+
 DEFAULT_CAPTURES: dict[str, CaptureFn] = {
     "slack": capture_slack,
     "google-calendar": capture_google_calendar,
@@ -784,6 +793,10 @@ def _run_source(
                 "status": "failed",
                 "error_type": type(failure.error).__name__,
                 "error": _redact(failure.error),
+                # Do not fabricate the collector's end-of-run counters.  The
+                # archive can still report what it observed before failure,
+                # which keeps a long partial run from looking like zero work.
+                "counters": failure.archive.partial_counters(),
             }
         )
         capture_stage.error = _redact(failure.error)
@@ -939,13 +952,46 @@ def run_daily(
         return summary
 
     results: list[SourceResult] = []
+    termination_signal: int | None = None
+    previous_sigterm: Any = None
+
+    def request_termination(signum: int, _frame: Any) -> None:
+        nonlocal termination_signal
+        termination_signal = signum
+        # Raising (instead of accepting the default process exit) unwinds
+        # through the collector's CaptureFailed wrapper. That gives an open
+        # archive one chance to write its failure manifest before we stop.
+        raise TerminationRequested(signum)
+
+    try:
+        previous_sigterm = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGTERM, request_termination)
+    except ValueError:
+        # Python only permits signal handlers in the main thread. A library
+        # caller in another thread still gets locking and source isolation;
+        # the production CLI always runs in the main thread.
+        previous_sigterm = None
     try:
         for source in ordered:
-            result = _run_source(source, config, resolved_credentials, resolved_captures)
+            try:
+                result = _run_source(source, config, resolved_credentials, resolved_captures)
+            except TerminationRequested as error:
+                result = SourceResult(
+                    source=source,
+                    status="failed",
+                    reason=str(error),
+                    stages=[
+                        StageResult(stage="capture", status="failed", error=str(error))
+                    ],
+                )
             results.append(result)
             if on_source is not None:
                 on_source(result)
+            if termination_signal is not None:
+                break
     finally:
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm)
         _release_lock(handle)
 
     statuses = {result.status for result in results}
@@ -966,6 +1012,9 @@ def run_daily(
             "exit_code": exit_code,
         }
     )
+    if termination_signal is not None:
+        summary["termination_signal"] = termination_signal
+        summary["sources_not_started"] = list(ordered[len(results) :])
     return summary
 
 
