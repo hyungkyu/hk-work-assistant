@@ -7,6 +7,10 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY src ./src
+# The migrations travel with the image. Without them a container asked to
+# migrate finds an empty directory, and before apply_migrations learned to
+# refuse that, it reported the database fully migrated.
+COPY sql ./sql
 
 RUN pip install --no-cache-dir .
 

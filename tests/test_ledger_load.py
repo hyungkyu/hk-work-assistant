@@ -477,3 +477,33 @@ def test_reloading_the_same_live_file_is_skipped_as_unchanged(tmp_path, monkeypa
 
     assert result.batches_skipped_unchanged == 1
     assert result.ledger_records == 0
+
+
+def test_an_empty_migrations_directory_is_refused_not_reported_as_migrated(
+    tmp_path,
+) -> None:
+    """`pending: []` must mean "nothing left", never "I looked nowhere".
+
+    On 2026-09-08 a container was asked to migrate with a relative
+    --migrations-dir. The image did not carry sql/, `Path.glob` on the missing
+    directory returned nothing, and the command reported the database fully
+    migrated. Twice, to a person watching the output both times.
+    """
+    from rlwrld_worklog.ledger.load import apply_migrations
+
+    for directory in (tmp_path / "not-there", tmp_path / "empty"):
+        (tmp_path / "empty").mkdir(exist_ok=True)
+        with pytest.raises(FileNotFoundError, match="refusing to report"):
+            apply_migrations(
+                database_url="postgresql://unreachable/nowhere",
+                migrations_dir=directory,
+                dry_run=True,
+            )
+
+
+def test_the_image_carries_the_migrations_it_may_be_asked_to_apply(  ) -> None:
+    """A container run is the only way to reach the database from the host today."""
+    from pathlib import Path as _Path
+
+    dockerfile = (_Path(__file__).resolve().parents[1] / "Dockerfile").read_text(encoding="utf-8")
+    assert "COPY sql ./sql" in dockerfile

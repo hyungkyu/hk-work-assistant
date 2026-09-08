@@ -36,7 +36,17 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    networks: [backend]
+    # Both networks, and this is why the published port above did nothing for
+    # two days. `backend` is `internal: true`, which is what keeps the database
+    # off the internet -- and an internal-only container has no route for an
+    # inbound published port either, so Docker accepted the mapping and never
+    # created it. `docker port` printed nothing and `docker compose ps` showed
+    # a bare `5432/tcp`, with no error anywhere to say why.
+    #
+    # Attaching to `frontend` restores the loopback publish. The database is
+    # still not exposed beyond 127.0.0.1 -- that is the port spec's job, and it
+    # is unchanged -- and app-to-database traffic still runs over `backend`.
+    networks: [backend, frontend]
 
   app:
     build: .

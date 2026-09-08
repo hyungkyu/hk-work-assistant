@@ -69,6 +69,30 @@ REQUIRES_DATABASE = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def _clean_corpus():
+    """Leave the throwaway database as this suite found it.
+
+    `WORKLOG_TEST_DATABASE_URL` is shared with the loader round-trip tests, and
+    those verify that the database holds exactly what the ledger files hold.
+    Rows seeded here and left behind made that check fail -- a real failure
+    report about a fake problem, which is worse than no check at all.
+    """
+    yield
+    url = os.environ.get("WORKLOG_TEST_DATABASE_URL")
+    if not url:
+        return
+    import psycopg
+
+    try:
+        with psycopg.connect(url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("DELETE FROM ledger_extracted_text WHERE extractor = 'test'")
+            connection.commit()
+    except Exception:
+        pass
+
+
 def _seed(url: str) -> None:
     """A schema and three documents: two Korean, one English."""
     import psycopg
@@ -85,7 +109,7 @@ def _seed(url: str) -> None:
     )
     with psycopg.connect(url) as connection:
         with connection.cursor() as cursor:
-            cursor.execute("DELETE FROM ledger_extracted_text")
+            cursor.execute("DELETE FROM ledger_extracted_text WHERE extractor = 'test'")
             for index, (source, text) in enumerate(
                 (
                     ("notion", "회의에서 수집을 매일 돌리기로 했다"),

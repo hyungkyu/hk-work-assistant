@@ -546,6 +546,17 @@ def apply_migrations(
     import psycopg
 
     files = sorted(migrations_dir.glob("*.sql"))
+    if not files:
+        # `Path.glob` on a directory that is not there returns nothing, so a
+        # wrong --migrations-dir reported `pending: []` and `plan: []` -- which
+        # reads as "fully migrated" and means "I found no migrations at all".
+        # That happened on 2026-09-08: the app image does not carry sql/, and a
+        # container run pointed at a relative path found an empty world and
+        # said everything was applied.
+        raise FileNotFoundError(
+            f"no .sql files under {migrations_dir}; refusing to report a database "
+            "as migrated on the strength of an empty directory"
+        )
     plan: list[dict[str, Any]] = []
     with psycopg.connect(database_url) as connection:
         connection.autocommit = False
