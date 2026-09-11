@@ -832,3 +832,30 @@ worklog ledger-load slack --ledger-root $LEDGER --apply
 
 A manifest whose status is `degraded` or `failed` is refused by
 `ledger-live-convert`; only `success` and `success_with_skips` convert.
+
+## The digest batch
+
+A second daily unit, `hkwa-digest.timer` at 09:30 KST, after the collection
+window closes. It runs `scripts/digest-tick.sh`, which does three things in an
+order that is not arbitrary:
+
+1. `worklog org sync --apply` — read the roster sheet and record it as an
+   observation. First, because a digest built before it attributes yesterday's
+   work to the day-before's org chart, and somebody who joined yesterday has
+   no rows at all.
+2. `worklog digest --apply` — yesterday, KST. Never today: today is not over,
+   and a digest of a partial day is one nothing would correct.
+3. `worklog org chart --html` — render the chart from the observation step 1
+   just wrote.
+
+Both pages are generated here and nowhere else. Nobody edits them by hand and
+no model writes them: the person page lists **every** activity of the day in
+time order, assembled from fields the collectors recorded, and an event whose
+source gave no title says so rather than being given one.
+
+Backfill is `worklog digest --since <KST date> --until <KST date> --apply`.
+`worklog digest --status` says which days exist.
+
+The roster needs no new Google scope: it is exported through Drive as XLSX,
+which `drive.readonly` already covers, and which returns every tab in one
+request — a CSV export returns only the first, and the roster has two.

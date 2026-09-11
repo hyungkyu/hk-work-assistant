@@ -34,6 +34,7 @@ EXPECTED_INTERVAL_HOURS: dict[str, float] = {
     "daily-collect": 24.0,
     "daily-catchup": 24.0,
     "collection-audit": 24.0,
+    "digest": 24.0,
     "board-audit": 1.0,
 }
 

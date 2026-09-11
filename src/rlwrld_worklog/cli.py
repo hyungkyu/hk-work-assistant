@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import IO, Sequence
 
@@ -246,6 +246,68 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Report what the corpus holds instead of searching, so an empty "
         "result can be told from an empty index",
+    )
+
+    org = subparsers.add_parser("org", help="The organisation: roster sync and the org chart")
+    org_commands = org.add_subparsers(dest="org_command", required=True)
+
+    org_sync = org_commands.add_parser(
+        "sync", help="Read the roster sheet and record it as an observation"
+    )
+    org_sync.add_argument("--database-url", default=None)
+    org_sync.add_argument(
+        "--workbook",
+        type=Path,
+        default=None,
+        help="Read this .xlsx instead of exporting from Drive. For a rerun "
+        "without network, never for the scheduled batch",
+    )
+    org_sync.add_argument("--sheet-id", default=None)
+    org_sync.add_argument("--config-root", type=Path, default=None)
+    org_sync.add_argument(
+        "--apply", action="store_true", help="Write the observation. Without it, count only"
+    )
+    org_sync.add_argument(
+        "--reobserve",
+        action="store_true",
+        help="Record an observation even when the workbook is unchanged since "
+        "the last one",
+    )
+
+    org_chart_parser = org_commands.add_parser(
+        "chart", help="The org chart from the latest observation"
+    )
+    org_chart_parser.add_argument("--database-url", default=None)
+    org_chart_parser.add_argument(
+        "--html", type=Path, default=None, help="Write the page here instead of JSON"
+    )
+    org_chart_parser.add_argument(
+        "--include-retired", action="store_true", help="Include people marked 퇴사"
+    )
+
+    org_status_parser = org_commands.add_parser(
+        "status", help="What the organisation store holds"
+    )
+    org_status_parser.add_argument("--database-url", default=None)
+
+    digest_parser = subparsers.add_parser(
+        "digest", help="Per-person daily digests, built from the timeline"
+    )
+    digest_parser.add_argument("--database-url", default=None)
+    digest_parser.add_argument(
+        "--date", default=None, help="A KST date. Defaults to yesterday KST"
+    )
+    digest_parser.add_argument("--since", default=None, help="Backfill from this KST date")
+    digest_parser.add_argument("--until", default=None, help="Backfill through this KST date")
+    digest_parser.add_argument(
+        "--apply", action="store_true", help="Write the digests. Without it, count only"
+    )
+    digest_parser.add_argument("--person", default=None, help="Read one person's day")
+    digest_parser.add_argument(
+        "--html", type=Path, default=None, help="With --person, write the page here"
+    )
+    digest_parser.add_argument(
+        "--status", action="store_true", help="Which days have digests"
     )
 
     timeline_project = subparsers.add_parser(
@@ -1016,6 +1078,140 @@ def search_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _kst_today() -> date:
+    """Today in KST. Every window in this system is KST, including this one."""
+    return (datetime.now(timezone.utc) + timedelta(hours=9)).date()
+
+
+def org_command(args: argparse.Namespace) -> int:
+    database_url = args.database_url or os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise SystemExit("DATABASE_URL or --database-url is required")
+
+    if args.org_command == "status":
+        from .org.store import org_status
+
+        _print_json("org_status", org_status(database_url))
+        return 0
+
+    if args.org_command == "chart":
+        from .org.chart import org_chart
+
+        chart = org_chart(database_url, include_retired=args.include_retired)
+        if args.html:
+            from .render import render_org_chart
+
+            args.html.parent.mkdir(parents=True, exist_ok=True)
+            args.html.write_text(render_org_chart(chart), encoding="utf-8")
+            _print_json(
+                "org_chart",
+                {
+                    "html": str(args.html),
+                    "people": chart["people"],
+                    "roots": [node["name"] for node in chart["tree"]],
+                    "observed_at": chart.get("observed_at"),
+                },
+            )
+            return 0
+        _print_json("org_chart", chart)
+        return 0
+
+    # sync
+    from .org.sheet import ROSTER_SHEET_ID, TABS, read_all, summarize, workbook_digest
+    from .org.store import write_observation
+
+    if args.workbook:
+        data = args.workbook.read_bytes()
+    else:
+        from .daily import load_credentials
+        from .google_auth import DRIVE_READONLY_SCOPE, load_credentials as load_google
+        from .org.sheet import export_workbook
+
+        credentials = load_credentials(args.config_root)
+        if not credentials.google_token_path:
+            raise SystemExit("no Google token is available; authorize it in the backoffice first")
+        # Drive read-only, which this installation's token already carries.
+        # The roster needs no new scope and no re-authorisation.
+        google = load_google(credentials.google_token_path, [DRIVE_READONLY_SCOPE])
+        data = export_workbook(google, args.sheet_id or ROSTER_SHEET_ID)
+
+    digest = workbook_digest(data)
+    by_tab = read_all(data, TABS)
+    results = []
+    for tab in TABS:
+        outcome = write_observation(
+            database_url,
+            by_tab[tab],
+            source=tab,
+            digest=digest,
+            dry_run=not args.apply,
+            skip_unchanged=not args.reobserve,
+        )
+        results.append(outcome.as_dict())
+    _print_json(
+        "org_sync",
+        {
+            "workbook_sha256": digest,
+            "summary": summarize(by_tab),
+            "tabs": results,
+        },
+    )
+    return 1 if any(item["errors"] for item in results) else 0
+
+
+def digest_command(args: argparse.Namespace) -> int:
+    from . import digest as digest_module
+
+    database_url = args.database_url or os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise SystemExit("DATABASE_URL or --database-url is required")
+
+    if args.status:
+        _print_json("digest_status", digest_module.digest_status(database_url))
+        return 0
+
+    if args.person:
+        day = date.fromisoformat(args.date) if args.date else _kst_today() - timedelta(days=1)
+        found = digest_module.read_digest(database_url, args.person, day)
+        if found is None:
+            _print_json("digest", {"person_id": args.person, "day": day.isoformat(), "found": False})
+            return 1
+        if args.html:
+            from .render import render_person_day
+
+            args.html.parent.mkdir(parents=True, exist_ok=True)
+            args.html.write_text(render_person_day(found), encoding="utf-8")
+            _print_json(
+                "digest",
+                {
+                    "html": str(args.html),
+                    "person_id": args.person,
+                    "day": day.isoformat(),
+                    "events": found["events_total"],
+                },
+            )
+            return 0
+        _print_json("digest", found)
+        return 0
+
+    if args.since:
+        start = date.fromisoformat(args.since)
+        end = date.fromisoformat(args.until) if args.until else _kst_today() - timedelta(days=1)
+        _print_json(
+            "digest_backfill",
+            digest_module.build_range(database_url, start, end, dry_run=not args.apply),
+        )
+        return 0
+
+    # The default is yesterday KST: the batch runs in the morning, and today
+    # is not over, so "today" would be a digest of a partial day that nothing
+    # would ever correct.
+    day = date.fromisoformat(args.date) if args.date else _kst_today() - timedelta(days=1)
+    result = digest_module.build_day(database_url, day, dry_run=not args.apply)
+    _print_json("digest_build", result.as_dict())
+    return 1 if result.errors else 0
+
+
 def timeline_project_command(args: argparse.Namespace) -> int:
     from .ledger.project import project_timeline, timeline_status
 
@@ -1258,6 +1454,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return search_index_command(args)
     if args.command == "timeline-project":
         return timeline_project_command(args)
+    if args.command == "org":
+        return org_command(args)
+    if args.command == "digest":
+        return digest_command(args)
     if args.command == "ledger-verify":
         return ledger_verify(args)
     if args.command == "ledger-schema":

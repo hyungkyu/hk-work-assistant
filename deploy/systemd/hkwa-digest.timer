@@ -1,0 +1,18 @@
+[Unit]
+Description=Daily digest at 09:30 KST, after the collection window closes
+
+[Timer]
+# After the collection, not before it. The nightly collection starts at 06:00
+# KST and has been taking about two and a half hours; a digest built while it
+# is still running describes a day that is still arriving, and nothing would
+# ever correct it.
+OnCalendar=*-*-* 09:30:00 Asia/Seoul
+# A machine asleep at 09:30 builds when it wakes. A skipped day is a day with
+# no digest, and a gap in the record is what this exists to prevent.
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=60s
+Unit=hkwa-digest.service
+
+[Install]
+WantedBy=timers.target
