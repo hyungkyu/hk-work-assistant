@@ -248,6 +248,40 @@ def build_parser() -> argparse.ArgumentParser:
         "result can be told from an empty index",
     )
 
+    timeline_project = subparsers.add_parser(
+        "timeline-project",
+        help="Project loaded ledger records onto the activity timeline",
+    )
+    timeline_project.add_argument(
+        "--source",
+        action="append",
+        default=[],
+        choices=["slack", "notion", "google_calendar", "github", "slurm"],
+        help="Repeatable. Without any, every source is projected",
+    )
+    timeline_project.add_argument(
+        "--entity-type",
+        action="append",
+        default=[],
+        help="Repeatable. Without any, every projected entity type is included",
+    )
+    timeline_project.add_argument("--database-url", default=None)
+    timeline_project.add_argument(
+        "--apply", action="store_true", help="Write the rows. Without it, count only"
+    )
+    timeline_project.add_argument(
+        "--reproject",
+        action="store_true",
+        help="Re-derive records that already have a timeline event, for when "
+        "the projection itself changed rather than the data",
+    )
+    timeline_project.add_argument(
+        "--status",
+        action="store_true",
+        help="Report ledger records against timeline events per source, so an "
+        "unprojected source cannot hide behind a successful collection",
+    )
+
     search_index = subparsers.add_parser(
         "search-index",
         help="Extract text from loaded ledger records into the search corpus",
@@ -982,6 +1016,26 @@ def search_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def timeline_project_command(args: argparse.Namespace) -> int:
+    from .ledger.project import project_timeline, timeline_status
+
+    database_url = args.database_url or os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise SystemExit("DATABASE_URL or --database-url is required")
+    if args.status:
+        _print_json("timeline_status", timeline_status(database_url))
+        return 0
+    result = project_timeline(
+        database_url,
+        sources=tuple(args.source),
+        entity_types=tuple(args.entity_type),
+        reproject=args.reproject,
+        dry_run=not args.apply,
+    )
+    _print_json("timeline_project", result.as_dict())
+    return 1 if result.errors else 0
+
+
 def search_index_command(args: argparse.Namespace) -> int:
     from .ledger.extract_text import index_ledger_text
 
@@ -1202,6 +1256,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return search_command(args)
     if args.command == "search-index":
         return search_index_command(args)
+    if args.command == "timeline-project":
+        return timeline_project_command(args)
     if args.command == "ledger-verify":
         return ledger_verify(args)
     if args.command == "ledger-schema":

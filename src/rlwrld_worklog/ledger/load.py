@@ -38,15 +38,53 @@ LIVE_ORIGIN_PRIORITY = 100
 
 # Entity types projected onto the activity timeline. Notion blocks stay in the
 # ledger only: they are page content, not a timeline activity, and promoting
-# them would double-count page edits.
-PROJECTED_ENTITY_TYPES = {"message", "page", "comment", "event"}
+# them would double-count page edits. Slurm step rows (`.batch`, `.extern`)
+# never reach the ledger at all, for the same reason -- they are parts of a
+# job, not activities.
+#
+# GitHub and Slurm were absent from this set until 2026-09-11, and the effect
+# was not a missing feature but a silent one: measured on the nightly load of
+# 2026-09-10 KST, github had 1,710 ledger records and 0 timeline events, slurm
+# 11,556 and 0. The data was collected, converted, loaded and then stopped one
+# layer short of anything a person could read, so "who did what last week"
+# answered for Slack and Notion and omitted everyone who wrote code or ran a
+# training job.
+PROJECTED_ENTITY_TYPES = {
+    "message",
+    "page",
+    "comment",
+    "event",
+    # GitHub
+    "commit",
+    "pull_request",
+    "review",
+    "review_comment",
+    "issue",
+    "issue_comment",
+    # Slurm
+    "job",
+}
 
 EVENT_TYPE_BY_ENTITY = {
     "message": "message",
     "page": "notion_page",
     "comment": "notion_comment",
     "event": "calendar_event",
+    # Prefixed by source, because `issue` and `comment` alone would collide
+    # with names a future source will want, and an event_type is read by
+    # people as well as by queries.
+    "commit": "github_commit",
+    "pull_request": "github_pull_request",
+    "review": "github_review",
+    "review_comment": "github_review_comment",
+    "issue": "github_issue",
+    "issue_comment": "github_issue_comment",
+    "job": "slurm_job",
 }
+
+# GitHub activity entities whose author the collector already resolved to a
+# login, recorded in `relations.author`.
+_GITHUB_AUTHORED = {"pull_request", "review", "review_comment", "issue", "issue_comment"}
 
 LEDGER_UPSERT = """
 INSERT INTO ledger_records (
@@ -236,6 +274,30 @@ def _observation_date(records: list[dict[str, Any]]):
     return None
 
 
+def _commit_actor(relations: dict[str, Any], raw: dict[str, Any]) -> tuple[str | None, str]:
+    """A commit's author, and which identity space the answer is in.
+
+    A commit read over REST carries the GitHub account that authored it; the
+    same commit read from a local bare mirror carries only the git author
+    email, because that is all a git object holds. Both identify a person and
+    neither can be converted into the other here, so the projection records
+    which one it got rather than pretending they are the same namespace.
+    Identity mapping (people/identities) is what reconciles them, and it can
+    only do that if this row says which kind of handle it holds.
+    """
+    author = raw.get("author")
+    if isinstance(author, dict) and author.get("login"):
+        return str(author["login"]), "github_login"
+    email = relations.get("author_email") or (
+        ((raw.get("commit") or {}).get("author") or {}).get("email")
+        if isinstance(raw.get("commit"), dict)
+        else None
+    )
+    if email:
+        return str(email), "git_email"
+    return None, "unknown"
+
+
 def _projection(record: dict[str, Any]) -> dict[str, Any]:
     """Derive the service timeline row from a ledger record."""
     entity = record["entity_type"]
@@ -243,7 +305,34 @@ def _projection(record: dict[str, Any]) -> dict[str, Any]:
     scope = record.get("scope") or {}
     labels = record.get("denormalized_label_snapshot") or {}
     raw = record.get("raw_payload") or {}
-    if entity == "message":
+    actor_kind = "unknown"
+    if entity == "commit":
+        actor, actor_kind = _commit_actor(relations, raw)
+        container = scope.get("repository")
+        # A commit's thread is its repository: a commit belongs to a history,
+        # not to a conversation, and grouping by repository is what a reader
+        # asking "what happened in this repo" wants.
+        thread = scope.get("repository")
+        permalink = raw.get("html_url")
+    elif entity in _GITHUB_AUTHORED:
+        actor = relations.get("author")
+        actor_kind = "github_login" if actor else "unknown"
+        container = scope.get("repository")
+        # Reviews and comments hang off a pull request or issue; grouping them
+        # under that URL is what makes a review thread readable as one thing.
+        thread = (
+            relations.get("pull_request_url")
+            or relations.get("issue_url")
+            or record["source_entity_id"]
+        )
+        permalink = raw.get("html_url")
+    elif entity == "job":
+        actor = relations.get("user")
+        actor_kind = "slurm_user" if actor else "unknown"
+        container = scope.get("cluster")
+        thread = record["source_entity_id"]
+        permalink = None
+    elif entity == "message":
         actor = relations.get("author_user_id")
         container = scope.get("channel_id")
         thread = relations.get("thread_id")
@@ -265,6 +354,7 @@ def _projection(record: dict[str, Any]) -> dict[str, Any]:
         permalink = raw.get("htmlLink")
     return {
         "actor": actor,
+        "actor_kind": actor_kind,
         "container": container,
         "thread": thread,
         "permalink": permalink,
@@ -287,6 +377,10 @@ def _payload_for_timeline(record: dict[str, Any], projection: dict[str, Any]) ->
         "source_updated_at_status": record.get("source_updated_at_status"),
         "deleted_status": (record.get("deleted_state") or {}).get("status"),
         "labels": projection["labels"],
+        # Which identity space `actor_external_id` is in. Never guessed: a row
+        # whose actor could not be read says `unknown` rather than naming a
+        # space it does not belong to.
+        "actor_kind": projection["actor_kind"],
         "provenance": {
             "source_file": (record.get("provenance") or {}).get("source_file"),
             "source_file_sha256": (record.get("provenance") or {}).get("source_file_sha256"),

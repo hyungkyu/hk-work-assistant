@@ -41,6 +41,15 @@ Per source, in four separately reported stages:
 | `load` | that JSONL | PostgreSQL | the source is `degraded`; re-runnable from the ledger |
 | `index` | loaded `ledger_records` | `search_documents` (the search corpus) | the source is `degraded`; re-runnable with `worklog search-index` |
 
+`load` also projects, in the same transaction: an activity record becomes a
+`timeline_events` row with an actor, a container and a time, which is the
+layer every report and screen reads.  Records already loaded before a change
+to what gets projected are reached by `worklog timeline-project --apply`
+instead, because `skip_unchanged` means the loader never re-reads their
+batches; `worklog timeline-project --status` reports ledger records against
+timeline events per source, which is the number that would have shown GitHub
+and Slurm sitting at 0 events against 13,266 records for as long as they did.
+
 The `index` stage only runs after a real, successful load — there is nothing
 new to index otherwise — and a missing `DATABASE_URL` degrades the run rather
 than skipping quietly (`--no-database` remains an explicit, `ok` choice).
