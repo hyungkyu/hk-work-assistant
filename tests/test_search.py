@@ -87,7 +87,7 @@ def _clean_corpus():
     try:
         with psycopg.connect(url) as connection:
             with connection.cursor() as cursor:
-                cursor.execute("DELETE FROM ledger_extracted_text WHERE extractor = 'test'")
+                cursor.execute("DELETE FROM search_documents WHERE extractor = 'test'")
             connection.commit()
     except Exception:
         pass
@@ -109,7 +109,7 @@ def _seed(url: str) -> None:
     )
     with psycopg.connect(url) as connection:
         with connection.cursor() as cursor:
-            cursor.execute("DELETE FROM ledger_extracted_text WHERE extractor = 'test'")
+            cursor.execute("DELETE FROM search_documents WHERE extractor = 'test'")
             for index, (source, text) in enumerate(
                 (
                     ("notion", "회의에서 수집을 매일 돌리기로 했다"),
@@ -119,13 +119,12 @@ def _seed(url: str) -> None:
             ):
                 cursor.execute(
                     """
-                    INSERT INTO ledger_extracted_text
-                        (artifact_id, schema_version, source, kind, text_content,
-                         text_sha256, char_length, byte_length, extractor)
-                    VALUES (gen_random_uuid(), '1.0', %s, 'test', %s,
-                            %s, %s, %s, 'test')
+                    INSERT INTO search_documents
+                        (doc_id, source, entity_type, external_id,
+                         text_content, text_sha256, extractor)
+                    VALUES (gen_random_uuid(), %s, 'test', %s, %s, %s, 'test')
                     """,
-                    (source, text, f"sha{index}", len(text), len(text.encode()), ),
+                    (source, f"test-{index}", text, f"sha{index}"),
                 )
         connection.commit()
 

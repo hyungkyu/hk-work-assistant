@@ -267,15 +267,22 @@ def test_github_and_slurm_reach_the_ledger_and_load_stages(tmp_path: Path, monke
     converted it, so three of five sources had no ledger record since
     2026-09-01 while the archive filled up behind them.
     """
+    import rlwrld_worklog.ledger.extract_text as extract_module
     import rlwrld_worklog.ledger.load as load_module
 
     loaded: list[str] = []
+    indexed: list[tuple[str, ...]] = []
 
     def record(**kwargs):
         loaded.append(kwargs["source"])
         return load_module.LoadResult(source=kwargs["source"], dry_run=kwargs["dry_run"])
 
+    def record_index(database_url, *, sources=(), dry_run=False):
+        indexed.append(tuple(sources))
+        return extract_module.IndexResult(dry_run=dry_run)
+
     monkeypatch.setattr(load_module, "load_source", record)
+    monkeypatch.setattr(extract_module, "index_ledger_text", record_index)
     summary = run_daily(
         config(
             tmp_path,
@@ -289,10 +296,11 @@ def test_github_and_slurm_reach_the_ledger_and_load_stages(tmp_path: Path, monke
 
     assert [item["source"] for item in summary["sources"]] == ["github", "slurm"]
     assert loaded == ["github", "slurm"], "the ledger source names, not the collector directories"
+    assert indexed == [("github",), ("slurm",)], "a successful load is followed by text indexing"
     for name in ("github", "slurm"):
         result = source(summary, name)
         assert result["status"] == "ok"
-        for stage_name in ("capture", "ledger", "load"):
+        for stage_name in ("capture", "ledger", "load", "index"):
             assert stage(result, stage_name)["status"] == "ok"
         assert stage(result, "ledger")["detail"]["records_written"] > 0
         assert Path(stage(result, "ledger")["detail"]["output_path"]).is_file()
@@ -1065,3 +1073,30 @@ def test_the_daily_run_hands_the_collector_the_seeds_the_backoffice_holds(
         "a production run carries the configured seeds; a smoke run is bounded "
         "by construction and must not inherit a list of unknown length"
     )
+
+
+def test_an_index_failure_degrades_the_run_but_keeps_the_load(tmp_path: Path, monkeypatch) -> None:
+    """The corpus falling behind is visible, without undoing the night's load."""
+    import rlwrld_worklog.ledger.extract_text as extract_module
+    import rlwrld_worklog.ledger.load as load_module
+
+    monkeypatch.setattr(
+        load_module,
+        "load_source",
+        lambda **kwargs: load_module.LoadResult(source=kwargs["source"], dry_run=kwargs["dry_run"]),
+    )
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("synthetic extractor outage")
+
+    monkeypatch.setattr(extract_module, "index_ledger_text", explode)
+    summary = run_daily(
+        config(tmp_path, load_database=True, database_url="postgresql://fake"),
+        credentials=credentials(tmp_path),
+        captures={"slack": slack_capture},
+    )
+    result = source(summary, "slack")
+    assert result["status"] == "degraded"
+    assert stage(result, "load")["status"] == "ok"
+    assert stage(result, "index")["status"] == "failed"
+    assert summary["exit_code"] == EXIT_DOWNSTREAM_FAILED

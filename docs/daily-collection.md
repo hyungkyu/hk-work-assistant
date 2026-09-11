@@ -32,13 +32,18 @@ manifests is documented in [collection-status.md](collection-status.md).
 
 ## What one `daily-collect` run does
 
-Per source, in three separately reported stages:
+Per source, in four separately reported stages:
 
 | Stage | Input | Output | On failure |
 |---|---|---|---|
 | `capture` | official read-only API | immutable raw archive + run manifest | the source is `failed`; other sources still run |
 | `ledger` | that run manifest | validated standard v1 JSONL | the source is `degraded`; the raw capture stays on disk |
 | `load` | that JSONL | PostgreSQL | the source is `degraded`; re-runnable from the ledger |
+| `index` | loaded `ledger_records` | `search_documents` (the search corpus) | the source is `degraded`; re-runnable with `worklog search-index` |
+
+The `index` stage only runs after a real, successful load — there is nothing
+new to index otherwise — and a missing `DATABASE_URL` degrades the run rather
+than skipping quietly (`--no-database` remains an explicit, `ok` choice).
 
 A capture that succeeded stays successful and re-projectable when the ledger
 projection or the database load afterwards fails, because both later stages

@@ -907,9 +907,31 @@ def _run_source(
         load_stage.status = "failed"
         load_stage.error = _redact(error)
 
+    # Text extraction into the search corpus, only over what a real load can
+    # have landed. A failed load leaves nothing new to index and the stage is
+    # skipped rather than run against yesterday's rows, so the report says
+    # which step actually did the night's work.
+    if load_stage.status == "ok" and not (config.dry_run or config.smoke):
+        index_stage = outcome.add(StageResult(stage="index", status="pending"))
+        try:
+            from .ledger.extract_text import index_ledger_text
+
+            indexed = index_ledger_text(
+                config.database_url, sources=(ledger_source,), dry_run=False
+            )
+            index_stage.detail = indexed.as_dict()
+            index_stage.status = "ok" if not indexed.errors else "failed"
+            if indexed.errors:
+                index_stage.error = "; ".join(indexed.errors[:3])
+        except Exception as error:
+            index_stage.status = "failed"
+            index_stage.error = _redact(error)
+        if index_stage.status != "ok":
+            outcome.status = "degraded"
+
     if captured.degraded_reason or load_stage.status not in {"ok", "skipped"}:
         outcome.status = "degraded"
-    else:
+    elif outcome.status != "degraded":
         outcome.status = "ok"
     return outcome
 

@@ -78,15 +78,20 @@ def test_constraint_changes_drop_before_adding():
             assert name in dropped, f"{path.name}: ADD CONSTRAINT {name} without a preceding DROP"
 
 
-def test_migrations_contain_no_data():
+def test_migrations_carry_no_literal_data():
+    """No collected or personal data may enter the repository through a migration.
+
+    An INSERT ... VALUES carries its rows in the file, so it is forbidden. An
+    INSERT ... SELECT moves rows already inside the database (0006 copies the
+    preserved legacy text into the search corpus) and carries nothing in the
+    file, so it is allowed -- the rule guards the repository's contents, not
+    the INSERT keyword.
+    """
     for path in migration_files():
         text = path.read_text()
-        inserts = [
-            line
-            for line in text.splitlines()
-            if re.match(r"\s*INSERT\s+INTO", line, re.I)
-        ]
-        assert not inserts, f"{path.name} contains INSERT statements: {inserts}"
+        statements = re.findall(r"INSERT\s+INTO[^;]+;", text, re.I | re.S)
+        offenders = [s[:80] for s in statements if re.search(r"\bVALUES\b", s, re.I)]
+        assert not offenders, f"{path.name} inserts literal rows: {offenders}"
 
 
 def test_ledger_tables_are_defined():

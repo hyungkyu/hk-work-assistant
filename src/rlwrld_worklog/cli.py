@@ -218,7 +218,10 @@ def build_parser() -> argparse.ArgumentParser:
     search_cmd = subparsers.add_parser(
         "search", help="Search collected text in the service database"
     )
-    search_cmd.add_argument("query", help="What to look for")
+    # nargs="?" because --status is a query-less mode. The first version
+    # demanded a query anyway and `search --status` was unusable -- found by
+    # running it in production, which is one run too late.
+    search_cmd.add_argument("query", nargs="?", default=None, help="What to look for")
     search_cmd.add_argument(
         "--matcher",
         choices=list(SEARCH_MATCHERS),
@@ -243,6 +246,24 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Report what the corpus holds instead of searching, so an empty "
         "result can be told from an empty index",
+    )
+
+    search_index = subparsers.add_parser(
+        "search-index",
+        help="Extract text from loaded ledger records into the search corpus",
+    )
+    search_index.add_argument(
+        "--source",
+        action="append",
+        default=[],
+        choices=["slack", "notion", "google_calendar", "github", "slurm"],
+        help="Repeatable. Without any, every source is indexed",
+    )
+    search_index.add_argument("--database-url", default=None)
+    search_index.add_argument(
+        "--apply",
+        action="store_true",
+        help="Write the documents. Without it, extract and count only",
     )
 
     ledger_verify = subparsers.add_parser(
@@ -940,6 +961,8 @@ def search_command(args: argparse.Namespace) -> int:
     if args.status:
         _print_json("search_status", search_status(database_url))
         return 0
+    if not args.query:
+        raise SystemExit("a search needs a query (or --status for the corpus report)")
     try:
         result = search_text(
             database_url,
@@ -957,6 +980,19 @@ def search_command(args: argparse.Namespace) -> int:
     # a caller that treats "nothing matched" as an error cannot tell it from
     # "the database was unreachable", which is the distinction that matters.
     return 0
+
+
+def search_index_command(args: argparse.Namespace) -> int:
+    from .ledger.extract_text import index_ledger_text
+
+    database_url = args.database_url or os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise SystemExit("DATABASE_URL or --database-url is required")
+    result = index_ledger_text(
+        database_url, sources=tuple(args.source), dry_run=not args.apply
+    )
+    _print_json("search_index", result.as_dict())
+    return 1 if result.errors else 0
 
 
 def ledger_load(args: argparse.Namespace) -> int:
@@ -1164,6 +1200,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return ledger_load(args)
     if args.command == "search":
         return search_command(args)
+    if args.command == "search-index":
+        return search_index_command(args)
     if args.command == "ledger-verify":
         return ledger_verify(args)
     if args.command == "ledger-schema":

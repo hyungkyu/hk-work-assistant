@@ -1,9 +1,15 @@
 """Search the collected text, in the database that already holds it.
 
-One corpus: `ledger_extracted_text`, one row per artifact, with provenance back
-to the ledger record and from there to the raw archive page it came from. Every
-hit therefore carries where it came from, which is the difference between a
-search result and a claim.
+One corpus: `search_documents`, one row per collected entity, extracted from
+`ledger_records.raw_payload` at load time by ledger/extract_text.py (the 938
+preserved legacy documents are copied in by migration 0006). Every hit carries
+its ledger provenance, which is the difference between a search result and a
+claim.
+
+This module's first version searched `ledger_extracted_text` in the belief
+that it held everything collected; that table is preservation-only and held
+938 Notion documents. The premise was wrong, not the matchers -- the matchers
+moved corpus unchanged.
 
 Two matchers, because Korean needs both:
 
@@ -86,12 +92,15 @@ def _snippet(text: str, query: str) -> str:
 
 
 _SELECT = """
-    SELECT t.artifact_id, t.source, t.kind, t.char_length, t.inserted_at,
-           t.source_ref, t.text_content, {score} AS score
-      FROM ledger_extracted_text t
+    SELECT t.doc_id, t.source, t.entity_type, char_length(t.text_content),
+           COALESCE(t.occurred_at, t.indexed_at) AS happened_at,
+           jsonb_build_object('external_id', t.external_id,
+                              'ledger_id', t.ledger_id) AS source_ref,
+           t.text_content, {score} AS score
+      FROM search_documents t
      WHERE {predicate}
        {filters}
-     ORDER BY score DESC, t.inserted_at DESC
+     ORDER BY score DESC, happened_at DESC
      LIMIT %(limit)s
 """
 
@@ -101,9 +110,9 @@ def _filters(sources: Sequence[str], since: datetime | None, until: datetime | N
     if sources:
         clauses.append("AND t.source = ANY(%(sources)s)")
     if since is not None:
-        clauses.append("AND t.inserted_at >= %(since)s")
+        clauses.append("AND COALESCE(t.occurred_at, t.indexed_at) >= %(since)s")
     if until is not None:
-        clauses.append("AND t.inserted_at < %(until)s")
+        clauses.append("AND COALESCE(t.occurred_at, t.indexed_at) < %(until)s")
     return "\n       ".join(clauses)
 
 
@@ -111,14 +120,14 @@ def _run(cursor, sql: str, parameters: dict[str, Any], query: str, matcher: str)
     cursor.execute(sql, parameters)
     hits = []
     for row in cursor.fetchall():
-        (artifact_id, source, kind, char_length, inserted_at, source_ref, text, score) = row
+        (doc_id, source, entity_type, char_length, happened_at, source_ref, text, score) = row
         hits.append(
             {
-                "artifact_id": str(artifact_id),
+                "artifact_id": str(doc_id),
                 "source": source,
-                "kind": kind,
+                "kind": entity_type,
                 "char_length": char_length,
-                "inserted_at": inserted_at.isoformat() if inserted_at else None,
+                "inserted_at": happened_at.isoformat() if happened_at else None,
                 "source_ref": source_ref or {},
                 "snippet": _snippet(text or "", query),
                 "score": float(score) if score is not None else None,
@@ -213,9 +222,9 @@ def search_status(database_url: str) -> dict[str, Any]:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT source, count(*), max(inserted_at),
+                SELECT source, count(*), max(COALESCE(occurred_at, indexed_at)),
                        count(*) FILTER (WHERE embedding IS NOT NULL)
-                  FROM ledger_extracted_text
+                  FROM search_documents
                  GROUP BY source ORDER BY count(*) DESC
                 """
             )
