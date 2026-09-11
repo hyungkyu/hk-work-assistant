@@ -288,6 +288,24 @@ the delegated-work API" — which was true when it was written and is no longer:
 the work API moved to `require_board_session` and these did not.  Whether that
 is an intended boundary or an omission has not been decided.
 
+## Who may do what without asking
+
+Settled with HK on 2026-09-11.  The board is the unit: **an item HK has said
+to proceed on carries authority to finish it**, code through deploy, without
+asking again.  Leaving that item's scope means asking again.
+
+| | Without asking | Per item, after HK says proceed | Never |
+| --- | --- | --- | --- |
+| | Write code, run tests, commit, push.  Read-only inspection and analysis of production.  Dry runs.  Record on the board, including closing an item with evidence. | Deploy that item's patches to production. | Delete data.  Put collected company data, credentials or 신상 in the repository.  Change how 신상 is handled.  Send anything outside the company. |
+
+Three things are their own decision even inside an approved item, because each
+changes state that outlives the item: a **schema migration**, a **re-collection
+or backfill**, and **registering a new batch**.  Each is asked separately.
+
+Nothing here is enforced by code — it is the working agreement, and the
+mechanisms that make it auditable are the board's own history, the evidence
+required to close an item, and the run logs every batch writes.
+
 ## The outbox: a queue for parties that cannot hold the lock
 
 Writing to the board means taking `items.lock`, which means being a process on
@@ -306,11 +324,26 @@ that:
   beside a `<name>.json.reason.json` receipt, because the worst state is the one
   where someone drops a file and nothing happens anywhere
   (`work_cli.py:404-408`).  The receipt is written before the file is moved.
-- **An edit may set only `next_action` and `detail`.**  The other fields are the
-  executor's own account of the work; a queue that could set `status` or
-  `progress_summary` would let the requester write the report as well as the
-  request, and the board would no longer say who observed what
-  (`work_cli.py:258-262`).
+- **An edit may set the request, and the account of the work only to close it.**
+  `next_action`, `detail`, `assigned_to`, `priority`, `due_at` are the request.
+  `status` may move an item among `backlog`, `todo`, `ready`, `cancelled` —
+  stages that mean nobody is working it — and to `done` **only with an
+  `evidence` string** naming something checkable: a commit sha, a log path
+  under `/data/rlwrld-worklog`, or a manifest path.  `in_progress`, `waiting`
+  and `blocked` remain the executor's own report and are refused.
+  `progress_summary` is writable only as that evidence, on the closing update.
+
+  `done` was forbidden outright until 2026-09-11, for a real reason — a
+  requester who can write `done` can close work nobody did.  The cost showed
+  up when the executor *is* the queue writer: the cloud session reaches the
+  board only through this queue, so the only party that knew work was finished
+  was the only party that could not say so, and eleven verified-complete items
+  sat open while closing them became a chore handed back to the person who
+  asked for the work.  Evidence is what separates the two cases: a claim that
+  points at something falsifiable is auditable, "trust me" is not.  The check
+  is deliberately shallow — it verifies the claim points at something a reader
+  can go and check, not that the thing proves what the closer says.  Deciding
+  that is a person's job (`work_cli.py`, `_evidence_refusal`).
 - **A create may set the request but not the account of it**, and its `status`
   only among `backlog`, `todo`, `ready` — the stages that mean nobody has
   started this.  A queue that could file an item straight to `in_progress` or
@@ -324,7 +357,11 @@ that:
   (`work_cli.py:387-392`).
 
 Fields the allowlist does not cover are reported back in the receipt's
-`ignored` list rather than dropped in silence.  `--outbox` is required and takes
+`ignored` list rather than dropped in silence.  A field that is *in* the
+allowlist but not writable in this combination — `progress_summary` without
+`done`, a `status` only the executor may claim — is refused outright and the
+whole file changes nothing, because a sender whose field was silently
+discarded believes the board says something it does not.  `--outbox` is required and takes
 an arbitrary directory; no canonical location is defined anywhere in the repo.
 
 There is no HTTP equivalent of the outbox.

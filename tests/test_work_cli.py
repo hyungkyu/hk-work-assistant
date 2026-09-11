@@ -303,28 +303,36 @@ def test_the_queue_never_writes_the_executors_report(
 
     _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
     entry = result["results"][0]
-    assert entry["applied"] == ["detail", "next_action"]
-    assert entry["ignored"] == ["blocker", "progress_summary"]
+    # Refused, not partly applied. `progress_summary` used to be dropped while
+    # the rest of the file landed; it is now refused outright, for the same
+    # reason an unwritable `status` always was -- a sender whose field was
+    # silently discarded believes the board says something it does not. The
+    # one way the queue may write it is closing an item with evidence.
+    assert entry["ok"] is False
+    assert "only be set together with status done" in entry["reason"]
+    assert entry["ignored"] == ["blocker"]
 
     _, shown = run(capsys, config, "show", item_id)
     assert shown["item"]["progress_summary"] == ""
     assert shown["item"]["blocker"] is None
+    assert shown["item"]["detail"] is None, "a refused file changes nothing at all"
 
 
 def test_the_queue_refuses_a_status_that_claims_work_happened(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """done, in_progress, waiting and blocked are all claims about what happened.
+    """in_progress, waiting and blocked are claims only the executor may make.
 
     Refused rather than dropped: a queue that silently ignored the field would
-    leave the sender believing the board says something it does not.
+    leave the sender believing the board says something it does not. `done` is
+    the one claim the queue may make, and only with evidence -- the tests
+    below.
     """
     config, outbox = tmp_path / "config", tmp_path / "outbox"
     _, created = run(capsys, config, "create", "--title", "티켓", "--assigned-to", "soa",
                      "--requested-by", "mori")
     item_id = created["item"]["id"]
     for name, status in (
-        ("d.json", "done"),
         ("p.json", "in_progress"),
         ("w.json", "waiting"),
         ("b.json", "blocked"),
@@ -332,12 +340,123 @@ def test_the_queue_refuses_a_status_that_claims_work_happened(
         _queue(outbox, name, {"work_id": item_id, "status": status})
 
     _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
-    assert (result["applied"], result["rejected"]) == (0, 4)
+    assert (result["applied"], result["rejected"]) == (0, 3)
     for entry in result["results"]:
         assert "may not be set from the queue" in entry["reason"]
 
     _, shown = run(capsys, config, "show", item_id)
     assert shown["item"]["status"] == "backlog"
+
+
+def _done_item(capsys, config) -> str:
+    _, created = run(capsys, config, "create", "--title", "티켓", "--assigned-to", "mori",
+                     "--requested-by", "mori")
+    return created["item"]["id"]
+
+
+def test_done_from_the_queue_needs_evidence_that_can_be_checked(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`done` is a claim, so the queue may make it only pointing at something real.
+
+    The executor here is the cloud session, which reaches the board only
+    through this queue -- so forbidding `done` outright meant the only party
+    that knew the work was finished was the only party that could not say so.
+    Evidence is what makes the claim auditable instead of "trust me".
+    """
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    item_id = _done_item(capsys, config)
+    _queue(outbox, "a.json", {"work_id": item_id, "status": "done"})
+    _queue(outbox, "b.json", {"work_id": item_id, "status": "done", "evidence": "했음"})
+    _queue(outbox, "c.json", {"work_id": item_id, "status": "done",
+                              "evidence": "믿어주세요 정말로 다 끝냈습니다"})
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (0, 3)
+    reasons = [entry["reason"] for entry in result["results"]]
+    assert any("needs an `evidence` string" in reason for reason in reasons)
+    assert any("too short to check" in reason for reason in reasons)
+    assert any("nothing checkable" in reason for reason in reasons)
+
+    _, shown = run(capsys, config, "show", item_id)
+    assert shown["item"]["status"] == "backlog"
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    (
+        "커밋 4089173 으로 배포됨",
+        "로그 /data/rlwrld-worklog/logs/daily-collect/last.json 에서 exit 0 확인",
+        "manifests/notion/production/20260910T213706Z-b303eb613275.json",
+    ),
+)
+def test_done_lands_with_its_evidence_recorded(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], evidence: str
+) -> None:
+    """A sha, a log path and a manifest path each close an item, and are kept.
+
+    The evidence is stored as the progress summary, so the closing claim and
+    the thing a reader would check to falsify it sit on the item together.
+    """
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    item_id = _done_item(capsys, config)
+    _queue(outbox, "done.json", {"work_id": item_id, "status": "done", "evidence": evidence})
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (1, 0)
+    entry = result["results"][0]
+    assert "progress_summary" in entry["applied"]
+    assert entry["ignored"] == []
+
+    _, shown = run(capsys, config, "show", item_id)
+    assert shown["item"]["status"] == "done"
+    assert shown["item"]["progress_summary"] == evidence
+
+
+def test_a_progress_summary_without_done_is_still_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The running account of ongoing work stays the executor's alone.
+
+    Only closing an item lets the queue write it, because that is the moment
+    the account is finished. Anything else is the queue narrating work it is
+    not doing.
+    """
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    item_id = _done_item(capsys, config)
+    _queue(outbox, "p.json", {"work_id": item_id, "progress_summary": "내가 대신 쓰는 보고"})
+    _queue(outbox, "q.json", {"work_id": item_id, "status": "todo",
+                              "progress_summary": "여기도 안 된다"})
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (0, 2)
+    for entry in result["results"]:
+        assert "only be set together with status done" in entry["reason"]
+
+    _, shown = run(capsys, config, "show", item_id)
+    assert shown["item"]["progress_summary"] == ""
+
+
+def test_closing_from_the_queue_is_recorded_against_the_queue_owner(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Who closed it must be answerable, or the evidence is decoration."""
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    item_id = _done_item(capsys, config)
+    _queue(outbox, "done.json", {"work_id": item_id, "status": "done",
+                                 "evidence": "커밋 b068847 에서 확인"})
+    run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+
+    _, timeline = run(capsys, config, "timeline", item_id)
+    closing = [
+        entry for entry in timeline["entries"]
+        if entry["action"] == "work.updated" and entry.get("status") == "done"
+    ]
+    assert closing, timeline["entries"]
+    # Named, and resolved to a real party -- not the `local-cli` placeholder
+    # that the board-actor gap leaves on unattributed edits.
+    assert all(entry["actor"]["name"] == "mori" for entry in closing)
+    assert all(entry["actor"]["resolution"] != "unresolved" for entry in closing)
 
 
 def test_the_queue_can_take_back_work_nobody_is_doing(

@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from datetime import datetime, timezone
@@ -308,6 +309,10 @@ OUTBOX_FIELDS = (
     "priority",
     "due_at",
     "status",
+    # Only reachable together with `status: done` and an `evidence` field --
+    # see EVIDENCE_PATTERN below. On any other update it is refused, so the
+    # running account of the work stays the executor's alone.
+    "progress_summary",
 )
 
 # The four stages a requester may move an item to. All four mean "nobody has
@@ -318,6 +323,31 @@ OUTBOX_FIELDS = (
 # Moving *out* of `in_progress` back into the queue is allowed and is not a
 # claim: it disclaims progress rather than asserting it.
 OUTBOX_STATUSES = ("backlog", "todo", "ready", "cancelled")
+
+# `done` is the fifth, and it is different: it is a claim, and it may be made
+# from the queue only with evidence attached.
+#
+# The reason it was forbidden outright is real -- a requester who can write
+# `done` can close work nobody did. But the rule had a cost nobody had
+# noticed: when the executor IS the queue writer (the cloud session, which
+# cannot reach the board directly and reaches it only through this queue), the
+# only party who knows the work is finished is the only party who cannot say
+# so. On 2026-09-11 that left eleven verified-complete items open, and closing
+# them became a chore handed back to the person who asked for the work.
+#
+# Evidence is what separates the two cases. `done` requires an `evidence`
+# string naming something a reader can go and check -- a commit sha, a log
+# path under the data disk, or a manifest path. A claim that points at
+# something falsifiable is auditable; "trust me" is not. The evidence is
+# stored in `progress_summary`, where the executor's own account lives, and
+# the audit log records who wrote it.
+DONE_STATUS = "done"
+EVIDENCE_PATTERN = re.compile(
+    r"(\b[0-9a-f]{7,40}\b"  # a commit sha
+    r"|/data/rlwrld-worklog/\S+"  # a log, manifest or archive path
+    r"|\bmanifests?/\S+)"  # a manifest, relative
+)
+MIN_EVIDENCE_CHARS = 12
 
 # A queued file may also create an item, with `"op": "create"`. Creation is the
 # requester's own act, so the fields it may set are the request - what is
@@ -343,6 +373,31 @@ OUTBOX_CREATE_STATUSES = ("backlog", "todo", "ready")
 
 def _outbox_result(name: str, ok: bool, reason: str, **extra: Any) -> dict[str, Any]:
     return {"file": name, "ok": ok, "reason": reason, **extra}
+
+
+def _evidence_refusal(evidence: Any) -> str | None:
+    """Why this evidence cannot close an item, or None if it can.
+
+    The check is deliberately shallow: it verifies the claim *points at*
+    something checkable, not that the thing says what the closer says it
+    says. Reading a log to decide whether it proves the work is a person's
+    job, and this function's job is to make sure there is something for that
+    person to read.
+    """
+    if not isinstance(evidence, str) or not evidence.strip():
+        return (
+            "status done needs an `evidence` string: a commit sha, a log path "
+            "under /data/rlwrld-worklog, or a manifest path"
+        )
+    text = evidence.strip()
+    if len(text) < MIN_EVIDENCE_CHARS:
+        return f"evidence is too short to check ({len(text)} chars)"
+    if not EVIDENCE_PATTERN.search(text):
+        return (
+            "evidence names nothing checkable: include a commit sha, a log "
+            "path under /data/rlwrld-worklog, or a manifest path"
+        )
+    return None
 
 
 def _apply_one_create(
@@ -427,7 +482,9 @@ def _apply_one_outbox(store: WorkStore, path: Path, actor: str) -> dict[str, Any
 
     fields = {key: payload[key] for key in OUTBOX_FIELDS if key in payload}
     ignored = sorted(
-        set(payload) - set(OUTBOX_FIELDS) - {"work_id", "expected_revision", "op"}
+        set(payload)
+        - set(OUTBOX_FIELDS)
+        - {"work_id", "expected_revision", "op", "evidence"}
     )
     if not fields:
         return _outbox_result(
@@ -439,7 +496,24 @@ def _apply_one_outbox(store: WorkStore, path: Path, actor: str) -> dict[str, Any
             return _outbox_result(path.name, False, f"{key} must be a string", ignored=ignored)
 
     status = fields.get("status")
-    if status is not None and status not in OUTBOX_STATUSES:
+    evidence = payload.get("evidence")
+    if status == DONE_STATUS:
+        # A claim, allowed only with something a reader can go and check.
+        refusal = _evidence_refusal(evidence)
+        if refusal is not None:
+            return _outbox_result(path.name, False, refusal, ignored=ignored)
+        fields["progress_summary"] = str(evidence).strip()
+    elif "progress_summary" in fields:
+        # The running account of the work is the executor's. It rides along
+        # with `done` because closing an item is the moment the account is
+        # finished; on any other update it is not the queue's to write.
+        return _outbox_result(
+            path.name,
+            False,
+            "progress_summary may only be set together with status done and evidence",
+            ignored=ignored,
+        )
+    elif status is not None and status not in OUTBOX_STATUSES:
         # Refused outright rather than dropped from the payload. A queue that
         # silently ignored an unwritable status would leave the sender
         # believing the board says something it does not.
@@ -447,8 +521,8 @@ def _apply_one_outbox(store: WorkStore, path: Path, actor: str) -> dict[str, Any
             path.name,
             False,
             f"status {status!r} may not be set from the queue: only "
-            f"{', '.join(OUTBOX_STATUSES)}. in_progress, waiting, blocked and done "
-            "are the executor's own report",
+            f"{', '.join(OUTBOX_STATUSES)} and done-with-evidence. in_progress, "
+            "waiting and blocked are the executor's own report",
             ignored=ignored,
         )
 
