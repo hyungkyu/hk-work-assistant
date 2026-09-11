@@ -42,34 +42,92 @@ LAB_ROOT = "RLWRLD Virtual Lab"
 UNASSIGNED = "미배정"
 
 
-def rooted_path(department_raw: str | None, *, affiliation: str, source: str) -> list[str]:
+def rooted_path(
+    department_raw: str | None,
+    *,
+    affiliation: str,
+    source: str,
+    advisor: str | None = None,
+) -> list[str]:
     """The chart path for one person, as a list of node names from a root.
 
-    Three cases, in order:
+    A lab is an advisor's lab. That is what 연구실 means for these people, and
+    the roster says it in the external tab's advisor column -- "주한별 교수님".
+    The internal tab's Virtual Lab paths carry project names instead (Modular
+    VLA, Allex, 3D/4D Perception); those are a different axis and cannot
+    answer "whose lab is this person in", so they do not name lab nodes. They
+    are not lost: `department_raw` rides along on every row.
 
-    * A path that names a lab is re-rooted under `RLWRLD Virtual Lab`, keeping
-      everything after the `Virtual Lab` segment as the lab name. `RLWRLD |
-      Model Team | Virtual Lab | Modular VLA` becomes `RLWRLD Virtual Lab |
-      Modular VLA`; a professor listed directly on `... | Virtual Lab` with
-      no lab lands under `미배정`.
-    * A row from the external tab (students) has no company path at all, so
-      whatever department it carries is read as the lab name directly.
+    Four cases, in order:
+
+    * A student with an advisor goes under that advisor's node, verbatim,
+      honorific and all -- the chart shows the sheet's wording.
+    * Any other external row goes under `미배정`, named rather than hidden:
+      an unassigned student is a question for whoever keeps the sheet.
+    * A row whose path names `Virtual Lab` is re-rooted under the lab root.
+      Its professor is placed on their own lab node by `place_professors`
+      below, which needs every row to do and so cannot happen here.
     * Everything else keeps the company path it already had.
     """
     parts = [part.strip() for part in str(department_raw or "").split("|") if part.strip()]
+    advisor_name = str(advisor or "").strip()
+
+    if source == "roster_seed_ext":
+        return [LAB_ROOT, advisor_name or UNASSIGNED]
+
+    if advisor_name:
+        return [LAB_ROOT, advisor_name]
 
     if LAB_MARKER in parts:
-        index = parts.index(LAB_MARKER)
-        tail = parts[index + 1 :]
-        return [LAB_ROOT, *(tail or [UNASSIGNED])]
+        # Pending professor placement. A professor whose name matches a lab
+        # goes onto it; one who matches nothing stays here, under the root,
+        # which is visible and honest rather than filed under a guess.
+        return [LAB_ROOT]
 
-    if source == "roster_seed_ext" or (affiliation == "student" and not parts):
-        # An external row's department, when it has one, is already the lab.
-        return [LAB_ROOT, *(parts or [UNASSIGNED])]
+    if affiliation == "student" and not parts:
+        return [LAB_ROOT, UNASSIGNED]
 
     if not parts:
         return [COMPANY_ROOT, UNASSIGNED]
     return parts
+
+
+def place_professors(people: list[dict]) -> list[str]:
+    """Move each professor onto the lab node named after them.
+
+    The students name their lab by their advisor; the professors are listed
+    on the internal tab under project names. Matching the two is what puts a
+    professor at the head of their own lab instead of loose under the root,
+    and it needs every row at once -- which is why it is a pass over the list
+    rather than part of `rooted_path`.
+
+    Matching strips honorifics and spaces from both sides and compares what
+    is left. Nothing is renamed: the node keeps the students' wording, and a
+    professor who matches no lab is left where they are and reported, because
+    an unmatched professor is a real thing to look at -- either a lab with no
+    students in the sheet yet, or a spelling that differs between the tabs.
+    """
+    from .normalize import bare_name
+
+    labs: dict[str, str] = {}
+    for person in people:
+        path = person["chart_path"]
+        if len(path) >= 2 and path[0] == LAB_ROOT and path[1] != UNASSIGNED:
+            labs.setdefault(bare_name(path[1]), path[1])
+
+    unmatched: list[str] = []
+    for person in people:
+        if person.get("affiliation") != "professor":
+            continue
+        path = person["chart_path"]
+        if path[:1] != [LAB_ROOT] or len(path) > 1:
+            continue
+        lab = labs.get(bare_name(person.get("name")))
+        if lab:
+            person["chart_path"] = [LAB_ROOT, lab]
+        else:
+            unmatched.append(str(person.get("name")))
+    return unmatched
 
 
 def build_tree(people: list[dict]) -> dict[str, Any]:
@@ -154,7 +212,7 @@ def headcount(people: list[dict]) -> dict[str, Any]:
 _PEOPLE_SQL = """
     SELECT s.person_id, p.name, s.nickname, s.title, s.employment_type,
            s.affiliation, s.access_level, s.status, s.department_raw,
-           observation.source
+           s.advisor, observation.source
       FROM org_person_state s
       JOIN org_person p ON p.person_id = s.person_id
       JOIN roster_observation observation
@@ -225,6 +283,7 @@ def org_chart(database_url: str, *, include_retired: bool = False) -> dict[str, 
             access_level,
             status,
             department_raw,
+            advisor,
             source,
         ) = row
         if status == "retired" and not include_retired:
@@ -241,17 +300,27 @@ def org_chart(database_url: str, *, include_retired: bool = False) -> dict[str, 
                 "status": status,
                 "department_raw": department_raw,
                 "source": source,
+                "advisor": advisor,
                 "chart_path": rooted_path(
-                    department_raw, affiliation=affiliation, source=source
+                    department_raw,
+                    affiliation=affiliation,
+                    source=source,
+                    advisor=advisor,
                 ),
             }
         )
+
+    unmatched = place_professors(people)
 
     return {
         "observations": observations,
         "observed_at": newest[0].isoformat() if newest and newest[0] else None,
         "people": len(people),
         "headcount": headcount(people),
+        # A professor whose name matches no lab: either a lab with no students
+        # listed yet, or the two tabs spelling one person differently. Named,
+        # because both are things somebody can fix and neither fixes itself.
+        "professors_without_a_lab": unmatched,
         "tree": build_tree(people),
         "unmapped_accounts": unmapped,
         "include_retired": include_retired,

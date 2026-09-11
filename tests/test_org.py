@@ -20,9 +20,10 @@ from rlwrld_worklog.org.chart import (  # noqa: E402
     UNASSIGNED,
     build_tree,
     headcount,
+    place_professors,
     rooted_path,
 )
-from rlwrld_worklog.org.normalize import normalize_rows  # noqa: E402
+from rlwrld_worklog.org.normalize import bare_name, normalize_rows  # noqa: E402
 from rlwrld_worklog.org.plan import duplicates, person_id, plan, team_rows  # noqa: E402
 
 
@@ -150,35 +151,75 @@ def test_the_plan_collects_every_account_as_an_identity() -> None:
 # ------------------------------------------------------------- chart shape
 
 
-def test_a_lab_row_is_rerooted_out_of_the_company_tree() -> None:
-    """HK, 2026-09-11: two roots, with students under their lab.
+def test_a_lab_is_the_advisors_lab_not_the_project_name() -> None:
+    """HK, 2026-09-11: 연구실 means the advisor's lab.
 
-    The sheet nests the lab inside Model Team because that is how the company
-    books it. That is the wrong shape for reading the chart, so the tree is
-    re-rooted here rather than by asking anyone to restructure a spreadsheet.
+    The external tab's column G carries "주한별 교수님". The internal tab's
+    Virtual Lab paths carry project names (Modular VLA, Allex) -- a different
+    axis, which cannot answer whose lab somebody is in. The node keeps the
+    sheet's wording, honorific and all.
     """
     assert rooted_path(
-        "RLWRLD | Model Team | Virtual Lab | Modular VLA",
-        affiliation="professor",
-        source="roster_seed_2",
-    ) == [LAB_ROOT, "Modular VLA"]
+        "", affiliation="student", source="roster_seed_ext", advisor="주한별 교수님"
+    ) == [LAB_ROOT, "주한별 교수님"]
 
 
-def test_a_lab_member_with_no_lab_is_named_not_hidden() -> None:
-    assert rooted_path(
-        "RLWRLD | Model Team | Virtual Lab", affiliation="professor", source="roster_seed_2"
-    ) == [LAB_ROOT, UNASSIGNED]
-
-
-def test_an_external_students_department_is_read_as_their_lab() -> None:
-    assert rooted_path("Allex", affiliation="student", source="roster_seed_ext") == [
-        LAB_ROOT,
-        "Allex",
-    ]
+def test_a_student_with_no_advisor_is_named_not_hidden() -> None:
     assert rooted_path("", affiliation="student", source="roster_seed_ext") == [
         LAB_ROOT,
         UNASSIGNED,
     ]
+
+
+def test_a_professor_waits_under_the_lab_root_until_placed() -> None:
+    """Their own lab node cannot be known from their row alone."""
+    assert rooted_path(
+        "RLWRLD | Model Team | Virtual Lab | Modular VLA",
+        affiliation="professor",
+        source="roster_seed_2",
+    ) == [LAB_ROOT]
+
+
+def test_a_professor_is_placed_on_the_lab_named_after_them() -> None:
+    people = [
+        _person("주한별", [LAB_ROOT], affiliation="professor"),
+        _person("학생하나", [LAB_ROOT, "주한별 교수님"], affiliation="student"),
+    ]
+    assert place_professors(people) == []
+    assert people[0]["chart_path"] == [LAB_ROOT, "주한별 교수님"]
+
+
+def test_a_professor_whose_lab_has_no_students_is_reported_not_filed_by_guess() -> None:
+    """Either a lab with nobody in the sheet yet, or two tabs spelling one name."""
+    people = [
+        _person("임종우", [LAB_ROOT], affiliation="professor"),
+        _person("학생하나", [LAB_ROOT, "주한별 교수님"], affiliation="student"),
+    ]
+    assert place_professors(people) == ["임종우"]
+    assert people[0]["chart_path"] == [LAB_ROOT]
+
+
+def test_honorifics_and_spacing_do_not_stop_a_professor_matching_their_lab() -> None:
+    assert bare_name("주한별 교수님") == bare_name("주 한별") == "주한별"
+    people = [
+        _person("주 한별", [LAB_ROOT], affiliation="professor"),
+        _person("학생", [LAB_ROOT, "주한별 교수님"], affiliation="student"),
+    ]
+    place_professors(people)
+    assert people[0]["chart_path"] == [LAB_ROOT, "주한별 교수님"]
+
+
+def test_one_advisor_gathers_every_student_under_one_node() -> None:
+    """Three students of one advisor are one lab, not three."""
+    people = [
+        _person(name, rooted_path("", affiliation="student", source="roster_seed_ext",
+                                  advisor="신진우 교수님"), affiliation="student")
+        for name in ("가", "나", "다")
+    ]
+    tree = build_tree(people)
+    lab_root = [node for node in tree if node["name"] == LAB_ROOT][0]
+    assert [child["name"] for child in lab_root["children"]] == ["신진우 교수님"]
+    assert lab_root["children"][0]["people"] == 3
 
 
 def test_a_company_row_keeps_the_path_it_had() -> None:
@@ -252,3 +293,24 @@ def test_stray_separators_and_spacing_do_not_create_empty_nodes(bad: str) -> Non
         "RLWRLD",
         "Model Team",
     ]
+
+
+def test_the_advisor_column_is_read_by_name_in_either_spelling() -> None:
+    [record] = normalize_rows(
+        [{"이름": "학생", "소속 학교 연구실 지도교수님": "최성준 교수님"}],
+        source="roster_seed_ext",
+    )
+    assert record["advisor"] == "최성준 교수님"
+    [short] = normalize_rows(
+        [{"이름": "학생", "지도교수": "조민수 교수님"}], source="roster_seed_ext"
+    )
+    assert short["advisor"] == "조민수 교수님"
+
+
+def test_the_plan_carries_the_advisor_so_the_chart_can_group_by_lab() -> None:
+    records = normalize_rows(
+        [{"이름": "학생", "소속 학교 연구실 지도교수님": "신진우 교수님"}],
+        source="roster_seed_ext",
+    )
+    written = plan(records, observation_id=1)
+    assert written["person_state"][0]["advisor"] == "신진우 교수님"

@@ -48,6 +48,15 @@ HEADER_ALIASES = {
     "email(school)": "email_school",
     "email_school": "email_school",
     "email_alt": "email_alt",
+    # The external tab's column G. For a Virtual Lab student the lab is their
+    # advisor's lab, so this is what names the node they belong under -- the
+    # project names on the internal tab (Modular VLA, Allex) are a different
+    # axis and do not answer "whose lab is this person in".
+    "소속 학교 연구실 지도교수님": "advisor",
+    "소속 학교 연구실 지도교수": "advisor",
+    "지도교수님": "advisor",
+    "지도교수": "advisor",
+    "advisor": "advisor",
     "github_id": "github",
     "github": "github",
     "slack_uid": "slack_uid",
@@ -141,6 +150,22 @@ def access_of(record: dict) -> str:
 
 def status_of(record: dict) -> str:
     return "retired" if RETIRED_MARK in (record.get("status") or "") else "active"
+
+
+# Honorifics a sheet writes after an advisor's name. Stripped for matching a
+# professor to their own lab, never for display: the chart shows the sheet's
+# wording, and only the comparison is normalised.
+_HONORIFICS = ("교수님", "교수", "선생님", "박사님", "박사")
+
+
+def bare_name(value: str | None) -> str:
+    """An advisor or professor name with any honorific and spacing removed."""
+    text = str(value or "").strip()
+    for honorific in _HONORIFICS:
+        if text.endswith(honorific):
+            text = text[: -len(honorific)].strip()
+            break
+    return text.replace(" ", "")
 
 
 def team_path(department: str) -> list[str]:

@@ -85,6 +85,10 @@ def plan(records: list[dict], observation_id: int) -> dict[str, Any]:
                 "status": record["status"],
                 "team_id": nodes[-1]["team_id"] if nodes else None,
                 "department_raw": record.get("department") or None,
+                # Verbatim, honorific included. The chart shows the sheet's
+                # wording; only matching a professor to their own lab
+                # normalises it.
+                "advisor": record.get("advisor") or None,
             }
         )
         for field, kind in IDENTITY_FIELDS:

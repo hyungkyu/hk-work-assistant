@@ -178,11 +178,11 @@ def _write_states(cursor, states: list[dict], result: SyncResult) -> None:
             """
             INSERT INTO org_person_state (
                 observation_id, person_id, nickname, title, employment_type,
-                affiliation, access_level, status, team_id, department_raw
+                affiliation, access_level, status, team_id, department_raw, advisor
             ) VALUES (
                 %(observation_id)s, %(person_id)s, %(nickname)s, %(title)s,
                 %(employment_type)s, %(affiliation)s, %(access_level)s,
-                %(status)s, %(team_id)s, %(department_raw)s
+                %(status)s, %(team_id)s, %(department_raw)s, %(advisor)s
             )
             ON CONFLICT (observation_id, person_id) DO UPDATE SET
                 nickname = EXCLUDED.nickname,
@@ -192,7 +192,8 @@ def _write_states(cursor, states: list[dict], result: SyncResult) -> None:
                 access_level = EXCLUDED.access_level,
                 status = EXCLUDED.status,
                 team_id = EXCLUDED.team_id,
-                department_raw = EXCLUDED.department_raw
+                department_raw = EXCLUDED.department_raw,
+                advisor = EXCLUDED.advisor
             """,
             state,
         )
@@ -240,12 +241,12 @@ def _close_absentees(
         """
         INSERT INTO org_person_state (
             observation_id, person_id, nickname, title, employment_type,
-            affiliation, access_level, status, team_id, department_raw
+            affiliation, access_level, status, team_id, department_raw, advisor
         )
         SELECT %(observation_id)s, previous.person_id, previous.nickname,
                previous.title, previous.employment_type, previous.affiliation,
                previous.access_level, 'absent_from_sheet', previous.team_id,
-               previous.department_raw
+               previous.department_raw, previous.advisor
           FROM org_person_state previous
          WHERE previous.observation_id = %(previous)s
            AND NOT EXISTS (

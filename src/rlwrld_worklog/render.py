@@ -196,6 +196,13 @@ def render_org_chart(chart: dict[str, Any], *, person_link=None) -> str:
         f'<div class="v">{absent}</div>'
         "<div class=\"n\">행은 지우지 않는다 — 상태만 바꾼다</div></div>"
     )
+    unplaced = chart.get("professors_without_a_lab") or []
+    if unplaced:
+        tiles.append(
+            '<div class="count"><div class="k">연구실이 안 붙은 교수님</div>'
+            f'<div class="v" style="color:var(--warning)">{len(unplaced)}</div>'
+            f'<div class="n">{_e(" · ".join(unplaced[:5]))} — 학생이 아직 없거나 표기가 다르다</div></div>'
+        )
     unmapped = chart.get("unmapped_accounts") or []
     if unmapped:
         listed = " · ".join(f'{item["kind"]} {item["value"]}' for item in unmapped[:4])
