@@ -69,6 +69,18 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--channel-id", action="append", default=[])
     collect.add_argument("--max-channels", type=_positive_int, default=None)
     collect.add_argument("--max-messages", type=_positive_int, default=None)
+    collect.add_argument(
+        "--slack-prewindow-parent-lookback-days",
+        type=_positive_int,
+        default=None,
+        help="Slack slice only: how many days before --since parent discovery may inspect",
+    )
+    collect.add_argument(
+        "--slack-prewindow-parent-pages-per-channel",
+        type=_nonnegative_int,
+        default=None,
+        help="Slack slice only: maximum parent-discovery pages per channel",
+    )
     collect.add_argument("--google-token", type=Path, default=None)
     collect.add_argument("--calendar-id", action="append", default=[])
     collect.add_argument("--calendar-id-file", type=Path, default=None)
@@ -341,6 +353,30 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print only the one-line summary, short enough for next_action",
     )
+    collection_compare_parser = collection_commands.add_parser(
+        "compare",
+        help="Compare two run manifests and ledgers by coverage, impact, and cost",
+    )
+    collection_compare_parser.add_argument("--baseline-manifest", type=Path, required=True)
+    collection_compare_parser.add_argument("--candidate-manifest", type=Path, required=True)
+    collection_compare_parser.add_argument("--baseline-ledger", type=Path, required=True)
+    collection_compare_parser.add_argument("--candidate-ledger", type=Path, required=True)
+    collection_compare_parser.add_argument(
+        "--material-retention",
+        type=float,
+        default=0.95,
+        help="Primary-ID retention below this ratio is a material failure (default: 0.95)",
+    )
+    collection_compare_parser.add_argument(
+        "--verify-files",
+        action="store_true",
+        help="Hash every raw file named by both manifests in addition to the evidence files",
+    )
+    collection_compare_parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Print only the one-line decision-bearing subset",
+    )
 
     add_work_parser(subparsers)
     return parser
@@ -374,6 +410,13 @@ def _positive_int(value: str) -> int:
     parsed = int(value)
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be greater than zero")
+    return parsed
+
+
+def _nonnegative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be zero or greater")
     return parsed
 
 
@@ -455,6 +498,11 @@ def collect_slack(args: argparse.Namespace) -> int:
     until = _resolve_until(args)
     _, archive, collector = make_slack_collector(archive_root=archive_root, environment=args.environment)
     try:
+        collect_kwargs = {}
+        if args.slack_prewindow_parent_lookback_days is not None:
+            collect_kwargs["prewindow_parent_lookback_days"] = args.slack_prewindow_parent_lookback_days
+        if args.slack_prewindow_parent_pages_per_channel is not None:
+            collect_kwargs["prewindow_parent_pages_per_channel"] = args.slack_prewindow_parent_pages_per_channel
         result = collector.collect(
             since=parse_since(args.since),
             until=until,
@@ -462,6 +510,7 @@ def collect_slack(args: argparse.Namespace) -> int:
             channel_ids=set(args.channel_id) or None,
             max_channels=args.max_channels,
             max_messages=args.max_messages,
+            **collect_kwargs,
         )
     except Exception as error:
         failure_manifest = archive.finish(
@@ -1023,6 +1072,32 @@ def collection_audit(args: argparse.Namespace) -> int:
     return 0
 
 
+def collection_compare(args: argparse.Namespace) -> int:
+    from .collection_compare import ComparisonInputError, compact_report, compare_runs
+
+    try:
+        report = compare_runs(
+            baseline_manifest_path=args.baseline_manifest,
+            candidate_manifest_path=args.candidate_manifest,
+            baseline_ledger_path=args.baseline_ledger,
+            candidate_ledger_path=args.candidate_ledger,
+            material_retention=args.material_retention,
+            verify_files=args.verify_files,
+        )
+    except ComparisonInputError as error:
+        raise SystemExit(str(error))
+    output = compact_report(report) if args.summary else report
+    print(
+        json.dumps(
+            output,
+            ensure_ascii=False,
+            indent=None if args.summary else 2,
+            sort_keys=True,
+        )
+    )
+    return 1 if report["verdict"] == "fail" else 0
+
+
 def daily_collect(args: argparse.Namespace) -> int:
     from .daily import DailyConfig, config_as_dict, run_daily
 
@@ -1099,6 +1174,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return daily_collect(args)
     if args.command == "collection" and args.collection_command == "audit":
         return collection_audit(args)
+    if args.command == "collection" and args.collection_command == "compare":
+        return collection_compare(args)
     if args.command == "work":
         return run_work(args)
     raise AssertionError(f"Unhandled command: {args.command}")

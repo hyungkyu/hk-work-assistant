@@ -126,10 +126,10 @@ is not wrong and must never be rewritten; the dashboard reports
 
 ```
 RULES              = (V0, V1, V2, V3, V4, V5, V6, V7, V8, V9)
-ACTIVE_RULE_VERSION = "V8"
+ACTIVE_RULE_VERSION = "V9"
 ```
 
-`V8` is **active**, effective from 2026-09-08. It is `V7` with the Notion
+`V8` was effective from 2026-09-08 until `V9` began. It is `V7` with the Notion
 document set stated rather than inherited from whatever the block walk reached.
 A day's documents are what `/search` listed inside the window, plus the rows
 each data source in that window reports as edited, plus the operator's seed
@@ -147,17 +147,14 @@ from a gap months later.
 
 `V7` is superseded, and its window closes at `V8`'s start.
 
-`V9` is **pending**, not active. It is a Slack slice that recovers replies whose
+`V9` is **active**, effective from 2026-09-09. It is a Slack slice that recovers replies whose
 thread parent predates the window, by reading backwards from the window's start
 and by re-polling watched threads inside the window instead of skipping the
 re-poll. `V6` described those skips as deliberate; measurement showed they are
-why a month-by-month backfill silently misses replies to older threads. That
-collector change has **not** landed — see [the date-slice section of
-daily-collection.md](daily-collection.md#date-slice-capture) for what the
-collector does today.
-
-Because `V9` is pending, it has no `effective.start` and no pinned digest, and
-it does not close `V8`'s window.
+why a month-by-month backfill silently misses replies to older threads. The
+backward scan is capped at one history page per channel and a 90-day lower
+bound by default; both limits and the oldest timestamp actually observed are
+recorded in the manifest. Its digest is pinned and it closes `V8`'s window.
 
 `V9` has been renumbered twice. It was published as `V7` while it was the only
 unlanded change in flight, moved to `V8` when the Notion mention and comment

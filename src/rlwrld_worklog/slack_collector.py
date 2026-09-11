@@ -53,6 +53,8 @@ from .slack_client import SlackApiError, SlackClient
 SLACK_CAPTURE_PROFILE = "live-slack-web-api/v1"
 CHECKPOINT_SCHEMA_VERSION = 2
 DEFAULT_THREAD_LOOKBACK_DAYS = 30
+DEFAULT_PREWINDOW_PARENT_LOOKBACK_DAYS = 90
+DEFAULT_PREWINDOW_PARENT_PAGES_PER_CHANNEL = 1
 
 FILE_LINK_FIELDS = ("id", "name", "title", "mimetype", "filetype", "size", "permalink", "url_private")
 SKIPPABLE_CONVERSATION_ERRORS = {
@@ -256,6 +258,8 @@ class SlackCollector:
         advance_checkpoint: bool = True,
         use_search: bool = True,
         thread_lookback_days: int = DEFAULT_THREAD_LOOKBACK_DAYS,
+        prewindow_parent_lookback_days: int = DEFAULT_PREWINDOW_PARENT_LOOKBACK_DAYS,
+        prewindow_parent_pages_per_channel: int = DEFAULT_PREWINDOW_PARENT_PAGES_PER_CHANNEL,
     ) -> CollectionResult:
         archive = self.archive
         checkpoint = archive.read_checkpoint()
@@ -280,6 +284,8 @@ class SlackCollector:
                 "resumed_channels": len(previous_watermarks),
                 "watched_threads": sum(len(value) for value in previous_threads.values()),
                 "thread_lookback_days": thread_lookback_days,
+                "prewindow_parent_lookback_days": prewindow_parent_lookback_days,
+                "prewindow_parent_pages_per_channel": prewindow_parent_pages_per_channel,
                 "use_search": use_search and not bounded,
             }
         )
@@ -394,9 +400,19 @@ class SlackCollector:
         parents_swept = 0
         declared_replies = 0
         replies_fetched = 0
+        swept_threads: set[tuple[str, str]] = set()
+        prewindow_channels_scanned = 0
+        prewindow_pages_read = 0
+        prewindow_parents_considered = 0
+        prewindow_parents_repolled = 0
+        prewindow_oldest_observed: float | None = None
 
         def collect_replies(channel_id: str, thread_ts: str, oldest: str) -> None:
             nonlocal threads_repolled, replies_fetched
+            thread_key = (channel_id, thread_ts)
+            if thread_key in swept_threads:
+                return
+            swept_threads.add(thread_key)
             threads_repolled += 1
             for reply_page in self._pages(
                 "conversations.replies",
@@ -409,6 +425,16 @@ class SlackCollector:
                 inclusive=True,
             ):
                 for reply in reply_page["messages"]:
+                    reply_timestamp = _as_float(reply.get("ts") or reply.get("deleted_ts"))
+                    if until_ts is not None and (
+                        reply_timestamp is None
+                        or reply_timestamp < since_ts
+                        or reply_timestamp >= until_ts
+                    ):
+                        # conversations.replies returns the parent as its first
+                        # row even when `oldest` is newer than the parent. Keep
+                        # it in raw evidence, but never file it inside the day.
+                        continue
                     if str(reply.get("ts") or "") != str(thread_ts):
                         replies_fetched += 1
                     add_message(channel_id, reply)
@@ -473,12 +499,71 @@ class SlackCollector:
                 skipped_channels.append(detail)
                 archive.note_skip("conversation_inaccessible", **detail)
 
+        # A historical slice cannot discover an ordinary reply whose parent
+        # predates the slice: conversations.history omits that reply. Read a
+        # deliberately bounded amount immediately before the lower bound and
+        # re-poll only parents whose latest known reply reaches into or beyond
+        # the requested window. Discovery pages are archived under their own
+        # kind and are evidence only; they are not projected into the ledger.
+        if until is not None and prewindow_parent_pages_per_channel > 0 and not at_limit():
+            discovery_oldest = since_ts - (prewindow_parent_lookback_days * 86_400)
+            for channel in channels:
+                channel_id = str(channel["id"])
+                prewindow_channels_scanned += 1
+                try:
+                    pages = self._pages(
+                        "conversations.history",
+                        "messages",
+                        f"parent-discovery-{channel_id}",
+                        channel=channel_id,
+                        oldest=f"{discovery_oldest:.6f}",
+                        latest=f"{since_ts:.6f}",
+                        inclusive=True,
+                    )
+                    for page_number, page in enumerate(pages, start=1):
+                        prewindow_pages_read += 1
+                        for message in page.get("messages") or []:
+                            timestamp = _as_float(message.get("ts"))
+                            if timestamp is not None:
+                                prewindow_oldest_observed = (
+                                    timestamp
+                                    if prewindow_oldest_observed is None
+                                    else min(prewindow_oldest_observed, timestamp)
+                                )
+                            parent_ts = str(message.get("ts") or "")
+                            thread_ts = message.get("thread_ts")
+                            if not parent_ts or (thread_ts and str(thread_ts) != parent_ts):
+                                continue
+                            reply_count = message.get("reply_count")
+                            latest_reply = _as_float(message.get("latest_reply"))
+                            if not reply_count or latest_reply is None or latest_reply < since_ts:
+                                continue
+                            prewindow_parents_considered += 1
+                            before = len(swept_threads)
+                            collect_replies(channel_id, parent_ts, f"{since_ts:.6f}")
+                            if len(swept_threads) > before:
+                                prewindow_parents_repolled += 1
+                            if at_limit():
+                                break
+                        if at_limit():
+                            break
+                        if page_number >= prewindow_parent_pages_per_channel:
+                            break
+                except SlackApiError as error:
+                    if error.code not in SKIPPABLE_CONVERSATION_ERRORS:
+                        raise
+                    archive.note_skip(
+                        "prewindow_parent_discovery_inaccessible",
+                        channel_id=channel_id,
+                        error=str(error.code),
+                    )
+                if at_limit():
+                    break
+
         # Replies to threads whose parent predates the window are unreachable
         # through conversations.history, so watched threads are re-polled from
         # their own last observed reply. The lookback bounds the daily cost.
-        # A slice skips it: the watch list and its lookback both track the
-        # incremental front, which is nowhere near a historical window.
-        if not bounded and until is None:
+        if not bounded:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=thread_lookback_days)).timestamp()
             collected_channel_ids = {str(channel["id"]) for channel in channels}
             already_read = set(events_by_key)
@@ -488,14 +573,20 @@ class SlackCollector:
                 for thread_ts in sorted(dict(thread_watch[channel_id])):
                     latest = thread_watch[channel_id][thread_ts]
                     latest_value = _as_float(latest) or 0.0
-                    if latest_value < cutoff:
-                        continue
+                    if until is None:
+                        if latest_value < cutoff:
+                            continue
+                        reply_oldest = latest
+                    else:
+                        if latest_value < since_ts or latest_value >= until_ts:
+                            continue
+                        reply_oldest = f"{since_ts:.6f}"
                     if (channel_id, thread_ts) in already_read:
                         # The parent came back through history this run, so its
                         # replies were already re-read above.
                         continue
                     try:
-                        collect_replies(channel_id, thread_ts, latest)
+                        collect_replies(channel_id, thread_ts, reply_oldest)
                     except SlackApiError as error:
                         if error.code not in SKIPPABLE_CONVERSATION_ERRORS:
                             raise
@@ -609,6 +700,20 @@ class SlackCollector:
             "thread_parents_swept": parents_swept,
             "thread_replies_declared": declared_replies,
             "thread_replies_fetched": replies_fetched,
+            "prewindow_parent_discovery": {
+                "enabled": until is not None and prewindow_parent_pages_per_channel > 0,
+                "lookback_days": prewindow_parent_lookback_days,
+                "pages_per_channel_limit": prewindow_parent_pages_per_channel,
+                "channels_scanned": prewindow_channels_scanned,
+                "pages_read": prewindow_pages_read,
+                "parents_considered": prewindow_parents_considered,
+                "parents_repolled": prewindow_parents_repolled,
+                "oldest_observed": (
+                    datetime.fromtimestamp(prewindow_oldest_observed, timezone.utc).isoformat()
+                    if prewindow_oldest_observed is not None
+                    else None
+                ),
+            },
             "searches_run": searches_run,
             "search_matches_kept": search_kept,
             "search_matches_context_filtered": search_filtered,

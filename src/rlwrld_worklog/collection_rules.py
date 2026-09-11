@@ -1326,7 +1326,7 @@ V8 = CollectionRule(
     # behind it: a stamp that does not describe the run is worth less than no
     # stamp, so the version describing what the collector now does takes force
     # immediately.
-    status="active",
+    status="superseded",
     effective=EffectivePeriod(
         start="2026-09-08",
         end=None,
@@ -1451,29 +1451,15 @@ SLACK_V9 = replace(
 V9 = CollectionRule(
     version="V9",
     title="공식 API 원본 원장 + 창 앞 부모 탐색 (slice recovers pre-window parents)",
-    # Pending, not active. The repair this version describes is being written
-    # by another hand; publishing it as active would make every run between now
-    # and then stamp a rule it does not follow, which is the same defect V6
-    # carries about the re-poll and the reason this version exists at all. It
-    # is published so the repair has a rule to land against, and it takes
-    # effect when the collector does.
-    #
-    # A pending version is the tip of the registry, never a rule an already
-    # landed change has to queue behind. This one has moved up twice for that
-    # reason: published as V7, renumbered to V8 when the Notion mention and
-    # comment repair landed and took V7, and renumbered again to V9 when the
-    # Notion document-set repair landed and took V8. Nothing is lost in a move:
-    # a pending version stamps no manifest and cannot pin a digest, so no run
-    # and no PUBLISHED_DIGESTS entry ever carried either earlier number for
-    # this rule.
-    status="pending",
+    # Active from the day the bounded pre-window discovery pass landed. The
+    # earlier pending draft stamped no manifest and pinned no digest.
+    status="active",
     effective=EffectivePeriod(
-        start=None,
+        start="2026-09-09",
         end=None,
         basis=(
-            "pending: a version's start is the day collection actually began following it, "
-            "which is not knowable until the collector does. Written in when this version "
-            "is activated, which is also when its digest is pinned."
+            "observed: slack_collector gained a bounded pre-window parent-discovery pass "
+            "and window-qualified watched-thread re-polling for date slices."
         ),
     ),
     summary=(
@@ -1512,7 +1498,7 @@ V9 = CollectionRule(
 
 RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3, V4, V5, V6, V7, V8, V9)
 
-ACTIVE_RULE_VERSION = "V8"
+ACTIVE_RULE_VERSION = "V9"
 
 # Content digests of every published version. A published rule is frozen: if
 # editing one changes its meaning, the digest moves and import fails here,
@@ -1585,6 +1571,7 @@ PUBLISHED_DIGESTS: dict[str, str] = {
     "V6": "sha256:ddbf228989f159091e7b02f9fc6ce7acd73713e26f3fdaa39ca92d2cb637a5f3",
     "V7": "sha256:09b4586496cc1f2a403b112e30e6b3ff81409ff325cb72391dc35dccc43b78fc",
     "V8": "sha256:0c44b9e1e3c3abe12801f3543f5a7b4ccf4adcc5ddba1bc4dd47021cd3e89aaa",
+    "V9": "sha256:df78b1d883f31568093d35e36ac5ed587b6b10a2dfadb16a6dd15cb4bed6a293",
 }
 
 

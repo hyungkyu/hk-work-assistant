@@ -147,7 +147,7 @@ uuid5 로, 같은 관찰이 두 번 들어와도 한 행이 된다. 적재는 `l
 
 ## 배포 경계
 
-- Docker Compose 로 앱·PostgreSQL·OpenSearch 관리
+- Docker Compose 로 앱과 PostgreSQL 관리
 - 앱은 `127.0.0.1` 과 지정한 tailnet/LAN 주소에 바인딩
 - Tailscale Serve 가 tailnet 내부 HTTPS 제공
 - Google OAuth 로그인 + 단일 계정 allowlist (구현되어 있다 — `admin_web.py:313`)
@@ -201,7 +201,6 @@ $APP_CONFIG_ROOT/credentials/  # 앱이 실제로 읽는 곳
 
 ## 아직 없는 것
 
-- 검색 색인 (OpenSearch 는 선언만 되어 있다)
 - 응답 초안 작성
 - GitHub 의 라벨·마일스톤·릴리스·배포·Actions·권한 변경 수집
 - `ledger-verify` 의 GitHub·Slurm 지원

@@ -31,6 +31,35 @@ All five sources are in scope: `SOURCE_TO_COLLECTOR`
 `github` and `slurm`. The dashboard uses the ledger source names; the archive
 directories use the collector names, so Calendar is `google-calendar` on disk.
 
+## Comparing two runs
+
+`worklog collection compare` compares a baseline and candidate manifest plus
+their standard ledgers.  It never emits entity IDs or collected text.  Primary
+activity entities (messages, pages/data sources, calendar events, GitHub
+activity, and Slurm jobs) determine retention; descendant blocks, comments and
+dimensions are reported separately so a deliberate traversal optimisation is
+not mislabeled as lost work.
+
+```bash
+worklog collection compare \
+  --baseline-manifest /path/to/v7-manifest.json \
+  --baseline-ledger /path/to/v7-ledger.jsonl \
+  --candidate-manifest /path/to/v8-manifest.json \
+  --candidate-ledger /path/to/v8-ledger.jsonl \
+  --verify-files --summary
+```
+
+The verdict is `pass` when no unexplained primary entity was lost, `review`
+for a small non-material difference, and `fail` for a scope mismatch, corrupt
+evidence, unresolved/schema errors, truncation, or retention below the
+configurable `--material-retention` threshold (default 95%).  Cost is a
+separate axis: duration, API calls and raw-file counts can improve or regress
+without changing the coverage verdict.  For Notion historical comparisons,
+the candidate's search pages are used to count baseline-only objects whose
+current `last_edited_time` moved past the old window; only the count is shown.
+`--summary` emits the decision-bearing fields as one JSON line so an automated
+review does not need to read the full entity table.
+
 ## Where the evidence comes from
 
 Three independent kinds of evidence feed a cell.

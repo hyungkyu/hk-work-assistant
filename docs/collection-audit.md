@@ -15,9 +15,9 @@ worklog collection audit --source notion
 worklog collection audit --summary        # next_action 에 들어갈 한 줄만
 ```
 
-매일 02:00 Asia/Seoul 에 `hkwa-collection-audit.timer` 가 돌린다. 수집 배치보다
-**한 시간 뒤**다 — 그래야 읽는 것이 어젯밤에 끝난 실행이지, 아직 돌고 있는
-실행이 아니다.
+매일 02:00 Asia/Seoul 에 `hkwa-collection-audit.timer` 가 돌린다. 현재 수집
+배치는 06:00에 시작해 두 시간 이상 걸릴 수 있으므로, 감사는 그보다 먼저 전날까지
+완료된 실행을 읽는다. 두 타이머 모두 `Persistent=true`다.
 
 ## 재는 것 하나
 

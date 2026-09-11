@@ -283,7 +283,7 @@ appears in `ledger_batches` unless `--reload-unchanged` is given
 
 ## Migrations
 
-`sql/migrations/` holds four files, applied in order by `ledger-migrate`, which
+`sql/migrations/` holds five files, applied in order by `ledger-migrate`, which
 records each one in `schema_migrations` with a checksum.
 
 | File | What it does |
@@ -292,6 +292,7 @@ records each one in `schema_migrations` with a checksum.
 | `0002_ledger_v1.sql` | The standard v1 ledger tables. Assumes the baseline `sql/schema.sql` has been applied: it takes foreign keys on `people` and fixes the baseline `timeline_events` source CHECK, which omits `notion`. |
 | `0003_live_capture.sql` | Widens `ledger_records.entity_type` for the five dimension types the live path added. |
 | `0004_github_slurm_sources.sql` | Widens the `source` CHECK on `ledger_batches`, `ledger_load_runs`, `ledger_records`, `ledger_extracted_text`, `sync_runs`, `raw_objects`, `identities`, `timeline_events` and `source_object_observations` to admit `github` and `slurm`, and widens `ledger_records.entity_type` again for the six GitHub activity types, `job`, and `repository`. |
+| `0005_search.sql` | Adds PostgreSQL full-text and trigram indexes over extracted text, plus nullable embedding metadata. |
 
 Every widening is backward compatible: every source and entity type an earlier
 loader could write is still accepted, and no existing row changes. `0004`

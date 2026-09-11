@@ -259,6 +259,19 @@ def _slack_records(
     window = _window(manifest)
     collected_at = str(manifest["finished_at"])
     self_user_id = manifest.get("self_user_id")
+    requested_window = manifest.get("requested_window") or {}
+    requested_since = requested_window.get("since")
+    requested_until = requested_window.get("until")
+    slice_since_ts = (
+        datetime.fromisoformat(str(requested_since).replace("Z", "+00:00")).timestamp()
+        if requested_until and requested_since
+        else None
+    )
+    slice_until_ts = (
+        datetime.fromisoformat(str(requested_until).replace("Z", "+00:00")).timestamp()
+        if requested_until
+        else None
+    )
     channels: dict[str, dict[str, Any]] = {}
     loaded: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
     for item in manifest.get("files", []):
@@ -280,6 +293,11 @@ def _slack_records(
 
     for item, kind, body in loaded:
         supplement = False
+        if kind.startswith("parent-discovery-"):
+            # Slack V9 archives the bounded pre-window history response as
+            # collection evidence only. Those messages precede the requested
+            # slice and must not leak into its ledger projection.
+            continue
         if kind.startswith("history-"):
             endpoint = "conversations.history"
             channel_id = kind.removeprefix("history-")
@@ -355,6 +373,17 @@ def _slack_records(
             timestamp = message.get("ts") or message.get("deleted_ts")
             if not current_channel or not isinstance(timestamp, str) or not timestamp:
                 continue
+            if slice_until_ts is not None:
+                try:
+                    timestamp_value = float(timestamp)
+                except ValueError:
+                    timestamp_value = None
+                if (
+                    timestamp_value is None
+                    or timestamp_value < (slice_since_ts or 0.0)
+                    or timestamp_value >= slice_until_ts
+                ):
+                    continue
             source_entity_id = f"{team_id}:{current_channel}:{timestamp}"
             record_hash = content_hash(message)
             ledger_id = ledger_id_for(

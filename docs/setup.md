@@ -259,6 +259,7 @@ export DATABASE_URL="postgresql://worklog:...@127.0.0.1:5432/worklog"
 | `0002_ledger_v1.sql` | `ledger_batches`, `ledger_records`, 파생 테이블 |
 | `0003_live_capture.sql` | 라이브 캡처의 dimension 엔티티 타입 허용 |
 | `0004_github_slurm_sources.sql` | GitHub·Slurm source와 엔티티 타입 허용 |
+| `0005_search.sql` | PostgreSQL 전문·trigram 검색 색인과 향후 임베딩 필드 |
 
 순서를 지켜야 한다. 베이스라인 없이 마이그레이션을 적용하면 `0002`가
 `sql/schema.sql`이 만드는 `people` 테이블을 참조하다가

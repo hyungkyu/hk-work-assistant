@@ -338,7 +338,12 @@ def test_a_reply_carried_by_history_is_not_mistaken_for_a_parent(tmp_path: Path)
     reply = ts(-100)
     client = FakeSlack(
         history={CHANNEL: [[message(reply, thread_ts=parent, reply_count=4, text="a reply")]]},
-        replies={(CHANNEL, parent): [message(reply, thread_ts=parent)]},
+        replies={
+            (CHANNEL, parent): [
+                message(parent, thread_ts=parent, reply_count=1, latest_reply=reply),
+                message(reply, thread_ts=parent),
+            ]
+        },
     )
 
     _, result = collect(tmp_path, client)
@@ -462,36 +467,94 @@ def test_a_date_slice_reads_the_window_rather_than_resuming_from_the_watermark(
     assert result.messages_seen == 1
 
 
-def test_a_date_slice_leaves_the_incremental_supplements_alone(tmp_path: Path) -> None:
-    """Watched-thread re-poll and workspace search both track the present.
-
-    Running them inside a historical slice pulls today's traffic into it.
-    """
+def test_a_date_slice_repolls_only_watched_threads_active_in_that_window(tmp_path: Path) -> None:
     old_parent = ts(-86_400 * 200)
+    slice_since = NOW - timedelta(days=210)
+    slice_until = NOW - timedelta(days=190)
+    in_window_reply = f"{(slice_since + timedelta(days=1)).timestamp():.6f}"
     seed = RawArchive(tmp_path, "slack", "run-0", "test")
     seed.write_checkpoint(
         {
             "schema_version": 2,
             "source": "slack",
             "run_id": "run-0",
-            "thread_watch": {CHANNEL: {old_parent: ts(-60)}},
+            "thread_watch": {CHANNEL: {old_parent: in_window_reply}},
         }
     )
     client = FakeSlack(
         history={CHANNEL: [[]], DM: [[]]},
-        replies={(CHANNEL, old_parent): [message(ts(-60), thread_ts=old_parent)]},
+        replies={(CHANNEL, old_parent): [message(in_window_reply, thread_ts=old_parent)]},
         searches={"direct-mentions": [{"ts": ts(-30), "channel": {"id": CHANNEL}, "text": "<@U0TESTSELF>"}]},
     )
 
     _, result = collect(
-        tmp_path, client, run_id="run-1", since=NOW - timedelta(days=210), until=NOW - timedelta(days=190)
+        tmp_path,
+        client,
+        run_id="run-1",
+        since=slice_since,
+        until=slice_until,
+        prewindow_parent_pages_per_channel=0,
     )
 
-    assert result.threads_repolled == 0, "the watch list belongs to the incremental front"
+    assert result.threads_repolled == 1
     assert not [method for method, _ in client.calls if method == "search.messages"] or (
         result.search_matches_kept == 0
     ), "a mention from outside the window must not land in the slice"
-    assert result.messages_seen == 0
+    assert result.messages_seen == 1
+
+
+def test_a_date_slice_discovers_a_parent_before_the_window_and_fetches_its_reply(
+    tmp_path: Path,
+) -> None:
+    slice_since = NOW - timedelta(days=10)
+    slice_until = slice_since + timedelta(days=1)
+    parent = f"{(slice_since - timedelta(days=20)).timestamp():.6f}"
+    reply = f"{(slice_since + timedelta(hours=2)).timestamp():.6f}"
+    client = FakeSlack(
+        history={
+            CHANNEL: [[message(parent, thread_ts=parent, reply_count=1, latest_reply=reply)]],
+            DM: [[]],
+        },
+        replies={
+            (CHANNEL, parent): [
+                message(parent, thread_ts=parent, reply_count=1, latest_reply=reply),
+                message(reply, thread_ts=parent),
+            ]
+        },
+    )
+
+    archive, result = collect(
+        tmp_path,
+        client,
+        since=slice_since,
+        until=slice_until,
+        prewindow_parent_lookback_days=30,
+    )
+
+    assert result.messages_seen == 1
+    assert {event.external_id for event in result.events} == {f"{TEAM}:{CHANNEL}:{reply}"}
+    assert result.counters["prewindow_parent_discovery"]["parents_repolled"] == 1
+    assert result.counters["prewindow_parent_discovery"]["pages_per_channel_limit"] == 1
+    assert archived(archive, tmp_path, f"parent-discovery-{CHANNEL}")[0]["messages"][0]["ts"] == parent
+    assert archived(archive, tmp_path, f"replies-{CHANNEL}-{parent}")[0]["messages"][0]["ts"] == reply
+
+
+def test_prewindow_parent_discovery_stops_at_the_page_budget(tmp_path: Path) -> None:
+    slice_since = NOW - timedelta(days=10)
+    client = FakeSlack(
+        channels=[{"id": CHANNEL, "name": "team-channel"}],
+        history={CHANNEL: [[message(ts(-86_400 * 11))], [message(ts(-86_400 * 12))]]},
+    )
+
+    _, result = collect(
+        tmp_path,
+        client,
+        since=slice_since,
+        until=slice_since + timedelta(days=1),
+        prewindow_parent_pages_per_channel=1,
+    )
+
+    assert result.counters["prewindow_parent_discovery"]["pages_read"] == 1
 
 
 def test_the_ordinary_incremental_run_still_resumes_and_advances(tmp_path: Path) -> None:

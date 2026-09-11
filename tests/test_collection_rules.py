@@ -191,7 +191,8 @@ def test_a_pending_version_does_not_close_the_version_it_will_supersede() -> Non
     claiming nothing is current.
     """
     pending = [rule for rule in RULES if rule.status == "pending"]
-    assert pending, "this invariant only means something while a version is pending"
+    if not pending:
+        pytest.skip("this invariant only applies while a version is pending")
     for rule in pending:
         assert rule.effective.start is None
         assert rule.version not in PUBLISHED_DIGESTS, "a rule freezes when it takes effect"
@@ -212,7 +213,8 @@ def test_a_pending_version_does_not_close_the_version_it_will_supersede() -> Non
 def test_a_pending_version_stamps_nothing_and_activating_it_is_a_status_flip() -> None:
     """The reason `status` is outside the digest, exercised end to end."""
     pending = [rule for rule in RULES if rule.status == "pending"]
-    assert pending
+    if not pending:
+        pytest.skip("this invariant only applies while a version is pending")
     for rule in pending:
         assert rule.version != ACTIVE_RULE_VERSION
         assert active_rule_stamp()["collection_rule_version"] != rule.version
@@ -222,13 +224,19 @@ def test_a_pending_version_stamps_nothing_and_activating_it_is_a_status_flip() -
 
 
 def test_the_registry_refuses_a_pending_version_that_claims_a_start() -> None:
-    pending = next(rule for rule in RULES if rule.status == "pending")
-    others = tuple(other for other in RULES if other.version != pending.version)
+    current = active_rule()
+    pending = replace(
+        current,
+        version="V-pending-test",
+        status="pending",
+        effective=replace(current.effective, start=None),
+        supersedes=current.version,
+    )
     started = replace(
         pending, effective=replace(pending.effective, start="2026-09-04")
     )
     with pytest.raises(RuleRegistryError, match="stores an effective start"):
-        _validate_registry(others + (started,))
+        _validate_registry(RULES + (started,))
 
 
 def test_the_derived_window_marks_only_the_active_version_current() -> None:

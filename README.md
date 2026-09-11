@@ -66,7 +66,7 @@ append-only history. See [docs/delegated-work.md](docs/delegated-work.md) and
 drifted from the work and writes the count where it can be seen. See
 [docs/board-audit.md](docs/board-audit.md).
 
-**Collection audit.** A nightly batch, an hour after the collection itself,
+**Collection audit.** A daily batch that runs before the long collection window,
 reporting every source-day the archive does not show as collected. Three
 sources once went uncollected for four days with the evidence sitting unread on
 the coverage grid. See [docs/collection-audit.md](docs/collection-audit.md).
@@ -76,8 +76,8 @@ sessions that do work against the board. Parts of the written protocol are not
 implemented; that document says which. See
 [docs/cowork-mailbox.md](docs/cowork-mailbox.md).
 
-Search indexing and response drafting are planned, not built. OpenSearch is
-declared in `compose.yaml` and read by no code yet.
+Search is implemented in PostgreSQL over `ledger_extracted_text` (full-text and
+trigram indexes). Response drafting remains planned; OpenSearch was removed.
 
 ## Getting started
 
@@ -120,7 +120,7 @@ src/rlwrld_worklog/
   web.py                 the app entry point
 scripts/                 operational shell scripts (docs/scripts.md)
 deploy/systemd/          user timers for the dev -> prod carrier
-sql/                     baseline schema and migrations 0001-0004
+sql/                     baseline schema and migrations 0001-0005
 docs/                    everything above, in detail
 ```
 

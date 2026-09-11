@@ -426,8 +426,11 @@ things:
   what lets the coverage dashboard stop attributing the run at the window edge
   instead of at the wall clock (`collection_status.py:450-480`).
 
-Slack additionally skips the watched-thread re-poll and bounds its
-workspace-wide searches with `before:` (`slack_collector.py:457`, `:498`).
+Slack bounds its workspace-wide searches with `before:`. Under V9 it also
+re-polls watched threads whose recorded activity falls inside the slice and
+scans immediately before `since` for older parents. The parent scan defaults
+to at most one page per channel and 90 days; discovery responses are archived
+as evidence but are not projected into the slice ledger.
 Notion additionally skips the link queue and the re-check sweep, because both
 target the live head (`notion_collector.py:603`).
 
@@ -496,10 +499,9 @@ for itself, and `_advance_checkpoint` (`daily.py:368-380`) enforces it again
 for all four, because a guarantee that depends on four collectors each
 remembering it is not a guarantee.
 
-The mode's known limitation is recorded in the rule registry: a slice does not
-recover replies whose thread parent predates the window, which is the defect
-rule `V8` is published as pending to describe (see
-[collection-rules.md](collection-rules.md)).
+The mode's remaining Slack limitation is recorded in the rule registry: a
+parent older than the configured lookback, or beyond the per-channel page
+budget, can still be missed. Every run records the limits and observed reach.
 
 ## Per-source coverage, and its limits
 
@@ -516,12 +518,10 @@ watermark.
   exposes them (`subtype: tombstone`); otherwise a deleted message keeps its
   last observation. Closing this needs the Events API, which is not a
   read-only pull.
-* `conversations.history` omits thread replies, so a reply to an older thread
-  cannot be found through history. Two independent paths cover it: a re-poll
-  of threads carried in the checkpoint (30-day lookback by default,
-  `slack_collector.py:55`) and the `search.messages` queries. The re-poll is
-  skipped entirely for a bounded or date-slice run
-  (`slack_collector.py:457`).
+* `conversations.history` omits thread replies. Incremental runs cover older
+  threads through the checkpoint watch list and searches. Date slices also
+  re-poll window-qualified watched threads and use the bounded V9 pre-window
+  parent scan; a parent beyond that scan's reach remains a declared gap.
 * Mentions are covered by six searches plus one per usergroup the user belongs
   to. Matches the context filter drops, and matches older than the window, are
   counted in the manifest (`search_matches_context_filtered`,
