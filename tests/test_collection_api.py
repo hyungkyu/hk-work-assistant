@@ -91,6 +91,7 @@ ROUTES = (
     (collection_web.collection_overview, {}),
     (collection_web.collection_runs, {}),
     (collection_web.collection_coverage, {}),
+    (collection_web.collection_batch_runs, {}),
 )
 
 
@@ -197,6 +198,7 @@ def test_every_reporting_route_is_a_read_only_get() -> None:
     schema = app.openapi()["paths"]
     collection_paths = [path for path in schema if path.startswith("/api/v1/admin/collection")]
     assert sorted(collection_paths) == [
+        "/api/v1/admin/collection/batch-runs",
         "/api/v1/admin/collection/coverage",
         "/api/v1/admin/collection/overview",
         "/api/v1/admin/collection/refresh",
@@ -281,3 +283,32 @@ def test_the_test_view_stays_reachable_but_only_when_asked_for(
     assert widened["environment_scope"] == "all"
     scoped = collection_web.collection_coverage(owner, environment="test")
     assert scoped["environment_scope"] == "test"
+
+
+def test_batch_runs_reads_the_wrapper_state_files(
+    owner: FakeRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The endpoint reports what run-logged.sh recorded, per batch."""
+    logs = tmp_path / "logs"
+    (logs / "daily-collect").mkdir(parents=True)
+    (logs / "daily-collect" / "last.json").write_text(
+        json.dumps(
+            {
+                "started_at": "2026-09-10T21:01:48Z",
+                "finished_at": "2026-09-10T23:22:43Z",
+                "exit_code": 0,
+                "outcome": "ok",
+                "command": "worklog daily-collect",
+                "log": "x.log",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WORKLOG_LOG_ROOT", str(logs))
+    payload = collection_web.collection_batch_runs(owner)
+    named = {run["name"]: run for run in payload["runs"]}
+    assert named["daily-collect"]["outcome"] == "ok"
+    assert named["daily-collect"]["duration_seconds"] == pytest.approx(8455.0)
+    # Batches expected on this machine that have never run are named, not
+    # left to be noticed as gaps.
+    assert named["board-audit"]["outcome"] == "never-run"

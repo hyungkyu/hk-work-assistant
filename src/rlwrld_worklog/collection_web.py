@@ -150,6 +150,21 @@ def collection_runs(
     )
 
 
+@router.get("/batch-runs")
+def collection_batch_runs(request: Request) -> dict[str, Any]:
+    """Every scheduled batch's last run, read from the logs the runs write.
+
+    The manifests say what a collection found; they say nothing about whether
+    the batch that should have produced one ever ran. This is the other half:
+    run-logged.sh's last.json and running.json per batch, including runs in
+    progress, stalls, and batches that have never run at all.
+    """
+    require_super_admin_session(request)
+    from .batch_runs import read_batch_runs
+
+    return read_batch_runs()
+
+
 @router.post("/refresh")
 def collection_refresh(
     request: Request,

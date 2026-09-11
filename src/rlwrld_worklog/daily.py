@@ -876,8 +876,15 @@ def _run_source(
         outcome.status = "degraded" if captured.degraded_reason else "ok"
         return outcome
     if not config.database_url:
+        # Not `ok`. `--no-database` above is a choice and reports `ok`; a
+        # missing DATABASE_URL is an accident -- on the night of 2026-09-10
+        # KST the systemd unit lost the variable, every load was skipped, and
+        # the run still reported `ok`, so the green screen said the data was
+        # in the database when none of it was. Degraded exits nonzero, which
+        # is what makes the miss visible the same night instead of a day
+        # later.
         load_stage.detail = {"reason": "no database url configured"}
-        outcome.status = "degraded" if captured.degraded_reason else "ok"
+        outcome.status = "degraded"
         return outcome
     try:
         from .ledger.load import load_source

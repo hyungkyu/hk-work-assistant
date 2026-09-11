@@ -42,6 +42,13 @@ EXPECTED_INTERVAL_HOURS: dict[str, float] = {
 # for, not scheduled.
 ONE_OFF_PREFIXES = ("backfill-",)
 
+# A running batch whose log has been silent longer than this is reported as
+# `stalled` rather than `running`. Three hours, because the quietest healthy
+# stretch observed is the Notion capture, and even that logs within the hour;
+# a shorter threshold would call a slow night a stall, and a page that cries
+# wolf gets read as noise.
+STALL_HOURS = 3.0
+
 
 def log_root() -> Path:
     return Path(os.environ.get("WORKLOG_LOG_ROOT") or DEFAULT_LOG_ROOT)
@@ -73,6 +80,18 @@ def _read_one(directory: Path, *, now: datetime) -> dict[str, Any]:
         "log": None,
         "detail": None,
     }
+    # The start marker first. run-logged.sh writes running.json when a run
+    # starts and removes it only after last.json is written, so a marker that
+    # is newer than the last recorded finish is the latest event in this
+    # directory: a run in progress, or one that was killed and never got to
+    # write its finish. Liveness is deliberately judged by the log file's
+    # mtime and not by the recorded pid -- this reader usually runs inside the
+    # app container, whose pid namespace is not the host's, so a pid check
+    # here would call every live host process dead.
+    running_record = _read_running(directory, record, now=now)
+    if running_record is not None:
+        return running_record
+
     state_path = directory / "last.json"
     try:
         stored = json.loads(state_path.read_text(encoding="utf-8"))
@@ -118,6 +137,69 @@ def _read_one(directory: Path, *, now: datetime) -> dict[str, Any]:
     return record
 
 
+def _read_running(
+    directory: Path, record: dict[str, Any], *, now: datetime
+) -> dict[str, Any] | None:
+    """The record for a start marker newer than the last finish, or None."""
+    try:
+        marker = json.loads((directory / "running.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        marker = {}
+    if not isinstance(marker, dict):
+        marker = {}
+    started = _parse_time(marker.get("started_at"))
+
+    # A marker older than the last recorded finish is leftover, not a run:
+    # the finish that should have removed it exists and is newer. Fall through
+    # to the normal read rather than resurrecting it.
+    try:
+        stored = json.loads((directory / "last.json").read_text(encoding="utf-8"))
+        finished = _parse_time(stored.get("finished_at")) if isinstance(stored, dict) else None
+    except (OSError, ValueError):
+        finished = None
+    if started and finished and finished >= started:
+        return None
+
+    record.update(
+        {
+            "outcome": "running",
+            "started_at": marker.get("started_at"),
+            "command": marker.get("command"),
+            "log": marker.get("log"),
+            "pid": marker.get("pid"),
+        }
+    )
+    if started:
+        record["hours_since"] = round((now - started).total_seconds() / 3600, 2)
+
+    idle_minutes: float | None = None
+    log_path = marker.get("log")
+    if isinstance(log_path, str) and log_path:
+        try:
+            modified = datetime.fromtimestamp(Path(log_path).stat().st_mtime, tz=timezone.utc)
+            idle_minutes = round((now - modified).total_seconds() / 60, 1)
+        except OSError:
+            idle_minutes = None
+    record["log_idle_minutes"] = idle_minutes
+
+    # Unreadable log counts as stalled, not as running: "I cannot see it
+    # moving" and "it is moving" must not render the same.
+    reference_hours = (
+        idle_minutes / 60
+        if idle_minutes is not None
+        else (record["hours_since"] if record["hours_since"] is not None else STALL_HOURS + 1)
+    )
+    if reference_hours > STALL_HOURS:
+        record["outcome"] = "stalled"
+        record["detail"] = (
+            "start marker with no finish record, and no log output for "
+            f"{round(reference_hours, 1)}h -- killed, or wedged"
+        )
+    return record
+
+
 def read_batch_runs(
     root: Path | None = None, *, now: datetime | None = None
 ) -> dict[str, Any]:
@@ -155,7 +237,11 @@ def read_batch_runs(
             )
 
     runs.sort(key=lambda run: (run["finished_at"] or run["started_at"] or ""), reverse=True)
-    failing = [run["name"] for run in runs if run["outcome"] not in {"ok", "never-run"}]
+    failing = [
+        run["name"]
+        for run in runs
+        if run["outcome"] not in {"ok", "never-run", "running"}
+    ]
     overdue = [run["name"] for run in runs if run["overdue"]]
     return {
         "generated_at": current.isoformat(),

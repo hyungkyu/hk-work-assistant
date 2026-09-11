@@ -398,6 +398,13 @@ characters. `last.json` is written whatever happens, including when the command
 could not be started at all — "no file" and "nothing happened" must never look
 the same from the other side.
 
+A fourth file, `running.json`, is written when the run starts and removed only
+after `last.json` is written. A marker with no matching finish is the record
+that a run started and never finished — killed, or still going — and the
+backoffice's 스케줄 page reads it as exactly that (`batch_runs.py`), showing
+`running` while the log is moving and `stalled` once it has been silent past
+the threshold. Before this marker existed, a Ctrl-C'd run left nothing at all.
+
 **Who invokes it.** Anyone running an ad-hoc or scheduled collection by hand.
 Use it instead of `> /tmp/something.log`: a log in `/tmp` exists only on the
 machine that wrote it, and on 2026-09-05 that meant a running backfill could be

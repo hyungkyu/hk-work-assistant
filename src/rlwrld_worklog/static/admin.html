@@ -439,6 +439,14 @@
         <h1>스케줄</h1>
         <p class="lead">정기 배치가 무엇을 언제 어떻게 실행하는지, 그리고 지금 실제로 어떤 상태인지 봅니다.</p>
         <article class="card">
+          <div class="card-header"><h2>배치 실행 기록</h2><span class="badge" id="batch-runs-badge">확인 중</span></div>
+          <p class="work-state" id="batch-runs-state">불러오는 중…</p>
+          <div id="batch-runs-list"></div>
+          <p class="help">각 배치가 실제로 마지막에 어떻게 끝났는지를 실행 래퍼가 남긴 기록(last.json·running.json)에서 읽습니다.
+             running은 시작 기록만 있는 진행 중, stalled는 시작 기록만 있는데 로그가 멈춘 상태 — 죽었거나 낀 것입니다.
+             backfill-* 은 일회성이라 지연으로 계산하지 않습니다.</p>
+        </article>
+        <article class="card" style="margin-top:16px">
           <div class="card-header"><h2>배치 목록</h2><span class="badge" id="schedule-badge">확인 중</span></div>
           <p class="work-state" id="schedule-state">불러오는 중…</p>
           <div id="schedule-list"></div>
@@ -2139,7 +2147,71 @@
         : `systemd 상태를 읽을 수 없습니다: ${payload.systemd_unavailable_reason || '사유 불명'}. 설치·활성·다음 실행은 불명으로 표시합니다.`;
     }
 
+    function renderBatchRuns(payload) {
+      const host = $('batch-runs-list');
+      host.textContent = '';
+      const runs = payload.runs || [];
+      const table = document.createElement('table');
+      const head = document.createElement('thead');
+      const headRow = document.createElement('tr');
+      ['배치', '결과', '시작', '종료', '소요', '경과', 'exit'].forEach((label) => {
+        const cell = document.createElement('th');
+        cell.textContent = label;
+        headRow.appendChild(cell);
+      });
+      head.appendChild(headRow);
+      table.appendChild(head);
+      const body = document.createElement('tbody');
+      const badOutcomes = new Set(['failed', 'stalled', 'no-state', 'unreadable']);
+      runs.forEach((run) => {
+        const row = document.createElement('tr');
+        const duration = run.duration_seconds != null
+          ? `${Math.round(run.duration_seconds / 60)}분` : '';
+        const since = run.hours_since != null ? `${run.hours_since}h 전` : '';
+        let outcome = run.outcome;
+        if (run.outcome === 'running' && run.log_idle_minutes != null) {
+          outcome = `running · 로그 ${run.log_idle_minutes}분 전`;
+        }
+        if (run.overdue) outcome += ' · 지연';
+        [run.name, outcome,
+         scheduleWhen(run.started_at) || '', scheduleWhen(run.finished_at) || '',
+         duration, since,
+         run.exit_code != null ? String(run.exit_code) : ''].forEach((value, index) => {
+          const cell = document.createElement('td');
+          cell.textContent = value == null ? '' : String(value);
+          if (index === 1 && (badOutcomes.has(run.outcome) || run.overdue)) {
+            cell.style.color = 'var(--danger, #c0392b)';
+            cell.style.fontWeight = '600';
+          }
+          if (run.detail && index === 1) cell.title = run.detail;
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      });
+      table.appendChild(body);
+      const scroll = document.createElement('div');
+      scroll.className = 'table-scroll';
+      scroll.appendChild(table);
+      host.appendChild(scroll);
+      const counts = payload.counts || {};
+      $('batch-runs-badge').textContent =
+        `배치 ${counts.total ?? runs.length}건 · 문제 ${counts.failing ?? 0} · 지연 ${counts.overdue ?? 0}`;
+      $('batch-runs-state').textContent = (payload.failing || []).length || (payload.overdue || []).length
+        ? `확인 필요: ${[...new Set([...(payload.failing || []), ...(payload.overdue || [])])].join(', ')}`
+        : '모든 배치가 마지막 실행을 정상 종료했습니다.';
+    }
+
+    async function loadBatchRuns() {
+      try {
+        renderBatchRuns(await api('/api/v1/admin/collection/batch-runs'));
+      } catch (error) {
+        $('batch-runs-state').textContent = `배치 실행 기록을 불러오지 못했습니다: ${error.message}`;
+        $('batch-runs-badge').textContent = '조회 실패';
+      }
+    }
+
     async function loadSchedules() {
+      loadBatchRuns();
       try {
         renderSchedules(await api('/api/v1/admin/schedules'));
       } catch (error) {

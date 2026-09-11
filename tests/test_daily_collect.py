@@ -526,16 +526,38 @@ def test_a_capture_stays_successful_when_the_database_stage_fails(tmp_path: Path
     assert stage(result, "load")["status"] == "failed"
 
 
-def test_the_load_stage_is_skipped_without_a_database_url(tmp_path: Path) -> None:
+def test_a_missing_database_url_degrades_the_run_instead_of_passing_it(tmp_path: Path) -> None:
+    """No DATABASE_URL is an accident, and an accident must not report `ok`.
+
+    `--no-database` is a choice and stays `ok` (the test that follows this
+    one). A missing URL
+    is the systemd unit losing its environment -- which happened on the night
+    of 2026-09-10 KST: every load was skipped and the run still said `ok`, so
+    the screen said the data was in the database when none of it was. Degraded
+    exits nonzero, which is what makes the miss visible the same night.
+    """
     summary = run_daily(
         config(tmp_path, load_database=True, database_url=None),
         credentials=credentials(tmp_path),
         captures={"slack": slack_capture},
     )
     result = source(summary, "slack")
-    assert result["status"] == "ok"
+    assert result["status"] == "degraded"
+    assert summary["exit_code"] == EXIT_DOWNSTREAM_FAILED
     assert stage(result, "load")["status"] == "skipped"
     assert stage(result, "load")["detail"]["reason"] == "no database url configured"
+
+
+def test_choosing_no_database_keeps_the_run_ok(tmp_path: Path) -> None:
+    summary = run_daily(
+        config(tmp_path, load_database=False, database_url=None),
+        credentials=credentials(tmp_path),
+        captures={"slack": slack_capture},
+    )
+    result = source(summary, "slack")
+    assert result["status"] == "ok"
+    assert stage(result, "load")["status"] == "skipped"
+    assert stage(result, "load")["detail"]["reason"] == "database loading disabled"
 
 
 def test_the_load_stage_runs_in_dry_run_mode_for_a_dry_run(tmp_path: Path, monkeypatch) -> None:
