@@ -41,6 +41,14 @@ def test_the_menu_is_grouped_and_ordered_as_the_operator_asked() -> None:
     ]
     assert parsed == [
         ("업무", [("work", "업무 현황"), ("roadmap", "로드맵")]),
+        # The org chart and the per-person day sit together, above 운영,
+        # because they are what somebody opens to answer a question about a
+        # person -- the collection screens are how the data behind them got
+        # there.
+        (
+            "다이제스트",
+            [("org", "조직도"), ("person", "일자별"), ("unmapped", "미확인 계정")],
+        ),
         (
             "운영",
             [

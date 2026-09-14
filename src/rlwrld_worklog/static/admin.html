@@ -187,6 +187,12 @@
           <button data-page="roadmap" disabled title="원본 시스템과 필드가 정해지면 활성화됩니다">로드맵</button>
         </div>
         <div class="nav-group">
+          <span class="nav-label">다이제스트</span>
+          <button data-page="org">조직도</button>
+          <button data-page="person">일자별</button>
+          <button data-page="unmapped">미확인 계정</button>
+        </div>
+        <div class="nav-group">
           <span class="nav-label">운영</span>
           <button data-page="collection">수집 현황</button>
           <button data-page="search">검색</button>
@@ -432,6 +438,65 @@
             <div class="field"><label>백업 활성화</label><div class="check"><input id="drive-enabled" type="checkbox"><span class="help">OAuth·암호화·복구시험이 준비된 뒤 활성화</span></div></div>
           </div>
           <div class="actions"><button class="button primary save-settings">설정 저장</button></div>
+        </article>
+      </section>
+
+      <section class="page" id="page-org">
+        <h1>조직도</h1>
+        <p class="lead">로스터 관측에서 배치가 만듭니다. 이 화면은 읽기 전용이고, 조직도가 바뀌는 유일한 경로는 다음 로스터 sync 입니다.</p>
+        <div class="grid three" id="org-counts"></div>
+        <article class="card" style="margin-top:16px">
+          <div class="card-header"><h2>팀</h2><span class="badge" id="org-badge">확인 중</span></div>
+          <p class="work-state" id="org-state">불러오는 중…</p>
+          <div id="org-tree"></div>
+        </article>
+        <article class="card" style="margin-top:16px">
+          <div class="card-header"><h2>사람</h2><span class="badge" id="org-people-badge">-</span></div>
+          <div id="org-people"></div>
+          <p class="help">이름을 누르면 그 사람의 일자별 다이제스트로 갑니다.
+             인원 수가 두 개인 것은 정의입니다 — 방문 연구원은 학생이면서 사내 접근을 가지므로 양쪽에 셉니다.</p>
+        </article>
+      </section>
+
+      <section class="page" id="page-person">
+        <h1>일자별</h1>
+        <p class="lead">한 사람의 하루를 시간 순으로 전부 보여줍니다. 고르지 않고 요약하지 않으며, 이 경로에 모델은 없습니다.</p>
+        <article class="card">
+          <div class="collection-toolbar">
+            <div class="work-filters">
+              <input id="person-id" placeholder="person_id (조직도에서 이름을 누르면 채워집니다)" style="min-width:280px">
+              <input id="person-day" type="date">
+              <button class="button primary" id="person-run">보기</button>
+            </div>
+            <span class="badge" id="person-badge">-</span>
+          </div>
+          <p class="work-state" id="person-state">조직도에서 사람을 고르거나 person_id 를 넣으세요.</p>
+          <div id="person-head"></div>
+          <div class="grid three" id="person-counts" style="margin-top:14px"></div>
+          <div id="person-events" style="margin-top:14px"></div>
+        </article>
+      </section>
+
+      <section class="page" id="page-unmapped">
+        <h1>미확인 계정</h1>
+        <p class="lead">활동은 있는데 로스터에 주인이 없는 계정입니다. 처음 보는 이름은 신규이거나 과거 이름이고,
+           자동으로 판정하지 않습니다 — 한 번 답하면 별칭으로 저장되어 다시 묻지 않습니다.</p>
+        <article class="card">
+          <div class="collection-toolbar">
+            <div class="work-filters">
+              <select id="unmapped-state">
+                <option value="open">답을 기다리는 것</option>
+                <option value="resolved">답한 것</option>
+                <option value="ignored">사람이 아니라고 판정한 것</option>
+                <option value="all">전부</option>
+              </select>
+              <button class="button" id="unmapped-reload">새로고침</button>
+            </div>
+            <span class="badge" id="unmapped-badge">-</span>
+          </div>
+          <p class="work-state" id="unmapped-state-line">불러오는 중…</p>
+          <div class="table-scroll"><table class="audit" id="unmapped-table"><tbody id="unmapped-body"></tbody></table></div>
+          <p class="help">목록은 배치가 만듭니다(매일 09:30 KST). 여기서는 주인을 답하거나 사람이 아니라고 판정만 합니다.</p>
         </article>
       </section>
 
@@ -2055,6 +2120,9 @@
       stopWorkPolling();
       stopCollectionPolling();
       if (page === 'search') { loadSearchCorpus(); }
+      if (page === 'org') loadOrg();
+      if (page === 'unmapped') loadUnmapped();
+      if (page === 'person') { if (!$('person-day').value) $('person-day').value = yesterdayKST(); }
       if (page === 'audit') loadAudit();
       if (page === 'work') { loadWork(); startWorkPolling(); }
       if (page === 'collection') { loadCollection({ coverage: true }); startCollectionPolling(); }
@@ -2210,6 +2278,295 @@
       }
     }
 
+    // 조직도 · 일자별 · 미확인 계정.
+    // 모두 배치가 만든 것을 읽기만 한다. 유일한 예외는 미확인 계정에 주인을
+    // 답하는 것인데, 그건 시스템이 물어본 질문에 사람이 답하는 것이다.
+    function yesterdayKST() {
+      const now = new Date(Date.now() + 9 * 3600 * 1000 - 24 * 3600 * 1000);
+      return now.toISOString().slice(0, 10);
+    }
+
+    function countTile(label, value, note, accent) {
+      const card = document.createElement('div');
+      card.className = 'card';
+      if (accent) card.style.borderLeft = `2px solid ${accent}`;
+      const k = document.createElement('div'); k.className = 'label'; k.textContent = label;
+      const v = document.createElement('div'); v.className = 'metric'; v.textContent = value;
+      if (accent) v.style.color = accent;
+      const n = document.createElement('p'); n.className = 'help'; n.textContent = note || '';
+      card.append(k, v, n);
+      return card;
+    }
+
+    function orgTreeRows(nodes, host, depth) {
+      nodes.forEach((node) => {
+        const row = document.createElement('div');
+        row.style.cssText = `display:flex;justify-content:space-between;gap:10px;padding:7px 9px;`
+          + `padding-left:${9 + depth * 18}px;border-radius:7px;font-size:13.5px;`
+          + (depth === 0 ? 'color:var(--text);font-weight:600;margin-top:10px' : 'color:var(--muted)');
+        const name = document.createElement('span');
+        name.textContent = node.name;
+        const count = document.createElement('span');
+        count.style.cssText = 'font:500 11.5px/1 ui-monospace,monospace;color:#6d7b8e';
+        count.textContent = node.people;
+        row.append(name, count);
+        host.appendChild(row);
+        orgTreeRows(node.children || [], host, depth + 1);
+      });
+    }
+
+    function orgGroups(nodes, host) {
+      nodes.forEach((node) => {
+        if ((node.members || []).length) {
+          const block = document.createElement('div');
+          block.style.cssText = 'border:1px solid var(--line-soft,#1e2734);border-radius:10px;'
+            + 'padding:12px;margin-top:12px;background:#0e131a';
+          const head = document.createElement('div');
+          head.className = 'card-header';
+          head.style.marginBottom = '6px';
+          const title = document.createElement('h2');
+          title.style.fontSize = '14px';
+          title.textContent = node.path;
+          const badge = document.createElement('span');
+          badge.className = 'badge';
+          badge.textContent = `${node.members.length}명`;
+          head.append(title, badge);
+          const grid = document.createElement('div');
+          grid.style.cssText = 'display:grid;gap:10px;'
+            + 'grid-template-columns:repeat(auto-fill,minmax(200px,1fr))';
+          node.members.forEach((person) => {
+            const card = document.createElement('button');
+            card.className = 'button';
+            card.style.cssText = 'text-align:left;display:grid;gap:4px;padding:11px 12px';
+            const name = document.createElement('strong');
+            name.textContent = person.name;
+            const sub = document.createElement('small');
+            sub.style.color = 'var(--muted)';
+            sub.textContent = [person.nickname, person.employment_type || person.title]
+              .filter(Boolean).join(' · ');
+            card.append(name, sub);
+            if (person.status === 'absent_from_sheet') {
+              const warn = document.createElement('span');
+              warn.className = 'badge wait';
+              warn.textContent = '시트에 없음';
+              card.appendChild(warn);
+            }
+            card.addEventListener('click', () => {
+              $('person-id').value = person.person_id;
+              if (!$('person-day').value) $('person-day').value = yesterdayKST();
+              showPage('person');
+              runPersonDay();
+            });
+            grid.appendChild(card);
+          });
+          block.append(head, grid);
+          host.appendChild(block);
+        }
+        orgGroups(node.children || [], host);
+      });
+    }
+
+    async function loadOrg() {
+      const line = $('org-state');
+      try {
+        const chart = await api('/api/v1/admin/org/chart');
+        const counts = chart.headcount || {};
+        const access = counts.by_access || {};
+        const tiles = $('org-counts');
+        tiles.textContent = '';
+        const describe = (obj) => Object.entries(obj).map(([k, v]) => `${k} ${v}`).join(' · ');
+        tiles.appendChild(countTile('고유 인원', counts.people || 0, '사람 수. 방문연구원은 한 번'));
+        tiles.appendChild(countTile('접근 기준 합계',
+          Object.values(access).reduce((a, b) => a + b, 0), describe(access), 'var(--accent-2)'));
+        tiles.appendChild(countTile('소속 구분', Object.keys(counts.by_affiliation || {}).length,
+          describe(counts.by_affiliation || {})));
+        const unplaced = chart.professors_without_a_lab || [];
+        if (unplaced.length) {
+          tiles.appendChild(countTile('연구실이 안 붙은 교수님', unplaced.length,
+            `${unplaced.join(' · ')} — 학생이 아직 없거나 표기가 다릅니다`, 'var(--warning)'));
+        }
+        const unmapped = chart.unmapped_accounts || [];
+        if (unmapped.length) {
+          tiles.appendChild(countTile('주인 없는 계정', unmapped.length,
+            unmapped.slice(0, 4).map((a) => `${a.kind} ${a.value}`).join(' · '), 'var(--warning)'));
+        }
+
+        const tree = $('org-tree');
+        tree.textContent = '';
+        orgTreeRows(chart.tree || [], tree, 0);
+        const people = $('org-people');
+        people.textContent = '';
+        orgGroups(chart.tree || [], people);
+
+        $('org-badge').textContent = `${(chart.tree || []).length} 루트`;
+        $('org-people-badge').textContent = `${chart.people || 0}명`;
+        line.textContent = chart.reason
+          ? chart.reason
+          : `로스터 관측 ${chart.observed_at ? new Date(chart.observed_at).toLocaleString() : '없음'} 기준`;
+      } catch (error) {
+        line.textContent = `조직도를 불러오지 못했습니다: ${error.message}`;
+        $('org-badge').textContent = '조회 실패';
+      }
+    }
+
+    async function runPersonDay() {
+      const personId = $('person-id').value.trim();
+      const day = $('person-day').value;
+      const line = $('person-state');
+      $('person-head').textContent = '';
+      $('person-counts').textContent = '';
+      $('person-events').textContent = '';
+      if (!personId || !day) { line.textContent = 'person_id 와 날짜가 필요합니다.'; return; }
+      line.textContent = '불러오는 중…';
+      try {
+        const body = await api(`/api/v1/admin/org/digest/${encodeURIComponent(personId)}?day=${day}`);
+        if (!body.built) {
+          // 만들지 않은 날과 활동이 없던 날은 다른 답이다.
+          line.textContent = `${day} 의 다이제스트가 아직 만들어지지 않았습니다 — 활동이 없었다는 뜻이 아닙니다. `
+            + `배치가 만들거나 worklog digest --since 로 백필합니다.`;
+          $('person-badge').textContent = '미생성';
+          return;
+        }
+        const state = body.state || {};
+        const head = $('person-head');
+        const title = document.createElement('h2');
+        title.textContent = body.name;
+        const sub = document.createElement('p');
+        sub.className = 'help';
+        sub.textContent = [state.nickname, state.title, state.department_raw].filter(Boolean).join(' · ');
+        const tags = document.createElement('div');
+        tags.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-top:8px';
+        [state.affiliation, state.access_level, state.employment_type]
+          .filter(Boolean).forEach((value) => {
+            const pill = document.createElement('span');
+            pill.className = 'badge';
+            pill.textContent = value;
+            tags.appendChild(pill);
+          });
+        (body.identities || []).forEach((identity) => {
+          const pill = document.createElement('span');
+          pill.className = 'badge';
+          pill.textContent = `${identity.kind} ${identity.value}`;
+          tags.appendChild(pill);
+        });
+        head.append(title, sub, tags);
+
+        const bySource = (body.counts || {}).by_source || {};
+        const tiles = $('person-counts');
+        Object.entries(bySource).forEach(([source, count]) => {
+          tiles.appendChild(countTile(source, count, ''));
+        });
+        tiles.appendChild(countTile('합계', body.events_total || 0, '그날 전부'));
+
+        const host = $('person-events');
+        const events = body.events || [];
+        if (!events.length) {
+          const empty = document.createElement('p');
+          empty.className = 'help';
+          empty.textContent = '이 날은 수집된 활동이 없습니다. 「활동 없음」과 「수집 실패」는 다른 답이고, 이것은 전자입니다.';
+          host.appendChild(empty);
+        } else {
+          const table = document.createElement('table');
+          table.className = 'audit';
+          const body_ = document.createElement('tbody');
+          events.forEach((event) => {
+            const row = document.createElement('tr');
+            [event.time, event.event_type, event.title || '제목 없음',
+             [event.container, event.thread].filter(Boolean).join(' · ')]
+              .forEach((value, index) => {
+                const cell = document.createElement('td');
+                if (index === 2 && !event.title) cell.style.color = '#6d7b8e';
+                if (index === 2 && event.permalink) {
+                  const link = document.createElement('a');
+                  link.href = event.permalink;
+                  link.target = '_blank';
+                  link.rel = 'noopener';
+                  link.textContent = value;
+                  cell.appendChild(link);
+                } else {
+                  cell.textContent = value;
+                }
+                row.appendChild(cell);
+              });
+            body_.appendChild(row);
+          });
+          table.appendChild(body_);
+          const scroll = document.createElement('div');
+          scroll.className = 'table-scroll';
+          scroll.appendChild(table);
+          host.appendChild(scroll);
+        }
+        $('person-badge').textContent = `${body.events_total || 0}건`;
+        line.textContent = `${body.day} (KST) · ${new Date(body.generated_at).toLocaleString()} 에 `
+          + `${body.generator} 가 생성 · 시간 순, 전부`;
+      } catch (error) {
+        line.textContent = `불러오지 못했습니다: ${error.message}`;
+        $('person-badge').textContent = '조회 실패';
+      }
+    }
+
+    async function loadUnmapped() {
+      const line = $('unmapped-state-line');
+      const body = $('unmapped-body');
+      body.textContent = '';
+      try {
+        const payload = await api(`/api/v1/admin/org/unmapped?state=${$('unmapped-state').value}&limit=200`);
+        const totals = payload.totals || {};
+        $('unmapped-badge').textContent = Object.entries(totals)
+          .map(([k, v]) => `${k} ${v.accounts}`).join(' · ') || '없음';
+        (payload.accounts || []).forEach((account) => {
+          const row = document.createElement('tr');
+          [account.kind, account.value, `${account.events}건`,
+           account.last_seen_at ? new Date(account.last_seen_at).toLocaleDateString() : '',
+           account.state === 'open' ? '' : (account.note || account.state)]
+            .forEach((value) => {
+              const cell = document.createElement('td');
+              cell.textContent = value;
+              row.appendChild(cell);
+            });
+          const actions = document.createElement('td');
+          if (account.state === 'open') {
+            const input = document.createElement('input');
+            input.placeholder = 'person_id';
+            input.style.cssText = 'width:150px;padding:6px 8px;margin-right:6px';
+            const assign = document.createElement('button');
+            assign.className = 'button primary';
+            assign.textContent = '이 사람';
+            assign.addEventListener('click', () => resolveAccount(account, input.value.trim(), false));
+            const ignore = document.createElement('button');
+            ignore.className = 'button';
+            ignore.style.marginLeft = '6px';
+            ignore.textContent = '사람 아님';
+            ignore.addEventListener('click', () => resolveAccount(account, null, true));
+            actions.append(input, assign, ignore);
+          }
+          row.appendChild(actions);
+          body.appendChild(row);
+        });
+        line.textContent = (payload.accounts || []).length
+          ? '주인을 답하면 별칭으로 저장되어 다시 묻지 않습니다.'
+          : '답을 기다리는 계정이 없습니다.';
+      } catch (error) {
+        line.textContent = `불러오지 못했습니다: ${error.message}`;
+        $('unmapped-badge').textContent = '조회 실패';
+      }
+    }
+
+    async function resolveAccount(account, personId, ignore) {
+      const line = $('unmapped-state-line');
+      if (!ignore && !personId) { line.textContent = 'person_id 를 넣거나 「사람 아님」을 고르세요.'; return; }
+      try {
+        await api('/api/v1/admin/org/unmapped/resolve', {
+          method: 'POST',
+          body: JSON.stringify({ kind: account.kind, value: account.value,
+                                 person_id: personId || null, ignore }),
+        });
+        loadUnmapped();
+      } catch (error) {
+        line.textContent = `기록하지 못했습니다: ${error.message}`;
+      }
+    }
+
     async function loadSchedules() {
       loadBatchRuns();
       try {
@@ -2263,6 +2620,10 @@
     });
 
     $('search-run').addEventListener('click', runSearch);
+    $('person-run').addEventListener('click', runPersonDay);
+    $('person-day').addEventListener('change', () => { if ($('person-id').value.trim()) runPersonDay(); });
+    $('unmapped-reload').addEventListener('click', loadUnmapped);
+    $('unmapped-state').addEventListener('change', loadUnmapped);
     $('search-q').addEventListener('keydown', (event) => { if (event.key === 'Enter') runSearch(); });
 
     $('logout').addEventListener('click', async () => {
