@@ -410,6 +410,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the documents. Without it, extract and count only",
     )
 
+    slack_sweep = subparsers.add_parser(
+        "slack-thread-sweep",
+        help="One-time recovery of Slack replies orphaned from a pre-window parent",
+    )
+    slack_sweep.add_argument("--database-url", default=None)
+    slack_sweep.add_argument("--archive-root", type=Path, default=None)
+    slack_sweep.add_argument("--ledger-root", type=Path, default=None)
+    slack_sweep.add_argument("--config-root", type=Path, default=None)
+    slack_sweep.add_argument(
+        "--apply",
+        action="store_true",
+        help="Fetch and load. Without it, only report how many parents are orphaned",
+    )
+    slack_sweep.add_argument(
+        "--max-parents",
+        type=_positive_int,
+        default=None,
+        help="Cap the number of parent threads swept in one run (default: all)",
+    )
+
     ledger_verify = subparsers.add_parser(
         "ledger-verify", help="Verify counts, duplicates, and provenance"
     )
@@ -1374,6 +1394,69 @@ def ledger_load(args: argparse.Namespace) -> int:
     return 1 if result.errors else 0
 
 
+def slack_thread_sweep(args: argparse.Namespace) -> int:
+    """Recover Slack replies whose parent thread never made it to the ledger.
+
+    Reads the orphaned parents from the ledger, then hands them to the ordinary
+    Slack capture + load pipeline as a seed list. `--apply` off reports the
+    count and writes nothing, which is how a person sees how much is left before
+    committing to the run.
+
+    One-time by nature: a parent this recovers is no longer an orphan, so the
+    count falls on each run and reaches zero.
+    """
+    from .slack_sweep import orphan_thread_parents, summarize
+
+    database_url = args.database_url or os.environ.get("DATABASE_URL")
+    if not database_url:
+        _print_json("slack_thread_sweep", {"ok": False, "reason": "no database url"})
+        return 2
+
+    parents = orphan_thread_parents(database_url)
+    if args.max_parents is not None:
+        # Deterministic truncation: sorted channels, sorted parents, so a capped
+        # run and its resume cover disjoint sets in a stable order.
+        capped: dict[str, set[str]] = {}
+        remaining = args.max_parents
+        for channel in sorted(parents):
+            if remaining <= 0:
+                break
+            chosen = sorted(parents[channel])[:remaining]
+            capped[channel] = set(chosen)
+            remaining -= len(chosen)
+        parents = capped
+
+    overview = summarize(parents)
+    if not args.apply:
+        _print_json("slack_thread_sweep", {"ok": True, "dry_run": True, **overview})
+        return 0
+    if not parents:
+        _print_json("slack_thread_sweep", {"ok": True, "dry_run": False, "parents": 0,
+                                           "note": "nothing orphaned; nothing to do"})
+        return 0
+
+    from .daily import DailyConfig, config_as_dict, run_daily
+
+    archive_root = _archive_root(args)
+    config = DailyConfig(
+        archive_root=archive_root,
+        ledger_root=_ledger_root(args, archive_root),
+        environment="production",
+        sources=("slack",),
+        # Slack ignores since/until under a seeded sweep (each thread is fetched
+        # whole), but the config validates a window, so a trivially valid one is
+        # given and never used to bound the fetch.
+        since="26h",
+        database_url=database_url,
+        config_root=args.config_root,
+        slack_seed_threads=parents,
+    )
+    _print_json("slack_thread_sweep_config", {**config_as_dict(config), **overview})
+    summary = run_daily(config, on_source=lambda result: _print_json("slack_thread_sweep_source", result.as_dict()))
+    _print_json("slack_thread_sweep", {"ok": summary.get("exit_code", 0) == 0, **overview})
+    return int(summary.get("exit_code", 0))
+
+
 def ledger_verify(args: argparse.Namespace) -> int:
     from .ledger.verify import verify_ledger, write_report
 
@@ -1591,6 +1674,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return org_command(args)
     if args.command == "digest":
         return digest_command(args)
+    if args.command == "slack-thread-sweep":
+        return slack_thread_sweep(args)
     if args.command == "ledger-verify":
         return ledger_verify(args)
     if args.command == "ledger-schema":

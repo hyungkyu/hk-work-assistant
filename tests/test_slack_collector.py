@@ -719,3 +719,58 @@ def test_rerunning_the_same_window_is_idempotent(tmp_path: Path) -> None:
     _, second = collect(tmp_path, FakeSlack(history=payload), run_id="run-2")
 
     assert [event.event_id for event in first.events] == [event.event_id for event in second.events]
+
+
+# --- Seeded thread sweep: recovering replies orphaned from an old parent -----
+#
+# HK, 2026-09-14. An ordinary reply to a very old parent is reached by no
+# ordinary path — history omits it, search never returns it, pre-window
+# discovery cannot see a parent past its floor. Asking for the thread by its
+# parent ts is the one path that works, whatever the parent's age.
+
+
+def test_a_seed_fetches_the_whole_thread_parent_and_all_replies(tmp_path: Path) -> None:
+    old_parent = ts(-400 * 86_400)  # over a year before the window
+    reply_in = ts(-30)
+    client = FakeSlack(
+        replies={(CHANNEL, old_parent): [
+            message(old_parent, reply_count=2, thread_ts=old_parent),
+            message(reply_in, thread_ts=old_parent),
+        ]},
+    )
+    archive, result = collect(
+        tmp_path, client, seed_threads={CHANNEL: {old_parent}}, use_search=False,
+    )
+    fetched = {event.event_id for event in result.events}
+    # Parent and reply both land, though the parent is far outside any window.
+    assert len(result.events) == 2
+    sweep = result.counters["seed_thread_sweep"]
+    assert sweep == {"requested_parents": 1, "threads_swept": 1, "replies_fetched": 1}
+
+
+def test_a_seeded_run_touches_only_the_named_threads(tmp_path: Path) -> None:
+    """No channel history, no search: the sweep asks for exactly what it knows."""
+    parent = ts(-500 * 86_400)
+    client = FakeSlack(
+        history={CHANNEL: [[message(ts(-10))]]},  # would be read by an ordinary run
+        replies={(CHANNEL, parent): [message(parent, reply_count=1, thread_ts=parent),
+                                     message(ts(-20), thread_ts=parent)]},
+        searches={"direct-mentions": [message(ts(-5))]},
+    )
+    collect(tmp_path, client, seed_threads={CHANNEL: {parent}}, use_search=True)
+    methods = [method for method, _ in client.calls]
+    assert "conversations.history" not in methods
+    assert "search.messages" not in methods
+    assert "conversations.replies" in methods
+
+
+def test_max_parents_is_not_the_collectors_concern_but_the_seed_is_honoured(tmp_path: Path) -> None:
+    """Two seeded parents, both swept."""
+    p1, p2 = ts(-600 * 86_400), ts(-700 * 86_400)
+    client = FakeSlack(replies={
+        (CHANNEL, p1): [message(p1, reply_count=1, thread_ts=p1), message(ts(-40), thread_ts=p1)],
+        (CHANNEL, p2): [message(p2, reply_count=1, thread_ts=p2), message(ts(-50), thread_ts=p2)],
+    })
+    _, result = collect(tmp_path, client, seed_threads={CHANNEL: {p1, p2}}, use_search=False)
+    assert result.counters["seed_thread_sweep"]["threads_swept"] == 2
+    assert len(result.events) == 4

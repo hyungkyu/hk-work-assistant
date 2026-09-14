@@ -260,6 +260,14 @@ class SlackCollector:
         thread_lookback_days: int = DEFAULT_THREAD_LOOKBACK_DAYS,
         prewindow_parent_lookback_days: int = DEFAULT_PREWINDOW_PARENT_LOOKBACK_DAYS,
         prewindow_parent_pages_per_channel: int = DEFAULT_PREWINDOW_PARENT_PAGES_PER_CHANNEL,
+        # A one-time targeted sweep: {channel_id: {parent_ts, ...}}. Each named
+        # thread is fetched whole through conversations.replies -- parent and
+        # every reply, with no window filter -- which is the only path that
+        # reaches a reply whose parent predates every collection window and is
+        # not a mention, so neither history, search, nor pre-window discovery
+        # surfaces it. This recovers the 622 orphaned replies; the seed list
+        # comes from the ledger (replies whose parent has no row of its own).
+        seed_threads: dict[str, set[str]] | None = None,
     ) -> CollectionResult:
         archive = self.archive
         checkpoint = archive.read_checkpoint()
@@ -442,6 +450,47 @@ class SlackCollector:
                         archive.note_truncation("max_messages", limit=max_messages)
                         return
 
+        seeded_threads_swept = 0
+        seeded_replies_fetched = 0
+
+        def collect_full_thread(channel_id: str, thread_ts: str) -> None:
+            """Fetch a whole thread by its parent ts: parent and every reply.
+
+            Unlike `collect_replies`, this keeps every row regardless of any
+            window -- the parent is exactly the old, orphaned message the sweep
+            exists to record, and dropping it (as a normal day does) would
+            leave the reply attributed to a parent still missing from the
+            ledger. No `oldest`/`latest`, so Slack returns the thread entire.
+            """
+            nonlocal seeded_threads_swept, seeded_replies_fetched
+            thread_key = (channel_id, thread_ts)
+            if thread_key in swept_threads:
+                return
+            swept_threads.add(thread_key)
+            seeded_threads_swept += 1
+            try:
+                for reply_page in self._pages(
+                    "conversations.replies",
+                    "messages",
+                    f"seed-replies-{channel_id}-{thread_ts}",
+                    channel=channel_id,
+                    ts=thread_ts,
+                    inclusive=True,
+                ):
+                    for reply in reply_page["messages"]:
+                        if str(reply.get("ts") or "") != str(thread_ts):
+                            seeded_replies_fetched += 1
+                        add_message(channel_id, reply)
+            except SlackApiError as error:
+                if error.code not in SKIPPABLE_CONVERSATION_ERRORS:
+                    raise
+                archive.note_skip(
+                    "seed_thread_inaccessible",
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    error=str(error.code),
+                )
+
         def collect_channel(channel_id: str) -> None:
             nonlocal parents_swept, declared_replies
             # A slice ignores the checkpoint's watermark: that watermark records
@@ -485,7 +534,20 @@ class SlackCollector:
                     if at_limit():
                         return
 
-        for channel in channels:
+        # A seeded sweep is exactly the named threads and nothing else: no
+        # channel history, no search, no pre-window scan. Those paths are how
+        # the ordinary run finds messages; the sweep already knows which threads
+        # it wants and asks for each directly.
+        if seed_threads:
+            for channel_id in sorted(seed_threads):
+                for parent_ts in sorted(seed_threads[channel_id]):
+                    collect_full_thread(str(channel_id), str(parent_ts))
+                    if at_limit():
+                        break
+                if at_limit():
+                    break
+
+        for channel in channels if not seed_threads else []:
             channel_id = str(channel["id"])
             if at_limit():
                 archive.note_truncation("max_messages", limit=max_messages)
@@ -505,7 +567,12 @@ class SlackCollector:
         # re-poll only parents whose latest known reply reaches into or beyond
         # the requested window. Discovery pages are archived under their own
         # kind and are evidence only; they are not projected into the ledger.
-        if until is not None and prewindow_parent_pages_per_channel > 0 and not at_limit():
+        if (
+            not seed_threads
+            and until is not None
+            and prewindow_parent_pages_per_channel > 0
+            and not at_limit()
+        ):
             discovery_oldest = since_ts - (prewindow_parent_lookback_days * 86_400)
             for channel in channels:
                 channel_id = str(channel["id"])
@@ -563,7 +630,7 @@ class SlackCollector:
         # Replies to threads whose parent predates the window are unreachable
         # through conversations.history, so watched threads are re-polled from
         # their own last observed reply. The lookback bounds the daily cost.
-        if not bounded:
+        if not bounded and not seed_threads:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=thread_lookback_days)).timestamp()
             collected_channel_ids = {str(channel["id"]) for channel in channels}
             already_read = set(events_by_key)
@@ -602,7 +669,7 @@ class SlackCollector:
         search_before_window = 0
         search_after_window = 0
         searches_run: list[str] = []
-        if use_search and not bounded and not at_limit():
+        if use_search and not bounded and not seed_threads and not at_limit():
             # A slice needs an upper bound here: these searches are
             # workspace-wide and would otherwise drag today's mentions into a
             # window from January. Slack reads `before:` as an exclusive day,
@@ -713,6 +780,13 @@ class SlackCollector:
                     if prewindow_oldest_observed is not None
                     else None
                 ),
+            },
+            "seed_thread_sweep": {
+                "requested_parents": (
+                    sum(len(v) for v in seed_threads.values()) if seed_threads else 0
+                ),
+                "threads_swept": seeded_threads_swept,
+                "replies_fetched": seeded_replies_fetched,
             },
             "searches_run": searches_run,
             "search_matches_kept": search_kept,

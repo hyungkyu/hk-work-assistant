@@ -39,7 +39,7 @@ import fcntl
 import json
 import os
 import signal
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -237,6 +237,12 @@ class DailyConfig:
     # sources ignore them.
     slack_prewindow_parent_lookback_days: int | None = None
     slack_prewindow_parent_pages_per_channel: int | None = None
+    # One-time targeted thread sweep: {channel_id: {parent_ts, ...}}. When set,
+    # the Slack capture fetches exactly these threads whole and does nothing
+    # else — no channel history, no search. Recovers replies orphaned from a
+    # parent that predates every window. asdict() would choke on sets, so
+    # config_as_dict below renders it as counts, not the list.
+    slack_seed_threads: dict[str, set[str]] | None = None
 
     def __post_init__(self) -> None:
         # A smoke run is bounded by construction and must never move a
@@ -458,6 +464,26 @@ def capture_slack(config: DailyConfig, credentials: Credentials) -> CaptureOutco
         dry_run=config.dry_run,
         config_root=config.config_root,
     )
+    if config.slack_seed_threads:
+        try:
+            result = collector.collect(
+                since=parse_since(config.since),
+                until=parse_until(config.until) if config.until else None,
+                expected_team_id=credentials.slack_expected_team_id,
+                use_search=False,
+                advance_checkpoint=False,
+                seed_threads=config.slack_seed_threads,
+            )
+        except Exception as error:
+            raise CaptureFailed(archive, error) from error
+        return CaptureOutcome(
+            archive=archive,
+            manifest_path=result.manifest_path,
+            checkpoint_advanced=result.checkpoint_advanced,
+            events=result.events,
+            summary={"seed_thread_sweep": result.counters.get("seed_thread_sweep")},
+        )
+
     prewindow: dict[str, int] = {}
     if config.slack_prewindow_parent_lookback_days is not None:
         prewindow["prewindow_parent_lookback_days"] = config.slack_prewindow_parent_lookback_days
@@ -1141,9 +1167,21 @@ def _release_lock(handle) -> None:
 
 
 def config_as_dict(config: DailyConfig) -> dict[str, Any]:
-    value = asdict(config)
+    # Built by hand rather than asdict(): slack_seed_threads holds sets, which
+    # are not JSON, and printing the whole parent list would bury the config
+    # under it. The seed is rendered as counts; the parents themselves are in
+    # the run manifest's seed_thread_sweep counter.
+    seed = config.slack_seed_threads
+    value = asdict(
+        replace(config, slack_seed_threads=None) if seed is not None else config
+    )
     for key in ("archive_root", "ledger_root", "config_root", "lock_path"):
         if value.get(key) is not None:
             value[key] = str(value[key])
     value.pop("database_url", None)
+    if seed is not None:
+        value["slack_seed_threads"] = {
+            "channels": len(seed),
+            "parents": sum(len(v) for v in seed.values()),
+        }
     return value
