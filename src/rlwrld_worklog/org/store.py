@@ -28,6 +28,12 @@ class SyncResult:
     observation_id: int | None = None
     source: str = ""
     rows: int = 0
+    # Rows the tab held before normalising dropped any. A tab that reads as
+    # zero people is a different thing from a tab with no rows, and on
+    # 2026-09-14 only the second number was reported -- which said "0 people"
+    # for a tab that was full.
+    rows_in_sheet: int = 0
+    rows_without_a_name: int = 0
     people: int = 0
     people_new: int = 0
     teams: int = 0
@@ -44,6 +50,8 @@ class SyncResult:
             "observation_id": self.observation_id,
             "source": self.source,
             "rows": self.rows,
+            "rows_in_sheet": self.rows_in_sheet,
+            "rows_without_a_name": self.rows_without_a_name,
             "people": self.people,
             "people_new": self.people_new,
             "teams": self.teams,
@@ -87,6 +95,7 @@ def write_observation(
     observed_at: datetime | None = None,
     dry_run: bool = False,
     skip_unchanged: bool = True,
+    rows_in_sheet: int | None = None,
 ) -> SyncResult:
     """Record one tab's rows as an observation.
 
@@ -100,6 +109,8 @@ def write_observation(
     from psycopg.types.json import Jsonb  # noqa: F401  (kept for symmetry with other writers)
 
     result = SyncResult(dry_run=dry_run, source=source, rows=len(records))
+    result.rows_in_sheet = len(records) if rows_in_sheet is None else rows_in_sheet
+    result.rows_without_a_name = max(0, result.rows_in_sheet - len(records))
     result.duplicate_rows = [
         f"{identifier}: {' / '.join(rows)}" for identifier, rows in duplicates(records)
     ]

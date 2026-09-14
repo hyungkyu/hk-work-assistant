@@ -89,6 +89,16 @@ def rooted_path(
 
     if not parts:
         return [COMPANY_ROOT, UNASSIGNED]
+
+    # One company root, whatever the sheet's first segment says. The roster
+    # writes "RLWRLD BOD | US" as a sibling of "RLWRLD | ...", which produced
+    # a third root on the first real run. BOD is part of the company, not a
+    # peer of it, so the prefix is folded: "RLWRLD BOD | US" becomes
+    # RLWRLD > BOD > US. Only an exact prefix is folded, so a company whose
+    # name merely starts with the same letters is untouched.
+    head = parts[0]
+    if head != COMPANY_ROOT and head.startswith(f"{COMPANY_ROOT} "):
+        return [COMPANY_ROOT, head[len(COMPANY_ROOT) + 1 :].strip(), *parts[1:]]
     return parts
 
 

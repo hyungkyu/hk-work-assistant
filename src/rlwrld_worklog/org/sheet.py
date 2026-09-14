@@ -110,8 +110,26 @@ def _openpyxl():
     return openpyxl
 
 
+def _looks_like_a_header(values: list[str]) -> bool:
+    """Does this row name columns, rather than hold somebody's data?
+
+    A row is the header when at least two of its cells are names this code
+    knows. Two, not one, because a data row can happen to contain a word that
+    is also a column name.
+
+    Taking the *first non-empty row* instead is what made the student tab read
+    as empty on 2026-09-14: that tab opens with a title line above the column
+    names, so the title became the header, every subsequent row mapped onto
+    one meaningless key, no row had a name, and normalising dropped all of
+    them. Zero students, no error -- the worst shape a failure can take.
+    """
+    from .normalize import normalize_header
+
+    return sum(1 for value in values if value and normalize_header(value)) >= 2
+
+
 def rows_from_workbook(data: bytes, tab: str) -> list[dict]:
-    """Rows of one tab, taking the first non-empty row as the header."""
+    """Rows of one tab, from the row that actually names the columns."""
     openpyxl = _openpyxl()
 
     book = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
@@ -121,14 +139,28 @@ def rows_from_workbook(data: bytes, tab: str) -> list[dict]:
         # could not find rather than reporting zero people.
         raise KeyError(f"no such tab: {tab} (found: {book.sheetnames})")
     sheet = book[tab]
-    header: list[str] | None = None
+    rows = [
+        ["" if cell is None else str(cell).strip() for cell in row]
+        for row in sheet.iter_rows(values_only=True)
+    ]
+
+    header_at = None
+    for index, values in enumerate(rows):
+        if _looks_like_a_header(values):
+            header_at = index
+            break
+    if header_at is None:
+        # Said out loud. A tab whose columns cannot be recognised is a tab
+        # somebody restructured, and answering with an empty list would file
+        # its people as having ceased to exist.
+        raise KeyError(
+            f"no header row in {tab}: none of its {len(rows)} rows names two "
+            "columns this code knows. The sheet's columns may have been renamed"
+        )
+
+    header = rows[header_at]
     out: list[dict] = []
-    for row in sheet.iter_rows(values_only=True):
-        values = ["" if cell is None else str(cell).strip() for cell in row]
-        if header is None:
-            if any(values):
-                header = values
-            continue
+    for values in rows[header_at + 1 :]:
         if not any(values):
             continue
         out.append({header[index]: values[index] for index in range(min(len(header), len(values)))})
@@ -156,6 +188,16 @@ def read_all(data: bytes, tabs: tuple[str, ...] = TABS) -> dict[str, list[dict]]
     for tab in tabs:
         found[tab] = normalize_rows(rows_from_workbook(data, resolved[tab]), source=tab)
     return found
+
+
+def raw_row_counts(data: bytes, tabs: tuple[str, ...] = TABS) -> dict[str, int]:
+    """How many rows each tab held, before normalising dropped any.
+
+    Reported next to the people count so "the tab was empty" and "every row
+    was dropped" cannot look the same from the outside.
+    """
+    resolved = resolve_tabs(data, tabs)
+    return {tab: len(rows_from_workbook(data, resolved[tab])) for tab in tabs}
 
 
 def summarize(records_by_tab: dict[str, list[dict]]) -> dict[str, Any]:

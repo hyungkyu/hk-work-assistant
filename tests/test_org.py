@@ -397,3 +397,54 @@ def test_a_tab_that_is_gone_is_reported_with_what_the_workbook_has() -> None:
         read_all(data)
     message = str(error.value)
     assert "roaster_seed_ext" in message and "roster_seed_2" in message
+
+
+def test_a_sibling_of_the_company_root_is_folded_under_it() -> None:
+    """The sheet writes "RLWRLD BOD | US"; the board is part of the company.
+
+    The first real run produced three roots because that string is a sibling
+    of "RLWRLD | ..." rather than a child. HK asked for two roots, and the
+    board is not a peer of the company it belongs to.
+    """
+    assert rooted_path(
+        "RLWRLD BOD | US", affiliation="internal", source="roster_seed_2"
+    ) == [COMPANY_ROOT, "BOD", "US"]
+    assert rooted_path(
+        "RLWRLD BOD", affiliation="internal", source="roster_seed_2"
+    ) == [COMPANY_ROOT, "BOD"]
+
+
+def test_the_company_root_itself_is_not_folded_into_itself() -> None:
+    assert rooted_path(
+        "RLWRLD | Model Team", affiliation="internal", source="roster_seed_2"
+    ) == [COMPANY_ROOT, "Model Team"]
+
+
+def test_a_header_below_a_title_row_is_still_found() -> None:
+    """The student tab opens with a title line above its column names.
+
+    Reading the first non-empty row as the header made that tab read as zero
+    students with no error -- the worst shape a failure can take.
+    """
+    from rlwrld_worklog.org.sheet import rows_from_workbook
+
+    data = _workbook(
+        {
+            "roster_seed_2": [
+                ["Virtual Lab 학생 명단", "", ""],
+                [],
+                ["이름", "소속 학교 연구실 지도교수님", "email (school)"],
+                ["학생하나", "신진우 교수님", "one@school.invalid"],
+            ]
+        }
+    )
+    rows = rows_from_workbook(data, "roster_seed_2")
+    assert [row["이름"] for row in rows] == ["학생하나"]
+
+
+def test_a_tab_whose_columns_are_unrecognisable_is_an_error_not_an_empty_list() -> None:
+    from rlwrld_worklog.org.sheet import rows_from_workbook
+
+    data = _workbook({"roster_seed_2": [["가", "나"], ["1", "2"]]})
+    with pytest.raises(KeyError, match="no header row"):
+        rows_from_workbook(data, "roster_seed_2")

@@ -1117,7 +1117,14 @@ def org_command(args: argparse.Namespace) -> int:
         return 0
 
     # sync
-    from .org.sheet import ROSTER_SHEET_ID, TABS, read_all, summarize, workbook_digest
+    from .org.sheet import (
+        ROSTER_SHEET_ID,
+        TABS,
+        raw_row_counts,
+        read_all,
+        summarize,
+        workbook_digest,
+    )
     from .org.store import write_observation
 
     if args.workbook:
@@ -1137,6 +1144,7 @@ def org_command(args: argparse.Namespace) -> int:
 
     digest = workbook_digest(data)
     by_tab = read_all(data, TABS)
+    raw_counts = raw_row_counts(data, TABS)
     results = []
     for tab in TABS:
         outcome = write_observation(
@@ -1146,6 +1154,7 @@ def org_command(args: argparse.Namespace) -> int:
             digest=digest,
             dry_run=not args.apply,
             skip_unchanged=not args.reobserve,
+            rows_in_sheet=raw_counts.get(tab),
         )
         results.append(outcome.as_dict())
     _print_json(
