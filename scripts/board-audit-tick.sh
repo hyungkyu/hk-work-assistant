@@ -60,6 +60,14 @@ roster=(--executor mori --executor ari --executor local --executor batch --execu
   done < "$config_root/board-audit-roster"
 }
 
+# A pending one-time reset, queued before the audit measures anything, so
+# this run's audit already reflects it. Self-disarming: does nothing once
+# its manifest has been queued.
+for manifest in reset/*.json; do
+  [ -e "$manifest" ] || continue
+  bash scripts/queue-reset.sh "$manifest" || true
+done
+
 report=$("$worklog" work audit "${roster[@]}" 2>&1)
 if [ $? -ne 0 ] || [ -z "$report" ]; then
   fail "audit-failed" "$(printf '%s' "$report" | tail -10)"

@@ -81,6 +81,20 @@ Each item may carry a phase — `P0`, `P1`, `P2` … — naming which piece of
 the programme it belongs to. It is a separate axis from priority: priority
 says how soon, phase says which piece, and they disagree constantly.
 
+The phases are HK's, in his words (2026-09-14), and they are ordered:
+
+* **P0** — 누가 무슨 일을 하고 있고, 언제 마무리 되고, 뭐가 블로커이고, 그
+  사실이 투명하게 준실시간 공유되고 실행되는 것.
+* **P1** — 슬랙, 노션, 깃헙, 슬럼, 구캘 등 우리 회사의 누가 무엇을 하고
+  있는지 기록되고 디비화되는 것.
+* **P2** — 실제로 보고 싶은 리포트의 다양한 자세한 생성.
+
+Read them as a dependency chain, not a schedule: P2 built on a P1 with holes
+produces confident reports about data that is not there, and P1 collected
+while P0 is blind means nobody can tell whether the collection is running.
+Work in a later phase is not blocked by an earlier one, but a claim that an
+earlier phase is finished has to survive the audit.
+
 An item with no phase is one nobody has placed yet, which is a visible
 state and not a default. Board columns read P0 first and unplaced last.
 

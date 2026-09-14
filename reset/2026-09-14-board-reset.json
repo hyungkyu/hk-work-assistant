@@ -1,0 +1,239 @@
+{
+  "name": "2026-09-14-board-reset",
+  "note": "HK 2026-09-14: 보드를 모두 리셋하자 — 한거 기록은 남기고, 할것과 하고 있는 것. 기타 알 수 없는 모든건 삭제. 제일 믿을 수 있는 것은 데이터, 코드를 기준으로.",
+  "entries": [
+    {
+      "op": "archive",
+      "work_id": "wi_af3bd73dc9abdfd0",
+      "expected_revision": 28,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_529a892cf83b756b",
+      "expected_revision": 3,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_961138e370054444",
+      "expected_revision": 2,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_29ec7a53b926a480",
+      "expected_revision": 3,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_6c7d257c52f5b182",
+      "expected_revision": 2,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_89dabee438e7ac03",
+      "expected_revision": 3,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_4a7cb16ea7bd6f10",
+      "expected_revision": 2,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_51f4778de08aa951",
+      "expected_revision": 3,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_7bf9c367dc45e3d2",
+      "expected_revision": 2,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_479f682469b1b38a",
+      "expected_revision": 3,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_d263fa9d33e94a3b",
+      "expected_revision": 2,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_04132b9b0642bb7e",
+      "expected_revision": 3,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_939565128081ac9c",
+      "expected_revision": 2,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_8cf81ee56d7fe007",
+      "expected_revision": 3,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_5becf8f21e5f9e6d",
+      "expected_revision": 3,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_f9c2fe7e5324f8eb",
+      "expected_revision": 7,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_b1c0b68024673050",
+      "expected_revision": 7,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_70331bcc03a3b2e3",
+      "expected_revision": 8,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_65e81fb03f0f1ca7",
+      "expected_revision": 9,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_82abe1f1d29b1dc7",
+      "expected_revision": 6,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_428a61a8894964b4",
+      "expected_revision": 3,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_435d0522d8663a99",
+      "expected_revision": 2,
+      "reason": "취소된 항목 — 보드 리셋 2026-09-14, 기록은 이력에 남는다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_f4da4cd4d5cbb0c0",
+      "expected_revision": 2,
+      "reason": "질문이지 업무가 아니다 — 완료를 확인할 사람이 없다"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_09dec3a5354929ae",
+      "expected_revision": 2,
+      "reason": "주인도 완료 판정도 없는 운영 위생 항목"
+    },
+    {
+      "op": "archive",
+      "work_id": "wi_d6cab167bf5d8eec",
+      "expected_revision": 5,
+      "reason": "이 보드 리셋이 대체한다 (2026-09-14)"
+    },
+    {
+      "work_id": "wi_1788972bef584bcc",
+      "phase": "P0",
+      "assigned_to": "mori"
+    },
+    {
+      "work_id": "wi_1bda10e6938ed059",
+      "phase": "P0",
+      "assigned_to": "mori"
+    },
+    {
+      "work_id": "wi_b3df22c8cc784b36",
+      "phase": "P0",
+      "assigned_to": "mori"
+    },
+    {
+      "work_id": "wi_95934a4f02fae5a7",
+      "phase": "P0"
+    },
+    {
+      "work_id": "wi_7bf2d5dd2380516e",
+      "phase": "P1",
+      "assigned_to": "mori"
+    },
+    {
+      "work_id": "wi_b7a1c62c161808fd",
+      "phase": "P1"
+    },
+    {
+      "work_id": "wi_8647f167ed287cb7",
+      "phase": "P1",
+      "assigned_to": "mori"
+    },
+    {
+      "work_id": "wi_c5cd3e04f0590398",
+      "phase": "P1"
+    },
+    {
+      "work_id": "wi_10916f988e63cd1c",
+      "phase": "P1",
+      "assigned_to": "mori"
+    },
+    {
+      "work_id": "wi_37fcda638cb69415",
+      "phase": "P1"
+    },
+    {
+      "work_id": "wi_5fd43438ead239a9",
+      "phase": "P1"
+    },
+    {
+      "work_id": "wi_64ab4c97c6a1b782",
+      "phase": "P1"
+    },
+    {
+      "work_id": "wi_fadf1b595f97a008",
+      "phase": "P1"
+    },
+    {
+      "work_id": "wi_c0fd375ffe014ac9",
+      "phase": "P1",
+      "assigned_to": "mori"
+    },
+    {
+      "work_id": "wi_a3d2df0b07fc29ed",
+      "phase": "P1"
+    },
+    {
+      "work_id": "wi_0f5c985c04ad861f",
+      "phase": "P1"
+    },
+    {
+      "work_id": "wi_5fc4aaa66dd8a7a3",
+      "phase": "P2"
+    },
+    {
+      "work_id": "wi_59a11ca9541882a0",
+      "phase": "P2"
+    },
+    {
+      "work_id": "wi_a4e76455ec5caa67",
+      "phase": "P2"
+    }
+  ]
+}
