@@ -25,6 +25,9 @@ def _item(**overrides: object) -> dict[str, object]:
         "progress_summary": "",
         "updated_at": NOW.isoformat(),
         "archived_at": None,
+        # A date in the future by default, so the fixture is a clean board.
+        # The due-date checks have their own tests below.
+        "due_at": (NOW + timedelta(days=3)).isoformat(),
     }
     base.update(overrides)
     return base
@@ -157,3 +160,54 @@ def test_a_clean_board_says_so_in_one_line() -> None:
     report = board_audit.audit([_item()], [], now=NOW)
     assert report["ok"] is True
     assert report["summary"].endswith("위반 0")
+
+
+# --- "언제 마무리 되고" (HK's P0, 2026-09-14) -------------------------------
+#
+# `due_at` existed as a field that nothing read. An item could sit with no
+# date, or months past one, and the board said nothing about either.
+
+
+def test_an_item_past_its_own_date_is_reported() -> None:
+    report = board_audit.audit(
+        [_item(status="in_progress", due_at=(NOW - timedelta(hours=30)).isoformat())],
+        [_touch("wi_0000000000000001", "noa", 1)],
+        now=NOW,
+    )
+    assert report["counts"]["overdue"] == 1
+    assert report["checks"]["overdue"][0]["hours_overdue"] == 30.0
+
+
+def test_underway_work_with_no_finish_date_is_reported() -> None:
+    report = board_audit.audit([_item(status="ready", due_at=None)], [], now=NOW)
+    assert report["counts"]["underway_without_a_due_date"] == 1
+
+
+def test_backlog_without_a_date_is_not_a_defect() -> None:
+    """Nobody has promised a backlog item yet.
+
+    Demanding a date there would produce dates nobody means, which is worse
+    than none — a board full of invented deadlines says less than a board
+    that admits it has not scheduled the work.
+    """
+    report = board_audit.audit([_item(status="backlog", due_at=None)], [], now=NOW)
+    assert report["counts"]["underway_without_a_due_date"] == 0
+
+
+def test_a_done_item_past_its_date_is_not_overdue() -> None:
+    """It finished. Late or not, the board is not contradicting itself."""
+    report = board_audit.audit(
+        [_item(status="done", due_at=(NOW - timedelta(days=9)).isoformat())],
+        [],
+        now=NOW,
+    )
+    assert report["counts"]["overdue"] == 0
+
+
+def test_the_summary_names_the_due_date_breaches_in_korean() -> None:
+    report = board_audit.audit(
+        [_item(status="ready", due_at=(NOW - timedelta(days=1)).isoformat())],
+        [],
+        now=NOW,
+    )
+    assert "마감 지남" in report["summary"]

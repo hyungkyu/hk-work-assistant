@@ -11,7 +11,7 @@ worklog work audit --summary        # next_action 에 들어갈 한 줄만
 
 30분마다 `hkwa-board-audit.timer` 가 돌린다.
 
-## 재는 것 다섯 가지
+## 재는 것 일곱 가지
 
 | 검사 | 무엇을 잡나 | 왜 |
 |---|---|---|
@@ -20,6 +20,13 @@ worklog work audit --summary        # next_action 에 들어갈 한 줄만
 | `progress_summary_over_three_lines` | 요약이 3줄을 넘는다 | P0 조건 6 |
 | `assigned_outside_roster` | 존재하지 않는 실행자에게 걸린 일 | 아무도 집지 않을 큐 |
 | `ready_untouched` | `ready` 인데 하루 넘게 안 바뀐 항목 | ready 가 아니거나 실행자가 없다 |
+| `overdue` | 자기 `due_at` 을 지난 열린 항목 | 보드가 스스로와 모순된다 |
+| `underway_without_a_due_date` | `in_progress`·`ready` 인데 `due_at` 이 없다 | HK 의 P0 — "언제 마무리 되고" |
+
+마감 검사 두 가지는 `backlog` 를 재지 않는다. 아직 아무도 약속하지 않은 일에
+날짜를 요구하면 아무도 뜻하지 않는 날짜가 생기고, 그건 날짜가 없는 것보다 나쁘다.
+스스로 일정을 못 잡았다고 인정하는 보드가, 지어낸 마감으로 찬 보드보다 더 많이
+말한다.
 
 `done` 과 `cancelled` 은 재지 않는다. 큐를 떠난 항목에 대해서는 보드가 틀릴 것이
 없다. 보관된 항목도 마찬가지다.
@@ -40,7 +47,7 @@ worklog work audit --summary        # next_action 에 들어갈 한 줄만
 알 방법이 없고, 보드에서 추론하면 고아 항목이 스스로를 정당화하게 된다.
 
 기본 명부는 `scripts/board-audit-tick.sh` 안에 있고 —
-`mori`(클라우드 개발) · `local`(운영계 검증) · `batch`(타이머) · `hk` —
+`mori`(주) · `ari`(HK 의 조커) · `local`(운영계 검증) · `batch`(타이머) · `hk` —
 `$APP_CONFIG_ROOT/board-audit-roster` 파일이 있으면 그쪽이 이긴다(한 줄에 하나).
 
 ## 보고할 뿐, 고치지 않는다

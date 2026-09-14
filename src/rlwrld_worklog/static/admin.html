@@ -111,6 +111,8 @@
     .work-card-title { font-size: 13px; font-weight: 600; line-height: 1.45; word-break: break-word; }
     .work-chips { display: flex; flex-wrap: wrap; gap: 6px; }
     .work-chip { font-size: 11px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--muted); white-space: nowrap; }
+    .work-chip.due { color: #b9c6d6; border-color: #3a4a60; }
+    .work-chip.due.late { color: var(--danger); border-color: #7b3838; }
     .work-chip.phase { color: #dbe6f4; border-color: #3a4a60; background: #1a2331; font-weight: 600; letter-spacing: .04em; }
     .work-chip.priority-urgent { color: var(--danger); border-color: #7b3838; }
     .work-chip.priority-high { color: var(--warning); border-color: #705a2c; }
@@ -1050,6 +1052,19 @@
       chips.appendChild(workChip(item.assigned_to, 'assignee'));
       chips.appendChild(workChip(WORK_PRIORITY_LABELS[item.priority] || item.priority, `priority-${item.priority}`));
       chips.appendChild(workChip(WORK_STATUS_LABELS[item.status] || item.status));
+      // 언제 마무리 되는지. A live item with no date says so rather than
+      // showing nothing, because an absent deadline is the thing worth
+      // seeing — it is what the audit now counts.
+      if (!['done', 'cancelled'].includes(item.status)) {
+        if (item.due_at) {
+          const late = new Date(item.due_at) < new Date();
+          chips.appendChild(workChip(
+            `마감 ${item.due_at.slice(0, 10)}${late ? ' 지남' : ''}`,
+            late ? 'due late' : 'due'));
+        } else if (['in_progress', 'ready'].includes(item.status)) {
+          chips.appendChild(workChip('마감 없음', 'due late'));
+        }
+      }
       chips.appendChild(workChip(workRelativeTime(item.updated_at)));
       if (item.parent_id && byId.has(item.parent_id)) chips.appendChild(workChip(`상위: ${byId.get(item.parent_id).title}`));
       card.appendChild(chips);

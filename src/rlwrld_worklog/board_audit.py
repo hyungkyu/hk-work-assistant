@@ -31,6 +31,16 @@ DEFAULT_STALLED_AFTER_HOURS = 6
 DEFAULT_STALE_READY_AFTER_HOURS = 24
 MAX_SUMMARY_LINES = 3
 
+# Where "언제 마무리 되고" is expected to have an answer. HK's P0 (2026-09-14)
+# names a finish date as part of what has to be visible, and `due_at` had been
+# a field nothing read: an item could sit with no date, or months past one,
+# and the board said nothing.
+#
+# Only the statuses where a date is a real commitment. A `backlog` item with
+# no due date is not a defect -- nobody has promised it yet, and demanding a
+# date there would produce dates nobody means, which is worse than none.
+DUE_DATE_EXPECTED_IN = ("in_progress", "ready")
+
 
 def _hours_since(moment: datetime | None, now: datetime) -> float | None:
     if moment is None:
@@ -145,8 +155,30 @@ def audit(
         if updated is not None and updated < ready_cut:
             stale_ready.append(_row(item, hours_since_change=_hours_since(updated, now)))
 
+    # Past its own date. Not a judgement that the work is late in any deeper
+    # sense -- it is the board contradicting itself, which is the only thing
+    # this module measures.
+    overdue = []
+    for item in live:
+        due = parse_instant(item.get("due_at"))
+        if due is not None and due < now:
+            overdue.append(
+                _row(item, status=item.get("status"), due_at=item.get("due_at"),
+                     hours_overdue=_hours_since(due, now))
+            )
+
+    # Underway or next up, and no answer to "when does this finish".
+    without_due = [
+        _row(item, status=item.get("status"))
+        for item in live
+        if str(item.get("status")) in DUE_DATE_EXPECTED_IN
+        and parse_instant(item.get("due_at")) is None
+    ]
+
     checks = {
         "in_progress_without_assignee_activity": unworked,
+        "overdue": overdue,
+        "underway_without_a_due_date": without_due,
         "live_without_next_action": without_next,
         "progress_summary_over_three_lines": long_summary,
         "assigned_outside_roster": outside_roster,
@@ -170,6 +202,8 @@ _LABELS = {
     "progress_summary_over_three_lines": "요약 3줄 초과",
     "assigned_outside_roster": "실행자 미상",
     "ready_untouched": "방치된 ready",
+    "overdue": "마감 지남",
+    "underway_without_a_due_date": "마감 없음",
 }
 
 # `next_action` is capped at 500 characters by the store, and this line is
