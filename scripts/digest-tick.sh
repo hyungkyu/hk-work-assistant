@@ -70,6 +70,17 @@ echo "=== roster sync"
 "$worklog" org sync --apply || status=1
 
 echo
+echo "=== timeline projection (records the loader has not projected)"
+# Cheap when there is nothing to do, and the thing that makes a change to
+# what gets projected heal itself instead of waiting for somebody to
+# remember. On 2026-09-11 that gap was 13,266 records.
+"$worklog" timeline-project --apply || status=1
+
+echo
+echo "=== search corpus (documents the loader has not indexed)"
+"$worklog" search-index --apply || status=1
+
+echo
 echo "=== unmapped accounts"
 # After the roster, because an account the sheet has just claimed should
 # close itself rather than be asked about; before the digest, because the
@@ -77,8 +88,13 @@ echo "=== unmapped accounts"
 "$worklog" org unmapped --apply || status=1
 
 echo
-echo "=== digest (yesterday KST)"
-"$worklog" digest --apply || status=1
+echo "=== digest (yesterday, and any gap in the last week)"
+# `--catch-up` rather than yesterday alone: a night the machine was off, or a
+# run that died, would otherwise leave a hole that only a person typing a
+# backfill command could close -- and a batch that needs a person is not a
+# batch. Bounded to a week so a long outage catches up over several nights
+# instead of timing out in one.
+"$worklog" digest --catch-up 7 --apply || status=1
 
 echo
 echo "=== org chart"

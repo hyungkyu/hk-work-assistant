@@ -172,17 +172,80 @@ if [ -z "${after:-}" ]; then
   finish
 fi
 
+# ---------------------------------------------------------- after the build
+#
+# Two things that used to need a person typing a command, and that a person
+# typing a command is the wrong answer to: systemd units that changed in the
+# repo, and migrations the new code needs.
+
+units_note=""
+unit_src="$root/deploy/systemd"
+unit_dst="$HOME/.config/systemd/user"
+if [ -d "$unit_src" ] && [ -d "$unit_dst" ]; then
+  changed=0
+  for unit in "$unit_src"/*.service "$unit_src"/*.timer; do
+    [ -f "$unit" ] || continue
+    name=$(basename "$unit")
+    if ! cmp -s "$unit" "$unit_dst/$name"; then
+      # `sed` because the units carry %h, which systemd expands but cmp does
+      # not; copying verbatim is what the installer does too.
+      cp -f "$unit" "$unit_dst/$name" && changed=1
+    fi
+  done
+  if [ "$changed" = 1 ]; then
+    systemctl --user daemon-reload >/dev/null 2>&1
+    for t in "$unit_src"/*.timer; do
+      [ -f "$t" ] || continue
+      systemctl --user enable --now "$(basename "$t")" >/dev/null 2>&1
+    done
+    units_note=" units-reloaded"
+  fi
+fi
+
+# Pending migrations. A new timer or a new column arriving with the code and
+# then waiting for somebody to notice is how this system spent 2026-09-14:
+# the schema was three migrations behind the image and every symptom looked
+# like something else.
+#
+# Applying them is opt-in, because HK's rule is that a schema change is asked
+# separately (2026-09-11). `HKWA_AUTO_MIGRATE=1` in collect.env turns the ask
+# into a standing yes; without it this reports and changes nothing, which is
+# still better than silence.
+migrate_note=""
+config_root="${APP_CONFIG_ROOT:-$HOME/.config/hk-work-assistant}"
+if [ -f "$config_root/collect.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$config_root/collect.env"
+  set +a
+fi
+if [ -n "${DATABASE_URL:-}" ] && [ -x .venv/bin/worklog ]; then
+  pending=$(.venv/bin/worklog ledger-migrate 2>/dev/null \
+    | sed -n 's/.*"pending": \[\([^]]*\)\].*/\1/p')
+  if [ -n "$pending" ] && [ "$pending" != "" ]; then
+    if [ "${HKWA_AUTO_MIGRATE:-0}" = "1" ]; then
+      if .venv/bin/worklog ledger-migrate --apply >/dev/null 2>&1; then
+        migrate_note=" migrated:$pending"
+      else
+        migrate_note=" MIGRATE-FAILED:$pending"
+      fi
+    else
+      migrate_note=" PENDING-MIGRATIONS:$pending (set HKWA_AUTO_MIGRATE=1 in collect.env to apply)"
+    fi
+  fi
+fi
+
 verdict=$(compare "$after" "$committed")
 case "$verdict" in
   MATCH*)
     outcome="deployed"
-    detail="$verdict at $head_sha"
+    detail="$verdict at $head_sha$units_note$migrate_note"
     ;;
   *)
     # Built, restarted, and still not the commit. Saying "deployed" here is the
     # exact false report this batch was written to end.
     outcome="image-stale"
-    detail="$verdict"
+    detail="$verdict$units_note$migrate_note"
     ;;
 esac
 finish

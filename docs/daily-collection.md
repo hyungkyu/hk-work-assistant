@@ -865,8 +865,27 @@ no model writes them: the person page lists **every** activity of the day in
 time order, assembled from fields the collectors recorded, and an event whose
 source gave no title says so rather than being given one.
 
-Backfill is `worklog digest --since <KST date> --until <KST date> --apply`.
+The batch closes its own gaps. `digest --catch-up 7` builds any of the last
+seven KST days that has no digest at all, so a night the machine was off, or
+a run that died, is filled on the next run instead of waiting for somebody to
+type a backfill — a batch that needs a person is not a batch. The window is
+bounded on purpose: a long outage catches up over several nights rather than
+timing out in one where nobody is watching. The same tick re-runs
+`timeline-project` and `search-index`, which cost nothing when there is
+nothing to do and mean a change to what gets projected or indexed heals
+itself.
+
+`worklog digest --since <KST date> --until <KST date> --apply` is the
+deliberate backfill for anything older than the window, and
 `worklog digest --status` says which days exist.
+
+The deploy tick does the same for the machine around the code: when a unit
+file in `deploy/systemd` changes it is copied, reloaded and enabled, and
+pending migrations are reported in `last-deploy.json`. Setting
+`HKWA_AUTO_MIGRATE=1` in `collect.env` turns that report into an apply — a
+standing yes to the "ask separately" rule for schema changes, which is worth
+giving, because every migration here is additive and a schema three versions
+behind the image is how 2026-09-14 went.
 
 The roster needs no new Google scope: it is exported through Drive as XLSX,
 which `drive.readonly` already covers, and which returns every tab in one

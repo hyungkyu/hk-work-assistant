@@ -340,6 +340,14 @@ def build_parser() -> argparse.ArgumentParser:
     digest_parser.add_argument(
         "--status", action="store_true", help="Which days have digests"
     )
+    digest_parser.add_argument(
+        "--catch-up",
+        type=_positive_int,
+        default=None,
+        metavar="DAYS",
+        help="Build any of the last DAYS KST days that has no digest. Bounded "
+        "on purpose, and what the daily batch runs so a gap closes itself",
+    )
 
     timeline_project = subparsers.add_parser(
         "timeline-project",
@@ -1257,6 +1265,13 @@ def digest_command(args: argparse.Namespace) -> int:
             )
             return 0
         _print_json("digest", found)
+        return 0
+
+    if args.catch_up:
+        _print_json(
+            "digest_catch_up",
+            digest_module.catch_up(database_url, days=args.catch_up, dry_run=not args.apply),
+        )
         return 0
 
     if args.since:

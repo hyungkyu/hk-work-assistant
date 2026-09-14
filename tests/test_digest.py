@@ -297,3 +297,51 @@ def test_rendered_titles_are_escaped() -> None:
     )
     assert "<script>alert(1)</script>" not in page
     assert "&lt;script&gt;" in page
+
+
+@REQUIRES_DATABASE
+def test_catch_up_builds_only_the_days_that_have_none(database) -> None:
+    """A batch that needs a person to type a backfill is not a batch.
+
+    A night the machine was off leaves a hole. `--catch-up` is what closes
+    it on the next run, and it is bounded on purpose: a week, so a long
+    outage catches up over several nights rather than timing out in one
+    where nobody is watching.
+    """
+    from datetime import date as date_type
+
+    from rlwrld_worklog.digest import catch_up, missing_days
+
+    today = date_type(2026, 9, 14)
+    _event(database, at="2026-09-10T09:00:00+09:00", source="github",
+           event_type="github_commit", actor="tester", title="하나")
+    _event(database, at="2026-09-12T09:00:00+09:00", source="github",
+           event_type="github_commit", actor="tester", title="둘")
+
+    # Nothing built yet: every day in the window is missing.
+    assert missing_days(database, days=7, today=today) == [
+        date_type(2026, 9, d) for d in range(7, 14)
+    ]
+
+    first = catch_up(database, days=7, today=today)
+    assert first["missing"][0] == "2026-09-07"
+    assert read_digest(database, PERSON, date_type(2026, 9, 10))["events_total"] == 1
+    assert read_digest(database, PERSON, date_type(2026, 9, 12))["events_total"] == 1
+
+    # A day that produced no rows stays "not built" -- which is honest, and
+    # means the next run looks at it again rather than recording a lie.
+    again = catch_up(database, days=7, today=today)
+    assert "2026-09-10" not in again["missing"]
+    assert "2026-09-12" not in again["missing"]
+
+
+@REQUIRES_DATABASE
+def test_catch_up_never_builds_today(database) -> None:
+    """Today is not over; a digest of a partial day is one nothing corrects."""
+    from datetime import date as date_type
+
+    from rlwrld_worklog.digest import missing_days
+
+    today = date_type(2026, 9, 14)
+    assert date_type(2026, 9, 14) not in missing_days(database, days=7, today=today)
+    assert max(missing_days(database, days=7, today=today)) == date_type(2026, 9, 13)

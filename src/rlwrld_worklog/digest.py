@@ -23,6 +23,12 @@ from typing import Any
 
 KST = timezone(timedelta(hours=9))
 
+
+def _kst_today() -> date:
+    """Today in KST, the only calendar this system uses."""
+    return (datetime.now(timezone.utc) + timedelta(hours=9)).date()
+
+
 GENERATOR = "digest/1"
 
 # A sanity bound, not an editorial one. No real day reaches it; a person who
@@ -255,6 +261,57 @@ def build_range(
         out.append(build_day(database_url, day, dry_run=dry_run).as_dict())
         day += timedelta(days=1)
     return out
+
+
+def missing_days(database_url: str, *, days: int, today: date | None = None) -> list[date]:
+    """KST days in the last `days` that no digest covers, oldest first.
+
+    A day is covered when any person has a digest row for it. That is a
+    coarse test and the right one: the builder writes every person with
+    activity in a single pass, so a day with one row is a day that ran.
+    """
+    import psycopg
+
+    end = (today or _kst_today()) - timedelta(days=1)
+    start = end - timedelta(days=max(0, days - 1))
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT DISTINCT day FROM person_day_digest WHERE day BETWEEN %s AND %s",
+                (start, end),
+            )
+            covered = {row[0] for row in cursor.fetchall()}
+    out = []
+    day = start
+    while day <= end:
+        if day not in covered:
+            out.append(day)
+        day += timedelta(days=1)
+    return out
+
+
+def catch_up(
+    database_url: str, *, days: int = 7, dry_run: bool = False, today: date | None = None
+) -> dict[str, Any]:
+    """Build any of the last `days` KST days that has no digest at all.
+
+    This is what makes a backfill something the batch does rather than
+    something a person is handed a command for. It is bounded on purpose: a
+    window, not the whole history, so a batch that has been off for a month
+    catches up over several nights instead of trying to rebuild a year in one
+    run and timing out where nobody sees it.
+
+    Idempotent. A day already built is not rebuilt -- rebuilding one is
+    `--date`, which is the deliberate act.
+    """
+    gaps = missing_days(database_url, days=days, today=today)
+    built = [build_day(database_url, day, dry_run=dry_run).as_dict() for day in gaps]
+    return {
+        "window_days": days,
+        "missing": [day.isoformat() for day in gaps],
+        "built": built,
+        "dry_run": dry_run,
+    }
 
 
 def read_digest(database_url: str, person_id: str, day: date) -> dict[str, Any] | None:
