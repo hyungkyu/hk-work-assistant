@@ -96,6 +96,10 @@ Two tests are skipped unless `WORKLOG_TEST_DATABASE_URL` points at a throwaway
 PostgreSQL; no other test touches a network or a database. Every collector test
 drives a scripted fake API client against a temporary directory.
 
+If you are an agent session rather than a person, read
+[docs/agent-onboarding.md](docs/agent-onboarding.md) first: two roles, the
+board as the only channel, and what earns an item on it.
+
 Running the services, wiring credentials, and applying migrations are covered in
 [docs/setup.md](docs/setup.md). Every environment variable the code reads is
 listed in [docs/environment.md](docs/environment.md).

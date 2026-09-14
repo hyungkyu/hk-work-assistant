@@ -658,7 +658,10 @@ def test_an_unknown_op_is_refused_rather_than_guessed(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     config, outbox = tmp_path / "config", tmp_path / "outbox"
-    _queue(outbox, "u.json", {"op": "archive", "work_id": "wi_0000000000000000"})
+    # `archive` was an unknown op until 2026-09-14 and is a real one now; this
+    # holds the rule, not the list, so it uses something the queue will never
+    # have an implementation for.
+    _queue(outbox, "u.json", {"op": "delete", "work_id": "wi_0000000000000000"})
 
     _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
     assert (result["applied"], result["rejected"]) == (0, 1)
@@ -678,3 +681,83 @@ def test_a_file_without_an_op_is_still_an_edit(
     _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
     assert (result["applied"], result["rejected"]) == (1, 0)
     assert result["results"][0]["reason"] == "applied"
+
+
+# --- Archiving through the queue (HK, 2026-09-14: 보드를 모두 리셋하자) ------
+#
+# A reset is two dozen decisions taken at once. The queue is where it belongs:
+# every one leaves a receipt, nothing is destroyed (archive is soft and the
+# history is append-only), and each has to say why in words.
+
+
+def test_a_queued_archive_takes_an_item_off_the_board(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    _, created = run(capsys, config, "create", "--title", "티켓", "--assigned-to", "soa",
+                     "--requested-by", "mori")
+    item_id = created["item"]["id"]
+    _queue(outbox, "z.json", {
+        "op": "archive", "work_id": item_id,
+        "reason": "보드 리셋 — 코드에도 데이터에도 근거가 없는 항목",
+    })
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (1, 0)
+
+    _, listed = run(capsys, config, "list")
+    assert item_id not in [item["id"] for item in listed["items"]]
+    # Soft, not gone: the item is still readable with its history intact.
+    _, all_items = run(capsys, config, "list", "--include-archived")
+    assert item_id in [item["id"] for item in all_items["items"]]
+
+
+def test_an_archive_without_a_reason_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A board that empties itself for no recorded reason is the failure."""
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    _, created = run(capsys, config, "create", "--title", "티켓", "--assigned-to", "soa",
+                     "--requested-by", "mori")
+    item_id = created["item"]["id"]
+    _queue(outbox, "z.json", {"op": "archive", "work_id": item_id})
+    _queue(outbox, "y.json", {"op": "archive", "work_id": item_id, "reason": "짧음"})
+
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (0, 2)
+    assert all("reason" in entry["reason"] for entry in result["results"])
+    _, listed = run(capsys, config, "list")
+    assert item_id in [item["id"] for item in listed["items"]]
+
+
+def test_an_archive_of_an_unknown_item_is_filed_not_raised(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    run(capsys, config, "create", "--title", "티켓", "--assigned-to", "soa",
+        "--requested-by", "mori")
+    _queue(outbox, "z.json", {
+        "op": "archive", "work_id": "wi_0000000000000000",
+        "reason": "존재하지 않는 항목을 지우려는 시도",
+    })
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (0, 1)
+
+
+def test_a_stale_expected_revision_stops_an_archive(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Somebody moved this item while the reset was being written. Stop."""
+    config, outbox = tmp_path / "config", tmp_path / "outbox"
+    _, created = run(capsys, config, "create", "--title", "티켓", "--assigned-to", "soa",
+                     "--requested-by", "mori")
+    item_id = created["item"]["id"]
+    run(capsys, config, "update", item_id, "--status", "in_progress", "--actor", "soa")
+    _queue(outbox, "z.json", {
+        "op": "archive", "work_id": item_id, "expected_revision": 1,
+        "reason": "보드 리셋 — 그 사이 누군가 건드렸다면 멈춰야 한다",
+    })
+    _, result = run(capsys, config, "apply-outbox", "--outbox", str(outbox), "--actor", "mori")
+    assert (result["applied"], result["rejected"]) == (0, 1)
+    _, listed = run(capsys, config, "list")
+    assert item_id in [item["id"] for item in listed["items"]]

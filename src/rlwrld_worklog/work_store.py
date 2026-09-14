@@ -82,6 +82,10 @@ TERMINAL_STATUSES = frozenset({"done", "cancelled"})
 PRIORITIES = ("urgent", "high", "normal", "low")
 PRIORITY_RANK = {name: index for index, name in enumerate(PRIORITIES)}
 
+# Not to be confused with the history entry's `phase` in `_normalize_context`
+# below, which says where in a change's lifecycle an entry sits (started,
+# ...). This one is the item's own field and names a piece of the programme.
+#
 # The programme phase an item belongs to: P0, P1, P2 ... (HK, 2026-09-14:
 # 업무 목록을 p0, P1, P2 등을 붙여줘 구분되게).
 #

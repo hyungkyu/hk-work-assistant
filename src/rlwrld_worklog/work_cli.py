@@ -457,6 +457,50 @@ def _apply_one_create(
     )
 
 
+# An archive must say why, in words a person will read months later. The board
+# reset of 2026-09-14 is what this is for: taking two dozen items out at once
+# is a decision, and a queue that let it happen as a bare list of ids would
+# leave a board that emptied itself for no recorded reason. Nothing is
+# destroyed either way -- archive is a soft delete and the history file is
+# append-only, so every archived item can still be read back.
+MIN_ARCHIVE_REASON_CHARS = 8
+
+
+def _apply_one_archive(
+    store: WorkStore, path: Path, payload: Mapping[str, Any], actor: str
+) -> dict[str, Any]:
+    """Archive one item from a queued file. Never raises."""
+    work_id = payload.get("work_id")
+    if not isinstance(work_id, str) or not work_id:
+        return _outbox_result(path.name, False, "work_id is required")
+    reason = payload.get("reason")
+    if not isinstance(reason, str) or len(reason.strip()) < MIN_ARCHIVE_REASON_CHARS:
+        return _outbox_result(
+            path.name,
+            False,
+            f"archive needs a `reason` of at least {MIN_ARCHIVE_REASON_CHARS} "
+            "characters saying why this item is leaving the board",
+        )
+    expected = payload.get("expected_revision")
+    if expected is not None and (not isinstance(expected, int) or isinstance(expected, bool)):
+        return _outbox_result(path.name, False, "expected_revision must be an integer")
+    try:
+        item = store.archive_item(
+            work_id,
+            actor=actor,
+            expected_revision=expected,
+            # `summary` is the history's own field for why a change was
+            # made; a new context key would have been a second way to say
+            # the same thing.
+            context={"summary": reason.strip()},
+        )
+    except WorkStoreError as error:
+        return _outbox_result(path.name, False, f"{error.__class__.__name__}: {error}")
+    return _outbox_result(
+        path.name, True, "archived", work_id=item["id"], revision=item["revision"]
+    )
+
+
 def _apply_one_outbox(store: WorkStore, path: Path, actor: str) -> dict[str, Any]:
     """Apply one queued file. Never raises: every outcome is a filed reason."""
     try:
@@ -475,12 +519,14 @@ def _apply_one_outbox(store: WorkStore, path: Path, actor: str) -> dict[str, Any
         return _outbox_result(path.name, False, "top level must be a JSON object")
 
     op = payload.get("op", "update")
-    if op not in ("update", "create"):
+    if op not in ("update", "create", "archive"):
         return _outbox_result(
-            path.name, False, f"unknown op {op!r}: expected 'create' or 'update'"
+            path.name, False, f"unknown op {op!r}: expected 'create', 'update' or 'archive'"
         )
     if op == "create":
         return _apply_one_create(store, path, payload, actor)
+    if op == "archive":
+        return _apply_one_archive(store, path, payload, actor)
 
     work_id = payload.get("work_id")
     if not isinstance(work_id, str) or not work_id:
