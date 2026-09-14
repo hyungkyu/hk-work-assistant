@@ -285,6 +285,37 @@ def build_parser() -> argparse.ArgumentParser:
         "--include-retired", action="store_true", help="Include people marked 퇴사"
     )
 
+    org_unmapped = org_commands.add_parser(
+        "unmapped", help="Accounts with activity that belong to nobody we know"
+    )
+    org_unmapped.add_argument("--database-url", default=None)
+    org_unmapped.add_argument(
+        "--apply", action="store_true", help="Record the queue. Without it, count only"
+    )
+    org_unmapped.add_argument(
+        "--state",
+        default="open",
+        choices=["open", "resolved", "ignored", "all"],
+        help="Which of the queue to list. Defaults to what is still unanswered",
+    )
+    org_unmapped.add_argument("--limit", type=_positive_int, default=100)
+
+    org_resolve = org_commands.add_parser(
+        "resolve", help="Say whose an unknown account is, once and for good"
+    )
+    org_resolve.add_argument("--database-url", default=None)
+    org_resolve.add_argument("--kind", required=True)
+    org_resolve.add_argument("--value", required=True)
+    org_resolve.add_argument(
+        "--person", default=None, help="The person_id this account belongs to"
+    )
+    org_resolve.add_argument(
+        "--ignore",
+        action="store_true",
+        help="Not a person: a bot or a service account. Recorded as judged, not as unknown",
+    )
+    org_resolve.add_argument("--note", default=None)
+
     org_status_parser = org_commands.add_parser(
         "status", help="What the organisation store holds"
     )
@@ -1087,6 +1118,31 @@ def org_command(args: argparse.Namespace) -> int:
     database_url = args.database_url or os.environ.get("DATABASE_URL")
     if not database_url:
         raise SystemExit("DATABASE_URL or --database-url is required")
+
+    if args.org_command == "unmapped":
+        from .org.unmapped import list_unmapped, scan
+
+        outcome = scan(database_url, dry_run=not args.apply)
+        listing = list_unmapped(database_url, state=args.state, limit=args.limit)
+        _print_json("org_unmapped", {"scan": outcome.as_dict(), **listing})
+        return 0
+
+    if args.org_command == "resolve":
+        from .org.unmapped import resolve
+
+        try:
+            outcome = resolve(
+                database_url,
+                kind=args.kind,
+                value=args.value,
+                person_id=args.person,
+                ignore=args.ignore,
+                note=args.note,
+            )
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
+        _print_json("org_resolve", outcome)
+        return 0 if outcome.get("ok") else 1
 
     if args.org_command == "status":
         from .org.store import org_status

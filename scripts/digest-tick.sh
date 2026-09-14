@@ -70,6 +70,13 @@ echo "=== roster sync"
 "$worklog" org sync --apply || status=1
 
 echo
+echo "=== unmapped accounts"
+# After the roster, because an account the sheet has just claimed should
+# close itself rather than be asked about; before the digest, because the
+# digest's attribution depends on the identities this may have closed.
+"$worklog" org unmapped --apply || status=1
+
+echo
 echo "=== digest (yesterday KST)"
 "$worklog" digest --apply || status=1
 

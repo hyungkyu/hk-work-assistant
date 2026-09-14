@@ -843,10 +843,22 @@ order that is not arbitrary:
    observation. First, because a digest built before it attributes yesterday's
    work to the day-before's org chart, and somebody who joined yesterday has
    no rows at all.
-2. `worklog digest --apply` — yesterday, KST. Never today: today is not over,
+2. `worklog org unmapped --apply` — every account with activity that no
+   roster row claims, counted by how much it did. After the roster, so an
+   account the sheet has just claimed closes itself; before the digest, whose
+   attribution depends on the identities that may have closed.
+3. `worklog digest --apply` — yesterday, KST. Never today: today is not over,
    and a digest of a partial day is one nothing would correct.
-3. `worklog org chart --html` — render the chart from the observation step 1
+4. `worklog org chart --html` — render the chart from the observation step 1
    just wrote.
+
+An unknown account is a question, not an error: HK confirmed on 2026-09-11
+that no table maps former Slurm names to current ones, so an unrecognised
+name is either somebody new or somebody's former name and only a person can
+say which. `worklog org resolve --kind slurm --value <name> --person <id>`
+records the answer as an identity with `origin='resolved'`, after which the
+account is known and nobody is asked again; `--ignore` marks a bot or service
+account as judged rather than unknown.
 
 Both pages are generated here and nowhere else. Nobody edits them by hand and
 no model writes them: the person page lists **every** activity of the day in
