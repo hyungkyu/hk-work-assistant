@@ -65,9 +65,22 @@ else
        "DATABASE_URL=postgresql://...) and re-run this installer." >&2
 fi
 
+# The digest batch reads the roster workbook, which needs openpyxl in the
+# virtualenv it runs from. Declared in pyproject and absent from the
+# environment is exactly how this failed on 2026-09-14, so it is checked
+# here rather than discovered at 09:30 by a batch nobody is watching.
+if [ -x "$HOME/Documents/ChatGPT/RLWRLD workspace/.venv/bin/python" ]; then
+  if ! "$HOME/Documents/ChatGPT/RLWRLD workspace/.venv/bin/python" \
+       -c "import openpyxl" >/dev/null 2>&1; then
+    echo "openpyxl is missing from the virtualenv; the digest batch will refuse" \
+         "to run. Install it: .venv/bin/pip install openpyxl" >&2
+  fi
+fi
+
 systemctl --user daemon-reload
 for t in hkwa-incoming.timer hkwa-deploy.timer hkwa-board-audit.timer \
-         hkwa-collect.timer hkwa-collection-audit.timer hkwa-wake.timer; do
+         hkwa-collect.timer hkwa-collection-audit.timer hkwa-digest.timer \
+         hkwa-wake.timer; do
   [ -f "$units/$t" ] || continue
   systemctl --user enable --now "$t"
   systemctl --user restart "$t"
