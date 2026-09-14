@@ -81,6 +81,39 @@ IDENTITY_FIELDS = [
     ("slurm_id", "slurm"),
 ]
 
+# The external tab is a Google Form response sheet, so its columns are not
+# names but the questions people were asked -- "성 + 이름 (한글 ex, 류형규)",
+# "slurm/naver cloud  username", and a paragraph of instructions inside the
+# header cell itself. Exact matching found none of them, and the tab read as
+# 191 rows with no recognisable columns.
+#
+# So these match on a distinctive fragment, in order, and only when exact
+# matching missed. The fragments are chosen to be unambiguous within this
+# sheet: "성 + 이름" and not "이름", because the Given Name and Last Name
+# questions both contain "한글 이름이 있는 경우" in their instructions and a
+# bare "이름" would capture them instead.
+HEADER_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("성 + 이름", "name"),
+    ("학교 이메일", "email_school"),
+    ("email address", "email_personal"),
+    ("지도교수", "advisor"),
+    ("깃헙 주소", "github"),
+    # HK's own description of how externals are identified, from the first
+    # conversation about this data: "ROASTER_SEED_EXT 에서 이름 (슬럼/네이버
+    # 클라우드 이름) 으로 식별될거야". This column is that name. The separate
+    # "slurm uid" column holds a number, which identifies nothing a person
+    # would recognise, so it is left alone.
+    ("naver cloud", "slurm_id"),
+    ("리얼월드 인턴", "intern"),
+    ("deactivated", "deactivated"),
+)
+
+# Columns deliberately never read, listed so the omission is a decision on
+# the page rather than an accident of the allowlist. The form asks for a
+# phone number and an SSH public key; neither belongs in this system, and an
+# allowlist that grew carelessly would swallow both.
+NEVER_READ = ("휴대폰", "ssh public key")
+
 STAFF_EQUIVALENT = {"정규직", "준정규직", "방문 연구원", "자문직", "사외이사"}
 RETIRED_MARK = "퇴사"
 
@@ -91,8 +124,28 @@ _PLACEHOLDER = {"#n/a", "-", "n/a", "none"}
 
 
 def normalize_header(header: str) -> str | None:
+    """The standard field one sheet column means, or None if we do not read it.
+
+    Exact names first, then the fragment rules the form-response tab needs.
+    A column that matches nothing is not an error: most of that form is
+    questions this system has no business storing.
+    """
     key = str(header or "").strip()
-    return HEADER_ALIASES.get(key.lower(), HEADER_ALIASES.get(key))
+    exact = HEADER_ALIASES.get(key.lower(), HEADER_ALIASES.get(key))
+    if exact:
+        return exact
+    # Collapse the whitespace the form headers carry -- newlines inside a
+    # header cell, and doubled spaces in "slurm/naver cloud  username".
+    folded = " ".join(key.split()).casefold()
+    if not folded:
+        return None
+    for fragment in NEVER_READ:
+        if fragment in folded:
+            return None
+    for fragment, standard in HEADER_PATTERNS:
+        if fragment.casefold() in folded:
+            return standard
+    return None
 
 
 def _clean(value: Any) -> str:
@@ -114,6 +167,7 @@ def normalize_rows(rows: Iterable[dict], *, source: str) -> list[dict]:
         if not record.get("name"):
             continue
         record["source"] = source
+        record["employment_type"] = employment_of(record, source)
         record["affiliation"] = affiliation_of(record, source)
         record["access_level"] = access_of(record)
         record["status"] = status_of(record)
@@ -148,8 +202,41 @@ def access_of(record: dict) -> str:
     return "staff_equivalent" if employment in STAFF_EQUIVALENT else "limited"
 
 
+# Values the form's yes/no columns use for "yes". Anything else, including
+# blank, is not a yes -- an unticked box is not a statement.
+_AFFIRMATIVE = {"y", "yes", "true", "o", "완료", "예", "1", "v", "체크"}
+
+
+def _is_yes(value: Any) -> bool:
+    return str(value or "").strip().casefold() in _AFFIRMATIVE
+
+
 def status_of(record: dict) -> str:
+    """Active unless the sheet says otherwise, in whichever way it says it.
+
+    The internal tab writes 퇴사 in 재직구분. The form-response tab has a
+    `Deactivated` box instead, which means the same thing about a student.
+    Both are read; neither is inferred from the other's absence.
+    """
+    if _is_yes(record.get("deactivated")):
+        return "retired"
     return "retired" if RETIRED_MARK in (record.get("status") or "") else "active"
+
+
+def employment_of(record: dict, source: str) -> str:
+    """What the sheet says about how somebody is engaged, and nothing more.
+
+    The form asks whether a student is a 리얼월드 인턴; when it is ticked,
+    that is their employment type. When it is not, the sheet has not said,
+    and this returns empty so `access_of` reports `unknown` rather than
+    asserting a restriction nobody wrote down.
+    """
+    declared = record.get("employment_type") or ""
+    if declared:
+        return declared
+    if source == "roster_seed_ext" and _is_yes(record.get("intern")):
+        return "인턴"
+    return ""
 
 
 # Honorifics a sheet writes after an advisor's name. Stripped for matching a

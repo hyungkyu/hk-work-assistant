@@ -448,3 +448,150 @@ def test_a_tab_whose_columns_are_unrecognisable_is_an_error_not_an_empty_list() 
     data = _workbook({"roster_seed_2": [["가", "나"], ["1", "2"]]})
     with pytest.raises(KeyError, match="no header row"):
         rows_from_workbook(data, "roster_seed_2")
+
+
+# ------------------------------------- the external tab is a form response
+
+# The real header of `roaster_seed_ext`: a Google Form's questions, not column
+# names. Kept verbatim so a change to the form shows up here as a failing test
+# rather than as a tab that quietly reads as empty.
+EXT_HEADER = [
+    "Timestamp",
+    "성 + 이름 (한글 ex, 류형규)",
+    "Given Name(ex, jaekyoung)  slurm 계정에 사용되므로 아래 내용을 주의해서 작성하세요."
+    "  - 한글 이름이 있는 경우 반드시 그 이름을 영어로 쓰세요",
+    "Last Name(ex, bae)  slurm 계정에 사용되므로 아래 내용을 주의해서 작성하세요."
+    "  - 한글 이름이 있는 경우 반드시 그 이름을 영어로 쓰세요",
+    "Email Address",
+    "학교 이메일",
+    "소속 학교 연구실 지도교수님",
+    "참여 과제 세부 역할",
+    "참여 과제명",
+    "참여 연구원들과 공유할 수 있는 링크드인 주소가 있으면 알려주세요.",
+    "참여 연구원들과 공유할 수 있는 깃헙 주소가 있으면 알려주세요",
+    "GPU 계정 생성이 필요하신 분은 SSH public key를 알려주세요",
+    "휴대폰 번호(숫자만)",
+    "어떻게 프로젝트에 참여하게 됐나요?",
+    "노션 권한 부여 완료",
+    "슬랙 초대 완료",
+    "Slurm 계정 생성 완료",
+    "Deactivated",
+    "ssh 키 제출 여부",
+    "리얼월드 인턴",
+    "NDA 작성 완료 여부",
+    "slurm uid",
+    "slurm/naver cloud  username",
+    "로드맵 포함 여부",
+    "3층 출입등록 여부",
+    "Column 1",
+]
+
+
+def ext_row(**overrides) -> dict:
+    values = {
+        "성 + 이름 (한글 ex, 류형규)": "학생하나",
+        "Email Address": "one@personal.invalid",
+        "학교 이메일": "one@school.invalid",
+        "소속 학교 연구실 지도교수님": "신진우 교수님",
+        "참여 연구원들과 공유할 수 있는 깃헙 주소가 있으면 알려주세요": "student-one",
+        "GPU 계정 생성이 필요하신 분은 SSH public key를 알려주세요": "ssh-rsa AAAAB3Nza",
+        "휴대폰 번호(숫자만)": "01012345678",
+        "slurm/naver cloud  username": "onestudent",
+        "Deactivated": "",
+        "리얼월드 인턴": "",
+    }
+    values.update(overrides)
+    return {name: values.get(name, "") for name in EXT_HEADER}
+
+
+def test_the_form_questions_are_read_as_the_columns_they_are() -> None:
+    """Exact matching found none of them, and the tab read as 191 empty rows."""
+    [record] = normalize_rows([ext_row()], source="roster_seed_ext")
+    assert record["name"] == "학생하나"
+    assert record["advisor"] == "신진우 교수님"
+    assert record["email_school"] == "one@school.invalid"
+    assert record["email_personal"] == "one@personal.invalid"
+    assert record["github"] == "student-one"
+    assert record["slurm_id"] == "onestudent"
+    assert record["affiliation"] == "student"
+
+
+def test_the_name_column_is_not_confused_with_the_slurm_name_questions() -> None:
+    """Given Name and Last Name both say "한글 이름이 있는 경우" in their text.
+
+    A bare "이름" fragment would capture those instead of the actual name
+    column, and everybody would be called by their romanised first name.
+    """
+    from rlwrld_worklog.org.normalize import normalize_header
+
+    assert normalize_header(EXT_HEADER[1]) == "name"
+    assert normalize_header(EXT_HEADER[2]) is None
+    assert normalize_header(EXT_HEADER[3]) is None
+
+
+def test_a_phone_number_and_an_ssh_key_are_never_read() -> None:
+    """Neither belongs in this system, and an allowlist can grow carelessly."""
+    from rlwrld_worklog.org.normalize import normalize_header
+
+    assert normalize_header("휴대폰 번호(숫자만)") is None
+    assert normalize_header("GPU 계정 생성이 필요하신 분은 SSH public key를 알려주세요") is None
+
+    [record] = normalize_rows([ext_row()], source="roster_seed_ext")
+    assert "01012345678" not in str(record)
+    assert "ssh-rsa" not in str(record)
+
+
+def test_the_numeric_slurm_uid_is_not_mistaken_for_the_account_name() -> None:
+    from rlwrld_worklog.org.normalize import normalize_header
+
+    assert normalize_header("slurm uid") is None
+    assert normalize_header("slurm/naver cloud  username") == "slurm_id"
+
+
+def test_a_deactivated_student_is_retired_and_a_blank_box_is_not() -> None:
+    """An unticked box is not a statement."""
+    assert normalize_rows([ext_row(Deactivated="Y")], source="roster_seed_ext")[0][
+        "status"
+    ] == "retired"
+    assert normalize_rows([ext_row()], source="roster_seed_ext")[0]["status"] == "active"
+
+
+def test_an_intern_box_sets_the_employment_the_sheet_declares() -> None:
+    ticked = normalize_rows([ext_row(**{"리얼월드 인턴": "Y"})], source="roster_seed_ext")[0]
+    assert ticked["employment_type"] == "인턴"
+    assert ticked["access_level"] == "limited"
+    # Unticked says nothing, so access is unknown rather than restricted.
+    blank = normalize_rows([ext_row()], source="roster_seed_ext")[0]
+    assert blank["employment_type"] == ""
+    assert blank["access_level"] == "unknown"
+
+
+def test_a_students_slurm_account_becomes_an_identity() -> None:
+    """It is how externals are identified at all -- HK, at the outset."""
+    records = normalize_rows([ext_row()], source="roster_seed_ext")
+    written = plan(records, observation_id=1)
+    assert ("slurm", "onestudent") in written["identity"]
+    assert ("github", "student-one") in written["identity"]
+
+
+def test_the_form_tab_reads_end_to_end_from_a_real_workbook() -> None:
+    """Title row, header row, then people -- the shape that actually failed."""
+    from rlwrld_worklog.org.sheet import read_all
+
+    data = _workbook(
+        {
+            "roster_seed_2": [["이름", "조직"], ["직원", "RLWRLD | Model Team"]],
+            "roaster_seed_ext": [
+                ["Virtual Lab 참여 연구원", "", ""],
+                EXT_HEADER,
+                [ext_row()[name] for name in EXT_HEADER],
+                [ext_row(**{"성 + 이름 (한글 ex, 류형규)": "학생둘",
+                            "소속 학교 연구실 지도교수님": "주한별 교수님"})[name]
+                 for name in EXT_HEADER],
+            ],
+        }
+    )
+    by_tab = read_all(data)
+    students = by_tab["roster_seed_ext"]
+    assert [person["name"] for person in students] == ["학생하나", "학생둘"]
+    assert [person["advisor"] for person in students] == ["신진우 교수님", "주한별 교수님"]
