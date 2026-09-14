@@ -8,12 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import IO, Sequence
 
-from .collection_audit import DEFAULT_DAYS as COLLECTION_AUDIT_DEFAULT_DAYS
-from .daily import DEFAULT_SINCE, MAX_WINDOW_HOURS, SOURCE_ORDER
 from .models import Source, TimelineEvent
-from .normalizers import normalize_records
-from .search import MATCHERS as SEARCH_MATCHERS
-from .slurm_collector import CLOUDS as SLURM_CLOUDS
 from .work_cli import add_work_parser, run_work
 
 
@@ -44,7 +39,21 @@ SINCE_HELP = (
 )
 
 
+def _source_order():
+    from .daily import SOURCE_ORDER
+
+    return SOURCE_ORDER
+
+
 def build_parser() -> argparse.ArgumentParser:
+    # Imported here rather than at module load: these pull in every collector,
+    # and `worklog work` (see `_work_only`) must keep running when one of them
+    # cannot be imported at all.
+    from .collection_audit import DEFAULT_DAYS as COLLECTION_AUDIT_DEFAULT_DAYS
+    from .daily import DEFAULT_SINCE, MAX_WINDOW_HOURS, SOURCE_ORDER
+    from .search import MATCHERS as SEARCH_MATCHERS
+    from .slurm_collector import CLOUDS as SLURM_CLOUDS
+
     parser = argparse.ArgumentParser(prog="worklog")
     subparsers = parser.add_subparsers(dest="command", required=True)
     fixtures = subparsers.add_parser("fixtures", help="Normalize local fixture files")
@@ -583,6 +592,8 @@ def run_fixtures(input_dir: Path, output: Path, self_user_id: str) -> int:
     events = []
     for source, filename in FIXTURE_FILES.items():
         records = json.loads((input_dir / filename).read_text(encoding="utf-8"))
+        from .normalizers import normalize_records
+
         events.extend(normalize_records(source, records, self_user_id=self_user_id))
     events.sort(key=lambda event: (event.occurred_at, event.event_id))
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -1478,7 +1489,7 @@ def daily_collect(args: argparse.Namespace) -> int:
             environment=args.environment,
             since=args.since,
             until=args.until,
-            sources=tuple(args.source) if args.source else SOURCE_ORDER,
+            sources=tuple(args.source) if args.source else _source_order(),
             database_url=args.database_url or os.environ.get("DATABASE_URL"),
             load_database=not args.no_database,
             dry_run=args.dry_run,
@@ -1501,7 +1512,27 @@ def daily_collect(args: argparse.Namespace) -> int:
     return int(summary["exit_code"])
 
 
+def _work_only(argv: Sequence[str]) -> int:
+    """`worklog work ...` without loading a single collector module.
+
+    The board is how a broken collector gets reported, so it must not fail
+    with one. Building the full parser imports every collector for the sake
+    of a few constants in `--choices`, which means an ImportError anywhere in
+    the collection code took the board down with it -- the instrument failing
+    together with the thing it measures.
+
+    Same parser, same store, same exit codes; only the neighbours are absent.
+    """
+    parser = argparse.ArgumentParser(prog="worklog")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    add_work_parser(subparsers)
+    return run_work(parser.parse_args(argv))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] == ["work"]:
+        return _work_only(arguments)
     args = build_parser().parse_args(argv)
     if args.command == "fixtures":
         return run_fixtures(args.input, args.output, args.self_slack_user_id)

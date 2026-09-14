@@ -142,6 +142,13 @@ class RunProgress:
             "started_at": started_at,
             "updated_at": started_at,
             "pid": os.getpid(),
+            # The pid alone cannot answer "is my run still going". Pids are
+            # reused, so a long-dead collector's number is eventually handed
+            # to some unrelated background process, and a watcher that only
+            # asked "does this pid exist" would report the dead run as alive
+            # for as long as that process lived. The start time pins the
+            # answer to *this* process: a recycled pid has a different one.
+            "pid_started_at": _process_start_ticks(os.getpid()),
             "host": socket.gethostname(),
             "raw_run_dir": raw_run_dir,
             "capture_density": capture_density,
@@ -231,8 +238,35 @@ class RunProgress:
 # --------------------------------------------------------------- reading
 
 
-def _pid_is_alive(pid: Any, host: Any) -> bool | None:
-    """True/False on this host, None when the answer cannot be known here."""
+def _process_start_ticks(pid: int) -> int | None:
+    """When this pid's process started, in clock ticks since boot.
+
+    Linux only, via /proc/<pid>/stat field 22. None everywhere else and on
+    any error -- an identity we cannot read is reported as unknown rather
+    than assumed to match, which is the difference between "we cannot tell"
+    and "it is the same process".
+
+    Field 22 is counted from the end, not the start: the process name in
+    field 2 is parenthesised and may itself contain spaces and brackets, so
+    splitting from the left mis-parses any process whose name has a space.
+    """
+    try:
+        with open(f"/proc/{int(pid)}/stat", "r", encoding="utf-8", errors="replace") as handle:
+            raw = handle.read()
+        tail = raw[raw.rindex(")") + 1 :].split()
+        # tail[0] is field 3 (state), so field 22 is tail[19].
+        return int(tail[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _pid_is_alive(pid: Any, host: Any, started_ticks: Any = None) -> bool | None:
+    """Is the process that wrote this snapshot still running?
+
+    True/False on this host, None when the answer cannot be known here --
+    another host, an unreadable pid, or a snapshot written before start times
+    were recorded.
+    """
     if not isinstance(pid, int) or pid <= 0 or host != socket.gethostname():
         return None
     try:
@@ -240,9 +274,17 @@ def _pid_is_alive(pid: Any, host: Any) -> bool | None:
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True
+        # Somebody else's process holds this number. It is not ours, and on
+        # this host we can say so: our own collector runs as us.
+        return False
     except OSError:
         return None
+    if isinstance(started_ticks, int):
+        current = _process_start_ticks(pid)
+        if current is not None and current != started_ticks:
+            # The number is in use, by something that started later. The run
+            # that wrote this snapshot is gone.
+            return False
     return True
 
 
@@ -316,7 +358,9 @@ def snapshot_liveness(
         age = (moment - parsed).total_seconds()
     except (TypeError, ValueError):
         age = None
-    alive = _pid_is_alive(snapshot.get("pid"), snapshot.get("host"))
+    alive = _pid_is_alive(
+        snapshot.get("pid"), snapshot.get("host"), snapshot.get("pid_started_at")
+    )
     if snapshot.get("phase") == "finished":
         return {"state": "finished", "age_seconds": age, "process_alive": alive, "reason": None}
     if alive is False:

@@ -761,3 +761,53 @@ def test_a_stale_expected_revision_stops_an_archive(
     assert (result["applied"], result["rejected"]) == (0, 1)
     _, listed = run(capsys, config, "list")
     assert item_id in [item["id"] for item in listed["items"]]
+
+
+# --- The board outlives a broken collector (P0, 2026-09-14) ----------------
+#
+# 업무 보드 CLI 가 수집 규칙 레지스트리에 묶여 있다 — 과결합. Building the
+# full parser imported every collector for the sake of a few `--choices`
+# constants, so an ImportError anywhere in the collection code took the board
+# down with it: the instrument failing together with the thing it measures.
+
+
+def test_the_board_runs_with_every_collector_module_broken(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch
+) -> None:
+    import sys as _sys
+
+    from rlwrld_worklog import cli
+
+    class Poisoned:
+        def find_module(self, *_args, **_kwargs):  # pragma: no cover - legacy hook
+            return None
+
+        def find_spec(self, name, *_args, **_kwargs):
+            if name.startswith("rlwrld_worklog.") and name.split(".")[-1] in {
+                "daily",
+                "search",
+                "slurm_collector",
+                "collection_audit",
+                "collection_rules",
+                "normalizers",
+            }:
+                raise ImportError(f"{name} is broken")
+            return None
+
+    for module in list(_sys.modules):
+        if module.startswith("rlwrld_worklog.") and module.split(".")[-1] in {
+            "daily", "search", "slurm_collector", "collection_audit", "normalizers",
+        }:
+            monkeypatch.delitem(_sys.modules, module, raising=False)
+    monkeypatch.setattr(_sys, "meta_path", [Poisoned(), *_sys.meta_path])
+
+    config = tmp_path / "config"
+    code = cli.main(["work", "create", "--config-root", str(config), "--title", "티켓",
+                     "--assigned-to", "mori", "--requested-by", "hk"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+
+    # And the full parser is what would have failed, which is the point.
+    with pytest.raises(ImportError):
+        cli.build_parser()
