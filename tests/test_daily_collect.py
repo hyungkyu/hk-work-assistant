@@ -1167,3 +1167,72 @@ def test_the_manifest_is_best_effort_and_never_masks_the_real_error(
     assert recorded["status"] == "failed"
     assert "the original failure" in stage(recorded, "capture")["error"]
     assert recorded.get("manifest") in (None, "")
+
+
+def test_slack_prewindow_widening_reaches_the_collector(tmp_path: Path, monkeypatch) -> None:
+    """A V9 backfill of a V8 span must be able to widen parent discovery.
+
+    The nightly run leaves these at the collector's defaults (90 days, 1 page);
+    a deliberate historical re-collection sets them higher so it can reach the
+    old parents whose replies the daily window never anchored. Before this the
+    flags lived only on `collect`, not on the `daily-collect` path the backfill
+    runner uses, so a re-backfill silently repeated the nightly limits.
+    """
+    from rlwrld_worklog import slack_collector as collector_module
+    from rlwrld_worklog.daily import DailyConfig, capture_slack
+
+    seen: dict = {}
+
+    class Recorder:
+        def collect(self, **kwargs):
+            seen.update(kwargs)
+            raise CaptureFailed(self.archive, RuntimeError("stop after recording"))
+
+    def fake_factory(*, token, archive_root, environment, capture_density, dry_run, config_root=None):
+        from rlwrld_worklog.archive import RawArchive
+
+        rec = Recorder()
+        rec.archive = RawArchive(archive_root, "slack", "s", environment, config_root=config_root)
+        return rec.archive, rec.archive, rec
+
+    monkeypatch.setattr(collector_module, "make_slack_collector", fake_factory)
+
+    run_config = config(tmp_path)
+    run_config.slack_prewindow_parent_lookback_days = 400
+    run_config.slack_prewindow_parent_pages_per_channel = 20
+    try:
+        capture_slack(run_config, credentials(tmp_path))
+    except CaptureFailed:
+        pass
+    assert seen["prewindow_parent_lookback_days"] == 400
+    assert seen["prewindow_parent_pages_per_channel"] == 20
+
+
+def test_the_nightly_run_leaves_parent_discovery_at_collector_defaults(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from rlwrld_worklog import slack_collector as collector_module
+    from rlwrld_worklog.daily import capture_slack
+
+    seen: dict = {}
+
+    class Recorder:
+        def collect(self, **kwargs):
+            seen.update(kwargs)
+            raise CaptureFailed(self.archive, RuntimeError("stop"))
+
+    def fake_factory(*, token, archive_root, environment, capture_density, dry_run, config_root=None):
+        from rlwrld_worklog.archive import RawArchive
+
+        rec = Recorder()
+        rec.archive = RawArchive(archive_root, "slack", "s", environment, config_root=config_root)
+        return rec.archive, rec.archive, rec
+
+    monkeypatch.setattr(collector_module, "make_slack_collector", fake_factory)
+    try:
+        capture_slack(config(tmp_path), credentials(tmp_path))
+    except CaptureFailed:
+        pass
+    # Not passed at all, so the collector applies its own 90-day / 1-page rule.
+    assert "prewindow_parent_lookback_days" not in seen
+    assert "prewindow_parent_pages_per_channel" not in seen

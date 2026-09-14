@@ -55,6 +55,21 @@ else
 fi
 RUNNER=${WORKLOG_BACKFILL_RUNNER:-$root/scripts/run-logged.sh}
 
+# Extra flags appended to every per-day daily-collect, word-split from a string
+# the caller writes (so the caller owns the splitting). This is how a V9
+# re-backfill of a V8 span widens Slack's pre-window parent discovery without a
+# second copy of this runner:
+#
+#   WORKLOG_DAILY_EXTRA_ARGS="--slack-prewindow-parent-lookback-days 400 \
+#     --slack-prewindow-parent-pages-per-channel 20" \
+#     scripts/backfill-days.sh 2026-08-01 2026-09-08 --source slack
+#
+# Empty by default, so an ordinary backfill is unchanged.
+extra_args=()
+if [ -n "${WORKLOG_DAILY_EXTRA_ARGS:-}" ]; then
+  read -r -a extra_args <<< "$WORKLOG_DAILY_EXTRA_ARGS"
+fi
+
 # Google Calendar is deliberately absent. Every run here carries `--until`, and
 # Calendar's incremental read is a per-calendar sync token: an upper bound
 # cannot be expressed for it, only ignored, so `daily-collect` refuses the run
@@ -271,7 +286,8 @@ print((date.fromisoformat(os.environ["DAY"]) + timedelta(days=1)).isoformat())
   "$RUNNER" "backfill-$day" -- "${command_parts[@]}" \
     "${source_flags[@]}" \
     --since "${day}T00:00:00+09:00" \
-    --until "${next}T00:00:00+09:00"
+    --until "${next}T00:00:00+09:00" \
+    ${extra_args[@]+"${extra_args[@]}"}
   code=$?
   stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 

@@ -445,6 +445,25 @@ re-polls watched threads whose recorded activity falls inside the slice and
 scans immediately before `since` for older parents. The parent scan defaults
 to at most one page per channel and 90 days; discovery responses are archived
 as evidence but are not projected into the slice ledger.
+
+Those two limits keep the nightly run cheap, and they are also why a span first
+collected before V9 (Slack daily runs were V8 or unstamped through 2026-09-08,
+V9 from 2026-09-09) is not made whole simply by re-running — the old parents
+whose replies fall inside those days were never anchored. A deliberate
+re-collection widens the scan through `daily-collect
+--slack-prewindow-parent-lookback-days` / `--slack-prewindow-parent-pages-per-channel`,
+which `scripts/backfill-days.sh` passes per day via `WORKLOG_DAILY_EXTRA_ARGS`:
+
+```
+WORKLOG_DAILY_EXTRA_ARGS="--slack-prewindow-parent-lookback-days 400 \
+  --slack-prewindow-parent-pages-per-channel 20" \
+  scripts/backfill-days.sh 2026-08-01 2026-09-08 --source slack
+```
+
+A reply whose parent predates even the widened floor is a separate matter — the
+confirmed 622-reply gap, whose parents sit before the backfill lower bound and
+which no lookback reaches; that one needs a targeted sweep of those parents.
+
 Notion additionally skips the link queue and the re-check sweep, because both
 target the live head (`notion_collector.py:603`).
 

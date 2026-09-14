@@ -353,3 +353,35 @@ def test_an_explicit_override_is_still_split_into_words(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert calls(tmp_path)[0].startswith("daily-collect --source notion --since")
+
+
+def test_extra_daily_args_are_appended_to_every_day(tmp_path: Path) -> None:
+    """A V9 re-backfill widens Slack parent discovery through this passthrough.
+
+    Without it the re-collection repeats the nightly 90-day / 1-page limits and
+    never reaches the old parents whose replies the daily window never anchored.
+    """
+    environment = dict(os.environ)
+    environment["WORKLOG_LOG_ROOT"] = str(tmp_path / "logs")
+    environment["WORKLOG_BACKFILL_COMMAND"] = str(stub(tmp_path))
+    environment["WORKLOG_DAILY_EXTRA_ARGS"] = (
+        "--slack-prewindow-parent-lookback-days 400 "
+        "--slack-prewindow-parent-pages-per-channel 20"
+    )
+    result = subprocess.run(
+        ["bash", str(SCRIPT), FIRST, LAST, "--source", "slack"],
+        capture_output=True, text=True, env=environment, timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    recorded = calls(tmp_path)
+    assert len(recorded) == len(DAYS)
+    for line in recorded:
+        assert "--slack-prewindow-parent-lookback-days 400" in line
+        assert "--slack-prewindow-parent-pages-per-channel 20" in line
+
+
+def test_no_extra_args_leaves_an_ordinary_backfill_unchanged(tmp_path: Path) -> None:
+    result = backfill(tmp_path, FIRST, LAST)
+    assert result.returncode == 0, result.stderr
+    for line in calls(tmp_path):
+        assert "prewindow" not in line

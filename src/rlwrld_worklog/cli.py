@@ -483,6 +483,23 @@ def build_parser() -> argparse.ArgumentParser:
             "same work one KST day per run and keeps every day that finished"
         ),
     )
+    daily.add_argument(
+        "--slack-prewindow-parent-lookback-days",
+        type=_positive_int,
+        default=None,
+        help=(
+            "Slack only: widen pre-window parent discovery for a deliberate "
+            "historical re-collection (nightly default is 90). A V9 backfill of "
+            "a span first collected under V8 sets this higher to reach the old "
+            "parents whose replies the daily window never anchored."
+        ),
+    )
+    daily.add_argument(
+        "--slack-prewindow-parent-pages-per-channel",
+        type=_nonnegative_int,
+        default=None,
+        help="Slack only: parent-discovery pages per channel (nightly default is 1)",
+    )
 
     # `collection` is a group rather than a top-level `collection-audit`,
     # because reading the collection record is a family of questions and the
@@ -1497,6 +1514,8 @@ def daily_collect(args: argparse.Namespace) -> int:
             allow_wide_window=args.allow_wide_window,
             config_root=args.config_root,
             lock_path=args.lock_path,
+            slack_prewindow_parent_lookback_days=args.slack_prewindow_parent_lookback_days,
+            slack_prewindow_parent_pages_per_channel=args.slack_prewindow_parent_pages_per_channel,
         )
     except ValueError as error:
         # A window that cannot be honoured as asked, or one too wide to be

@@ -229,6 +229,14 @@ class DailyConfig:
     allow_wide_window: bool = False
     config_root: Path | None = None
     lock_path: Path | None = None
+    # Slack pre-window parent discovery, widened only for a deliberate
+    # historical re-collection. None means the collector's own defaults (90
+    # days, 1 page/channel) — what the nightly run uses. A V9 backfill of a
+    # span first collected under V8 sets these higher so it can reach the old
+    # parents whose replies the daily window never anchored. Slack-only; other
+    # sources ignore them.
+    slack_prewindow_parent_lookback_days: int | None = None
+    slack_prewindow_parent_pages_per_channel: int | None = None
 
     def __post_init__(self) -> None:
         # A smoke run is bounded by construction and must never move a
@@ -450,6 +458,13 @@ def capture_slack(config: DailyConfig, credentials: Credentials) -> CaptureOutco
         dry_run=config.dry_run,
         config_root=config.config_root,
     )
+    prewindow: dict[str, int] = {}
+    if config.slack_prewindow_parent_lookback_days is not None:
+        prewindow["prewindow_parent_lookback_days"] = config.slack_prewindow_parent_lookback_days
+    if config.slack_prewindow_parent_pages_per_channel is not None:
+        prewindow["prewindow_parent_pages_per_channel"] = (
+            config.slack_prewindow_parent_pages_per_channel
+        )
     try:
         result = collector.collect(
             since=parse_since(config.since),
@@ -459,6 +474,7 @@ def capture_slack(config: DailyConfig, credentials: Credentials) -> CaptureOutco
             max_messages=SMOKE_LIMITS["slack_max_messages"] if config.smoke else None,
             use_search=not config.smoke,
             advance_checkpoint=_advance_checkpoint(config),
+            **prewindow,
         )
     except Exception as error:
         raise CaptureFailed(archive, error) from error
