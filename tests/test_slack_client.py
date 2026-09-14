@@ -341,3 +341,60 @@ class SlackCollectorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PageSizeShrinkTests(unittest.TestCase):
+    """A body the transport cannot deliver whole is re-requested smaller.
+
+    The transport-level retry alone cannot help here: it repeats the same
+    request at the same size, and a body too large to deliver is too large every
+    time. This is the failure that killed the first day of the V9 re-backfill on
+    2026-09-14 (132 KB of 748 KB, four identical retries). iter_pages halves the
+    page from the same cursor instead.
+    """
+
+    def test_a_page_that_will_not_deliver_is_retried_at_half_size(self) -> None:
+        """A body too big at 200 rows comes through at 100, from the same cursor."""
+        import http.client
+
+        class SizedTransport:
+            """Fails to deliver while the page is larger than it can carry."""
+
+            def __init__(self, deliverable_at: int) -> None:
+                self.deliverable_at = deliverable_at
+                self.limits: list[int] = []
+
+            def get(self, url, headers, params):
+                limit = int(params["limit"])
+                self.limits.append(limit)
+                if limit > self.deliverable_at:
+                    raise http.client.IncompleteRead(b"partial", 999)
+                return response(
+                    {"ok": True, "items": [limit], "response_metadata": {"next_cursor": ""}}
+                )
+
+        transport = SizedTransport(deliverable_at=100)
+        client = SlackClient("xoxp-secret", transport=transport, sleeper=lambda _: None)
+        pages = list(client.iter_pages("example.list", result_key="items", limit=200))
+
+        # Delivered only once the page shrank to 100 or below.
+        self.assertEqual(pages[0]["items"][0], 100)
+        self.assertIn(100, transport.limits)
+        self.assertTrue(all(v >= 15 for v in transport.limits), "never below the floor")
+
+    def test_it_gives_up_at_the_floor_rather_than_looping_forever(self) -> None:
+        import http.client
+
+        class NeverDelivers:
+            def __init__(self):
+                self.limits = []
+
+            def get(self, url, headers, params):
+                self.limits.append(int(params["limit"]))
+                raise http.client.IncompleteRead(b"", 5)
+
+        transport = NeverDelivers()
+        client = SlackClient("xoxp-secret", transport=transport, sleeper=lambda _: None)
+        with self.assertRaises(http.client.IncompleteRead):
+            list(client.iter_pages("example.list", result_key="items", limit=200))
+        self.assertEqual(min(transport.limits), 15, "stopped shrinking at the floor")

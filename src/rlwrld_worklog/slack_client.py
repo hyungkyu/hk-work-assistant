@@ -21,6 +21,11 @@ TRANSIENT_TRANSPORT_ERRORS = (
     urllib.error.URLError,
 )
 
+# The smallest page a paginated read shrinks to when the transport keeps failing
+# to deliver a whole body. Below a handful of rows the shrink no longer helps and
+# the failure is something other than body size, so it is raised instead.
+_MIN_PAGE_LIMIT = 15
+
 
 class SlackApiError(RuntimeError):
     """A Slack API failure whose message never includes credentials."""
@@ -147,8 +152,27 @@ class SlackClient:
         **params: Any,
     ) -> Iterator[dict[str, Any]]:
         cursor: str | None = None
+        # A page the transport cannot deliver whole -- an IncompleteRead partway
+        # through a large body -- fails the same way however many times it is
+        # retried at the same size, because the body is the same size each time.
+        # A wide backfill (a year of parent discovery, 20 pages a channel) is
+        # exactly where one page grows past whatever gateway limit is cutting it,
+        # and on 2026-09-14 the first day of the V9 re-backfill died there: 132
+        # KB delivered of 748 KB expected, four identical retries, dead run. So
+        # the size is the lever -- on a transport failure the page is re-requested
+        # from the same cursor at half the rows, down to a floor. Correct because
+        # `cursor` names a position in the stream, not a fixed window: a smaller
+        # page from the same cursor is just a shorter step.
+        page_limit = limit
         while True:
-            body = self.call(method, limit=limit, cursor=cursor, **params)
+            try:
+                body = self.call(method, limit=page_limit, cursor=cursor, **params)
+            except TRANSIENT_TRANSPORT_ERRORS:
+                if page_limit <= _MIN_PAGE_LIMIT:
+                    raise
+                page_limit = max(_MIN_PAGE_LIMIT, page_limit // 2)
+                self.transport_retries += 1
+                continue
             if not isinstance(body.get(result_key, []), list):
                 raise SlackApiError(
                     f"Slack method {method} returned an invalid {result_key} value",
