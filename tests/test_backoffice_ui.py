@@ -15,6 +15,8 @@ import pytest
 
 STATIC = Path(__file__).resolve().parents[1] / "src" / "rlwrld_worklog" / "static"
 ADMIN = STATIC / "admin.html"
+ADMIN_JS = STATIC / "admin.js"
+ADMIN_CSS = STATIC / "admin.css"
 
 
 @pytest.fixture(scope="module")
@@ -24,7 +26,17 @@ def html() -> str:
 
 @pytest.fixture(scope="module")
 def script(html: str) -> str:
-    return html[html.index("<script>") + len("<script>") : html.rindex("</script>")]
+    # The script now lives in its own file (admin.js), split out of the page
+    # so markup, style and behaviour are three files that different work can
+    # touch without colliding. The page references it and nothing else runs
+    # inline, which the tests below assert.
+    return ADMIN_JS.read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def css() -> str:
+    # Styles split into their own file, same reason as the script.
+    return ADMIN_CSS.read_text(encoding="utf-8")
 
 
 def test_the_menu_is_grouped_and_ordered_as_the_operator_asked() -> None:
@@ -232,10 +244,10 @@ def test_a_date_still_in_progress_cannot_be_badged_as_collected(script: str) -> 
     assert "TIME_COVERAGE_LABELS" in script
 
 
-def test_the_page_stays_usable_on_a_narrow_screen(html: str) -> None:
-    assert "@media (max-width: 880px)" in html
-    assert ".table-scroll { overflow-x: auto;" in html
-    assert ".collection-toolbar select, .collection-toolbar input, .coverage-controls select" in html
+def test_the_page_stays_usable_on_a_narrow_screen(css: str) -> None:
+    assert "@media (max-width: 880px)" in css
+    assert ".table-scroll { overflow-x: auto;" in css
+    assert ".collection-toolbar select, .collection-toolbar input, .coverage-controls select" in css
 
 
 def test_the_existing_backoffice_and_work_routes_are_all_still_served() -> None:
@@ -287,20 +299,20 @@ def _rule_body(html: str, selector: str) -> str:
     return html[start : html.index("}", start)]
 
 
-def test_the_coverage_vocabulary_is_wired_into_the_page(html: str, script: str) -> None:
+def test_the_coverage_vocabulary_is_wired_into_the_page(css: str, script: str) -> None:
     for key in ("collected_with_skips", "unverified", "evidence_class", "EVIDENCE_LABELS"):
         assert key in script
-    assert ".cov.unverified" in html
+    assert ".cov.unverified" in css
 
 
-def test_unverified_is_drawn_off_the_good_bad_colour_scale(html: str) -> None:
+def test_unverified_is_drawn_off_the_good_bad_colour_scale(css: str) -> None:
     """Asserts the rendered property, not merely that the selector exists.
 
     A legacy date is not "good" or "bad" -- it is a weaker grade of evidence.
     Painting it in the same green or amber as a run manifest is the bug this
     styling exists to prevent, so the test checks the colours themselves.
     """
-    body = _rule_body(html, ".cov.unverified {")
+    body = _rule_body(css, ".cov.unverified {")
     for good_or_bad in ("var(--accent)", "var(--warning)", "var(--danger)", "#102b22", "#2b2415"):
         assert good_or_bad not in body, f"unverified must not use {good_or_bad}: {body}"
     assert "var(--muted)" in body
@@ -308,4 +320,44 @@ def test_unverified_is_drawn_off_the_good_bad_colour_scale(html: str) -> None:
     assert "dotted" in body
 
     # And the states that DO carry a verdict keep their scale.
-    assert "var(--accent)" in _rule_body(html, ".cov.collected_with_skips {")
+    assert "var(--accent)" in _rule_body(css, ".cov.collected_with_skips {")
+
+
+# --- The page is three files, not one (P0, 2026-09-14) ----------------------
+#
+# admin.html was 2,700 lines with the style and the whole script inline, so any
+# two changes to it collided and no two people could work it at once. It is now
+# markup + admin.css + admin.js, each servable on its own.
+
+
+def test_the_page_pulls_in_the_split_out_files_and_inlines_nothing() -> None:
+    html = ADMIN.read_text(encoding="utf-8")
+    assert '<link rel="stylesheet" href="/backoffice/admin.css">' in html
+    assert '<script src="/backoffice/admin.js"></script>' in html
+    # Nothing runs or styles inline any more: exactly the split that lets the
+    # three files be edited independently.
+    assert "<style" not in html
+    assert "<script>" not in html
+
+
+def test_the_split_files_carry_the_real_content() -> None:
+    assert ":root" in ADMIN_CSS.read_text(encoding="utf-8")
+    assert "initialize()" in ADMIN_JS.read_text(encoding="utf-8")
+
+
+def test_the_css_and_js_are_served() -> None:
+    from rlwrld_worklog.web import app
+
+    paths = set(app.openapi()["paths"])
+    assert {"/backoffice/admin.css", "/backoffice/admin.js"} <= paths
+
+
+def test_the_served_assets_match_the_files_and_are_typed(tmp_path, monkeypatch) -> None:
+    from rlwrld_worklog import admin_web
+
+    css = admin_web.backoffice_css()
+    js = admin_web.backoffice_js()
+    assert css.media_type == "text/css"
+    assert js.media_type == "text/javascript"
+    assert css.body.decode("utf-8") == ADMIN_CSS.read_text(encoding="utf-8")
+    assert js.body.decode("utf-8") == ADMIN_JS.read_text(encoding="utf-8")

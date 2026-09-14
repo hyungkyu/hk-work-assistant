@@ -29,4 +29,4 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-rlwrld_worklog = ["static/*.html"]
+rlwrld_worklog = ["static/*.html", "static/*.css", "static/*.js"]

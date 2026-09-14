@@ -240,6 +240,25 @@ def backoffice_page() -> HTMLResponse:
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/backoffice/admin.css")
+def backoffice_css() -> Response:
+    # Split out of admin.html so the stylesheet, the script and the markup are
+    # three files that different work can touch at once — the page was one
+    # 2,700-line file, which meant any two changes to it collided. Served here
+    # rather than by a static mount to keep the same no-store policy and the
+    # single package-data source the page is read from.
+    body = files("rlwrld_worklog").joinpath("static/admin.css").read_text(encoding="utf-8")
+    return Response(body, media_type="text/css", headers={"Cache-Control": "no-store"})
+
+
+@router.get("/backoffice/admin.js")
+def backoffice_js() -> Response:
+    body = files("rlwrld_worklog").joinpath("static/admin.js").read_text(encoding="utf-8")
+    return Response(
+        body, media_type="text/javascript", headers={"Cache-Control": "no-store"}
+    )
+
+
 @router.get("/admin")
 def old_admin_redirect() -> RedirectResponse:
     return RedirectResponse("/backoffice", status_code=308)
