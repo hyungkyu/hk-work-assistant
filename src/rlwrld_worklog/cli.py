@@ -344,7 +344,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     digest_parser.add_argument("--person", default=None, help="Read one person's day")
     digest_parser.add_argument(
-        "--html", type=Path, default=None, help="With --person, write the page here"
+        "--html", type=Path, default=None, help="With --person or --report, write the page here"
+    )
+    digest_parser.add_argument(
+        "--report",
+        action="store_true",
+        help=(
+            "Build one page of many people over a date range: --person-name "
+            "(repeatable) or --all, plus --since/--until (or --date for one day)"
+        ),
+    )
+    digest_parser.add_argument(
+        "--person-name",
+        action="append",
+        default=[],
+        dest="person_names",
+        help="With --report: a person by name or nickname (repeatable)",
+    )
+    digest_parser.add_argument(
+        "--all", action="store_true", help="With --report: everyone the org knows"
     )
     digest_parser.add_argument(
         "--status", action="store_true", help="Which days have digests"
@@ -1293,6 +1311,65 @@ def org_command(args: argparse.Namespace) -> int:
     return 1 if any(item["errors"] for item in results) else 0
 
 
+def _digest_days(args: argparse.Namespace) -> list[date]:
+    """The KST days a report covers: a --since/--until range, or one --date."""
+    if args.since or args.until:
+        start = date.fromisoformat(args.since) if args.since else date.fromisoformat(args.until)
+        end = date.fromisoformat(args.until) if args.until else start
+        out, day = [], start
+        while day <= end:
+            out.append(day)
+            day += timedelta(days=1)
+        return out
+    return [date.fromisoformat(args.date) if args.date else _kst_today() - timedelta(days=1)]
+
+
+def _digest_report(args: argparse.Namespace, database_url: str, digest_module) -> int:
+    """One HTML page of many people over a date range, by name."""
+    days = _digest_days(args)
+
+    if args.all:
+        import psycopg
+
+        with psycopg.connect(database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT person_id FROM org_person ORDER BY name")
+                person_ids = [row[0] for row in cursor.fetchall()]
+        unresolved: list[str] = []
+        ambiguous: dict[str, list[str]] = {}
+    else:
+        if not args.person_names:
+            raise SystemExit("--report needs --person-name (repeatable) or --all")
+        match = digest_module.resolve_people(database_url, args.person_names)
+        person_ids = list(match["resolved"].values())
+        unresolved = match["unresolved"]
+        ambiguous = match["ambiguous"]
+
+    sections = digest_module.build_report_sections(database_url, person_ids, days)
+    summary = {
+        "people": len(person_ids),
+        "days": [day.isoformat() for day in days],
+        "sections": len(sections),
+        "built": sum(1 for section in sections if section.get("built")),
+        "unresolved": unresolved,
+        "ambiguous": ambiguous,
+    }
+    if args.html:
+        from .render import render_report
+
+        span = days[0].isoformat() if len(days) == 1 else f"{days[0]} ~ {days[-1]}"
+        note = f"{len(person_ids)}명 · {span} (KST)"
+        if unresolved:
+            note += f" · 못 찾음: {', '.join(unresolved)}"
+        args.html.parent.mkdir(parents=True, exist_ok=True)
+        args.html.write_text(render_report(sections, subtitle=note), encoding="utf-8")
+        summary["html"] = str(args.html)
+    _print_json("digest_report", summary)
+    # Unresolved names or an unwritten report are worth a non-zero exit so a
+    # batch or a person notices, but ambiguity alone is reported and tolerated.
+    return 0 if (args.html and not unresolved) else 1
+
+
 def digest_command(args: argparse.Namespace) -> int:
     from . import digest as digest_module
 
@@ -1303,6 +1380,9 @@ def digest_command(args: argparse.Namespace) -> int:
     if args.status:
         _print_json("digest_status", digest_module.digest_status(database_url))
         return 0
+
+    if args.report:
+        return _digest_report(args, database_url, digest_module)
 
     if args.person:
         day = date.fromisoformat(args.date) if args.date else _kst_today() - timedelta(days=1)

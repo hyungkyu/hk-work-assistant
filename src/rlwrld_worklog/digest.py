@@ -398,3 +398,63 @@ def digest_status(database_url: str) -> dict[str, Any]:
         "rows": row[3] or 0,
         "events": int(row[4] or 0),
     }
+
+
+def resolve_people(database_url: str, names: list[str]) -> dict[str, Any]:
+    """Match each requested name to a person, by name or nickname.
+
+    Case-insensitive, and matches a full or partial name or the latest
+    nickname -- "hk", "gerald", "샘", "장주철" all have to land. Ambiguity is
+    reported rather than guessed: a name that hits two people is returned as a
+    conflict, because a report that silently picked one of two 김민수 is worse
+    than one that asks.
+    """
+    import psycopg
+
+    resolved: dict[str, str] = {}
+    unresolved: list[str] = []
+    ambiguous: dict[str, list[str]] = {}
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            for name in names:
+                needle = f"%{name.strip().lower()}%"
+                cursor.execute(
+                    """
+                    SELECT DISTINCT p.person_id, p.name
+                      FROM org_person p
+                      LEFT JOIN org_person_state s ON s.person_id = p.person_id
+                     WHERE lower(p.name) LIKE %(n)s
+                        OR lower(coalesce(s.nickname, '')) LIKE %(n)s
+                    """,
+                    {"n": needle},
+                )
+                hits = cursor.fetchall()
+                if not hits:
+                    unresolved.append(name)
+                elif len(hits) > 1:
+                    ambiguous[name] = [f"{row[1]} ({row[0]})" for row in hits]
+                else:
+                    resolved[name] = hits[0][0]
+    return {"resolved": resolved, "unresolved": unresolved, "ambiguous": ambiguous}
+
+
+def build_report_sections(
+    database_url: str, person_ids: list[str], days: list[date]
+) -> list[dict[str, Any]]:
+    """Every (person, day) as a digest dict, or a not-built marker.
+
+    Person-major, day-ascending: a reader scans one person down their days,
+    then the next person. A day with no digest row is marked built=False so
+    the report can say "not built" rather than showing nothing.
+    """
+    sections: list[dict[str, Any]] = []
+    for person_id in person_ids:
+        for day in days:
+            found = read_digest(database_url, person_id, day)
+            if found is None:
+                sections.append(
+                    {"person_id": person_id, "day": day.isoformat(), "built": False}
+                )
+            else:
+                sections.append({"built": True, **found})
+    return sections

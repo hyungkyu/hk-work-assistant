@@ -8,7 +8,9 @@ model.
 
 from __future__ import annotations
 
+import json
 import os
+import pytest
 import sys
 import uuid
 from datetime import date
@@ -345,3 +347,72 @@ def test_catch_up_never_builds_today(database) -> None:
     today = date_type(2026, 9, 14)
     assert date_type(2026, 9, 14) not in missing_days(database, days=7, today=today)
     assert max(missing_days(database, days=7, today=today)) == date_type(2026, 9, 13)
+
+
+# --- The report: many people over a range, one page (HK, 2026-09-15) --------
+
+
+def test_render_report_stitches_person_days_and_marks_not_built() -> None:
+    from rlwrld_worklog.render import render_report
+
+    sections = [
+        {"built": True, "person_id": "p1", "name": "게럴드", "day": "2026-09-12",
+         "generated_at": "x", "generator": "digest/1", "events_total": 2,
+         "counts": {"by_source": {"slack": 2}}, "state": None, "identities": [],
+         "events": [
+             {"time": "09:10", "source": "slack", "event_type": "message",
+              "container": "C1", "thread": None, "permalink": None, "title": "안녕"},
+         ]},
+        {"built": False, "person_id": "p2", "name": "샘", "day": "2026-09-12"},
+    ]
+    html = render_report(sections, subtitle="3명 · 2026-09-12")
+    assert "게럴드" in html and "샘" in html
+    assert "아직 생성 안 됨" in html          # the not-built marker
+    assert html.count("<!doctype html>") == 1  # one page, not nested documents
+    assert "안녕" in html
+
+
+def test_render_report_is_one_page_per_call() -> None:
+    from rlwrld_worklog.render import render_report
+
+    html = render_report([{"built": False, "person_id": "p", "name": "n", "day": "2026-09-12"}])
+    assert html.strip().startswith("<!doctype html>")
+    assert html.count("</html>") == 1
+
+
+def test_digest_report_cli_resolves_names_and_writes_one_page(tmp_path, monkeypatch, capsys) -> None:
+    """The report command, with the DB layer faked: name -> id -> sections -> html."""
+    from rlwrld_worklog import cli, digest as digest_module
+
+    monkeypatch.setattr(
+        digest_module, "resolve_people",
+        lambda url, names: {"resolved": {"gerald": "p1"}, "unresolved": ["yum"], "ambiguous": {}},
+    )
+    monkeypatch.setattr(
+        digest_module, "build_report_sections",
+        lambda url, ids, days: [
+            {"built": True, "person_id": "p1", "name": "게럴드", "day": d.isoformat(),
+             "generated_at": "x", "generator": "digest/1", "events_total": 0,
+             "counts": {"by_source": {}}, "state": None, "identities": [], "events": []}
+            for d in days
+        ],
+    )
+    out = tmp_path / "report.html"
+    code = cli.main([
+        "digest", "--report", "--database-url", "postgresql://x/y",
+        "--person-name", "gerald", "--person-name", "yum",
+        "--since", "2026-09-12", "--until", "2026-09-14", "--html", str(out),
+    ])
+    payload = json.loads(capsys.readouterr().out.split("=", 1)[1])
+    assert out.exists()
+    assert payload["days"] == ["2026-09-12", "2026-09-13", "2026-09-14"]
+    assert payload["unresolved"] == ["yum"]
+    # Unresolved names -> non-zero exit so it is noticed.
+    assert code == 1
+    assert "게럴드" in out.read_text(encoding="utf-8")
+
+
+def test_digest_report_needs_names_or_all(monkeypatch, capsys) -> None:
+    from rlwrld_worklog import cli
+    with pytest.raises(SystemExit):
+        cli.main(["digest", "--report", "--database-url", "postgresql://x/y"])

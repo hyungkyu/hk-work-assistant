@@ -275,7 +275,18 @@ def render_org_chart(chart: dict[str, Any], *, person_link=None) -> str:
 
 
 def render_person_day(digest: dict[str, Any]) -> str:
-    """One person's day, every activity, in time order."""
+    """One person's day, every activity, in time order, as a full page."""
+    return _page(
+        f'{digest.get("name")} · {digest.get("day")}', _person_day_body(digest)
+    )
+
+
+def _person_day_body(digest: dict[str, Any]) -> str:
+    """The inner content of one person-day, without the page wrapper.
+
+    Factored out so a multi-person, multi-day report can stitch many of these
+    into one page (`render_report`) without nesting <html> documents.
+    """
     state = digest.get("state") or {}
     identities = digest.get("identities") or []
     counts = (digest.get("counts") or {}).get("by_source") or {}
@@ -360,4 +371,36 @@ def render_person_day(digest: dict[str, Any]) -> str:
             day_block,
         ]
     )
-    return _page(f'{digest.get("name")} · {digest.get("day")}', body)
+    return body
+
+
+def render_report(
+    sections: list[dict[str, Any]], *, title: str = "데일리 다이제스트", subtitle: str = ""
+) -> str:
+    """One page holding many person-days: the review artifact for a set of people.
+
+    `sections` is a list of {person_id, name, day, built, ...digest} in the
+    order to show them. A not-built person-day is shown as such rather than
+    dropped -- "not built" and "did nothing" are different answers, and a
+    report that hid the first would read a broken batch as a quiet day.
+    """
+    blocks: list[str] = []
+    for section in sections:
+        anchor = _e(f'{section.get("person_id")}-{section.get("day")}')
+        if section.get("built") is False:
+            blocks.append(
+                f'<div class="grp" id="{anchor}"><div class="h">'
+                f'<h3>{_e(section.get("name") or section.get("person_id"))} · '
+                f'{_e(section.get("day"))}</h3>'
+                '<span class="pill warn">아직 생성 안 됨</span></div>'
+                '<div class="empty" style="margin-top:10px">이 사람·이 날의 '
+                "다이제스트가 아직 만들어지지 않았다. <b>활동 없음</b>이 아니라 "
+                "<b>배치 미생성</b>이다 — <code>digest --catch-up</code>이 채운다.</div></div>"
+            )
+        else:
+            blocks.append(
+                f'<div class="grp" id="{anchor}">{_person_day_body(section)}</div>'
+            )
+    lead = f'<p class="lead">{_e(subtitle)}</p>' if subtitle else ""
+    body = f"<h1>{_e(title)}</h1>{lead}" + "\n".join(blocks)
+    return _page(title, body)
