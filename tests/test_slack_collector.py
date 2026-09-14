@@ -774,3 +774,25 @@ def test_max_parents_is_not_the_collectors_concern_but_the_seed_is_honoured(tmp_
     _, result = collect(tmp_path, client, seed_threads={CHANNEL: {p1, p2}}, use_search=False)
     assert result.counters["seed_thread_sweep"]["threads_swept"] == 2
     assert len(result.events) == 4
+
+
+def test_make_slack_collector_passes_rate_limit_patience(monkeypatch) -> None:
+    """A heavy backfill raises 429 patience; the nightly run keeps the default."""
+    import rlwrld_worklog.slack_collector as sc
+
+    seen = {}
+
+    class FakeClient:
+        def __init__(self, token, **kwargs):
+            seen.update(kwargs)
+
+    monkeypatch.setattr(sc, "SlackClient", FakeClient)
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-x")
+    import tempfile, pathlib
+    root = pathlib.Path(tempfile.mkdtemp())
+    sc.make_slack_collector(archive_root=root, environment="test", token="xoxp-x",
+                            rate_limit_max_attempts=25)
+    assert seen.get("max_attempts") == 25
+    seen.clear()
+    sc.make_slack_collector(archive_root=root, environment="test", token="xoxp-x")
+    assert "max_attempts" not in seen, "nightly run uses the client default"

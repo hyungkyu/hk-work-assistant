@@ -197,7 +197,7 @@ class TestTheBoundReachesTheCollector:
 def slack_factory(client: FakeSlack):
     """The real Slack collector with a scripted client behind it."""
 
-    def factory(*, archive_root, environment, token=None, capture_density="full", dry_run=False, config_root=None):
+    def factory(*, archive_root, environment, token=None, capture_density="full", dry_run=False, config_root=None, rate_limit_max_attempts=None):
         archive = RawArchive(
             archive_root, "slack", "slack-slice", environment, dry_run=dry_run, config_root=config_root
         )

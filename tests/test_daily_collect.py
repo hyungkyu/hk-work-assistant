@@ -1188,7 +1188,7 @@ def test_slack_prewindow_widening_reaches_the_collector(tmp_path: Path, monkeypa
             seen.update(kwargs)
             raise CaptureFailed(self.archive, RuntimeError("stop after recording"))
 
-    def fake_factory(*, token, archive_root, environment, capture_density, dry_run, config_root=None):
+    def fake_factory(*, token, archive_root, environment, capture_density, dry_run, config_root=None, rate_limit_max_attempts=None):
         from rlwrld_worklog.archive import RawArchive
 
         rec = Recorder()
@@ -1221,7 +1221,7 @@ def test_the_nightly_run_leaves_parent_discovery_at_collector_defaults(
             seen.update(kwargs)
             raise CaptureFailed(self.archive, RuntimeError("stop"))
 
-    def fake_factory(*, token, archive_root, environment, capture_density, dry_run, config_root=None):
+    def fake_factory(*, token, archive_root, environment, capture_density, dry_run, config_root=None, rate_limit_max_attempts=None):
         from rlwrld_worklog.archive import RawArchive
 
         rec = Recorder()

@@ -889,12 +889,22 @@ def make_slack_collector(
     # Where a run publishes its derived progress snapshot. None falls back to
     # APP_CONFIG_ROOT, and to no snapshot at all when that is unset.
     config_root: Path | None = None,
+    # How many times one request rides out a 429 before the run fails. None
+    # keeps the client's default (tuned for the nightly run). A backfill that
+    # hammers conversations.history sits in sustained rate limiting and needs
+    # more patience -- each wait is Retry-After bounded, so a higher number
+    # waits through the storm rather than dying on it.
+    rate_limit_max_attempts: int | None = None,
 ) -> tuple[SlackClient, RawArchive, SlackCollector]:
     resolved = token or os.environ.get("SLACK_USER_TOKEN")
     if not resolved:
         raise SystemExit("SLACK_USER_TOKEN is required; run scripts/install-slack-secret.sh")
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:10]
-    client = SlackClient(resolved)
+    client = (
+        SlackClient(resolved, max_attempts=rate_limit_max_attempts)
+        if rate_limit_max_attempts is not None
+        else SlackClient(resolved)
+    )
     archive = RawArchive(
         archive_root,
         "slack",

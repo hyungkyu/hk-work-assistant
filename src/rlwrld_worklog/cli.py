@@ -520,6 +520,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Slack only: parent-discovery pages per channel (nightly default is 1)",
     )
+    daily.add_argument(
+        "--slack-rate-limit-max-attempts",
+        type=_positive_int,
+        default=None,
+        help=(
+            "Slack only: how many times one request rides out a 429 before the "
+            "run fails (nightly default is 6). Raise it for a backfill that sits "
+            "in sustained rate limiting; each wait is Retry-After bounded."
+        ),
+    )
 
     # `collection` is a group rather than a top-level `collection-audit`,
     # because reading the collection record is a family of questions and the
@@ -1599,6 +1609,7 @@ def daily_collect(args: argparse.Namespace) -> int:
             lock_path=args.lock_path,
             slack_prewindow_parent_lookback_days=args.slack_prewindow_parent_lookback_days,
             slack_prewindow_parent_pages_per_channel=args.slack_prewindow_parent_pages_per_channel,
+            slack_rate_limit_max_attempts=args.slack_rate_limit_max_attempts,
         )
     except ValueError as error:
         # A window that cannot be honoured as asked, or one too wide to be

@@ -243,6 +243,8 @@ class DailyConfig:
     # parent that predates every window. asdict() would choke on sets, so
     # config_as_dict below renders it as counts, not the list.
     slack_seed_threads: dict[str, set[str]] | None = None
+    # 429 patience for Slack, raised for a heavy backfill. None = client default.
+    slack_rate_limit_max_attempts: int | None = None
 
     def __post_init__(self) -> None:
         # A smoke run is bounded by construction and must never move a
@@ -463,6 +465,7 @@ def capture_slack(config: DailyConfig, credentials: Credentials) -> CaptureOutco
         capture_density=config.capture_density,
         dry_run=config.dry_run,
         config_root=config.config_root,
+        rate_limit_max_attempts=config.slack_rate_limit_max_attempts,
     )
     if config.slack_seed_threads:
         try:
