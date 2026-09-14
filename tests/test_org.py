@@ -339,3 +339,61 @@ def test_a_missing_xlsx_reader_says_how_to_install_it(monkeypatch) -> None:
     with pytest.raises(RuntimeError) as error:
         sheet.rows_from_workbook(b"", "roster_seed_2")
     assert "pip install openpyxl" in str(error.value)
+
+
+def _workbook(tabs: dict[str, list[list[str]]]) -> bytes:
+    """A real .xlsx in memory, so the reader is exercised and not mocked."""
+    import io
+
+    import openpyxl
+
+    book = openpyxl.Workbook()
+    book.remove(book.active)
+    for name, rows in tabs.items():
+        sheet = book.create_sheet(name)
+        for row in rows:
+            sheet.append(row)
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
+
+
+def test_the_external_tab_is_found_under_the_spelling_the_sheet_uses() -> None:
+    """The sheet says `roaster_seed_ext` -- "roaster", not "roster".
+
+    That is the sheet's name for the tab and not ours to correct: renaming it
+    would break every formula and every other reader pointed at it. The source
+    we store stays canonical; only the lookup accepts either spelling.
+    """
+    from rlwrld_worklog.org.sheet import read_all, resolve_tabs
+
+    data = _workbook(
+        {
+            "roster_seed_2": [["이름", "조직"], ["직원", "RLWRLD | Model Team"]],
+            "roaster_seed_ext": [
+                ["이름", "소속 학교 연구실 지도교수님"],
+                ["학생", "주한별 교수님"],
+            ],
+            "roster_seed.csv_old": [["이름"], ["옛날 사람"]],
+        }
+    )
+    assert resolve_tabs(data) == {
+        "roster_seed_2": "roster_seed_2",
+        "roster_seed_ext": "roaster_seed_ext",
+    }
+    by_tab = read_all(data)
+    # Keyed by the name the database knows, not the one the sheet used.
+    assert set(by_tab) == {"roster_seed_2", "roster_seed_ext"}
+    assert by_tab["roster_seed_ext"][0]["advisor"] == "주한별 교수님"
+    assert by_tab["roster_seed_ext"][0]["source"] == "roster_seed_ext"
+
+
+def test_a_tab_that_is_gone_is_reported_with_what_the_workbook_has() -> None:
+    """Somebody renamed or deleted it: a real event, not zero people."""
+    from rlwrld_worklog.org.sheet import read_all
+
+    data = _workbook({"roster_seed_2": [["이름"], ["직원"]]})
+    with pytest.raises(KeyError) as error:
+        read_all(data)
+    message = str(error.value)
+    assert "roaster_seed_ext" in message and "roster_seed_2" in message

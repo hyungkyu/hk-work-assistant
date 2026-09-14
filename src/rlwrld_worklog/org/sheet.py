@@ -26,9 +26,49 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # fact rather than a law, but defaulted so the batch needs no configuration to
 # do the right thing.
 ROSTER_SHEET_ID = "15QsaBGnDu3ACJ8ucqeO0fu5FhDiXGjhYmzKr0KANQPw"
+
+# The names this code stores, and the tab names the sheet actually uses.
+#
+# The external tab is spelled `roaster_seed_ext` in the sheet -- "roaster",
+# not "roster". That is the sheet's name for it, and the sheet is not ours to
+# correct: renaming a tab breaks every formula and every other reader pointed
+# at it. HK wrote it that way from the start; I read past it and used the
+# spelling I expected, which is how the first sync died looking for a tab that
+# was never there.
+#
+# So the stored `source` stays canonical (the CHECK constraint in 0007 names
+# it) and the lookup accepts either spelling. A new alias goes in this list;
+# nothing else changes.
 INTERNAL_TAB = "roster_seed_2"
 EXTERNAL_TAB = "roster_seed_ext"
 TABS = (INTERNAL_TAB, EXTERNAL_TAB)
+
+TAB_ALIASES: dict[str, tuple[str, ...]] = {
+    INTERNAL_TAB: ("roster_seed_2", "roaster_seed_2"),
+    EXTERNAL_TAB: ("roster_seed_ext", "roaster_seed_ext"),
+}
+
+
+def resolve_tabs(data: bytes, tabs: tuple[str, ...] = TABS) -> dict[str, str]:
+    """Which sheet tab holds each roster, by the names the workbook has.
+
+    Raises naming every tab in the workbook when one cannot be found, because
+    a missing tab means somebody renamed or deleted it -- a real event that a
+    batch must report rather than answering with zero people.
+    """
+    present = set(tab_names(data))
+    found: dict[str, str] = {}
+    for tab in tabs:
+        for candidate in TAB_ALIASES.get(tab, (tab,)):
+            if candidate in present:
+                found[tab] = candidate
+                break
+        else:
+            raise KeyError(
+                f"no tab for {tab}: tried {', '.join(TAB_ALIASES.get(tab, (tab,)))}; "
+                f"the workbook has {sorted(present)}"
+            )
+    return found
 
 
 def export_workbook(credentials, sheet_id: str = ROSTER_SHEET_ID) -> bytes:
@@ -102,16 +142,19 @@ def tab_names(data: bytes) -> list[str]:
 
 
 def read_all(data: bytes, tabs: tuple[str, ...] = TABS) -> dict[str, list[dict]]:
-    """Every roster tab's rows, normalised per tab.
+    """Every roster tab's rows, normalised, keyed by the name we store.
 
-    Import is local so this module can be read and tested without the
+    The workbook's own tab names are resolved first, so a tab spelled
+    differently in the sheet still lands under the source name the database
+    knows. Import is local so this module can be read and tested without the
     normaliser being involved in the file format.
     """
     from .normalize import normalize_rows
 
+    resolved = resolve_tabs(data, tabs)
     found: dict[str, list[dict]] = {}
     for tab in tabs:
-        found[tab] = normalize_rows(rows_from_workbook(data, tab), source=tab)
+        found[tab] = normalize_rows(rows_from_workbook(data, resolved[tab]), source=tab)
     return found
 
 
