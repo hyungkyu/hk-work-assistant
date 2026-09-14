@@ -1,0 +1,41 @@
+{
+  "name": "2026-09-14-p0-closeout",
+  "note": "fixup 때 done 경로 미배포로 종료가 안 붙은 4건 + admin.html 분할 완료 종료.",
+  "entries": [
+    {
+      "work_id": "wi_7bf2d5dd2380516e",
+      "expected_revision": 4,
+      "phase": "P1",
+      "status": "done",
+      "evidence": "15399591d7107eaa8b35141035dcb564753d5c08 — ledger-verify 다중 루트, 검증·배포됨"
+    },
+    {
+      "work_id": "wi_1bda10e6938ed059",
+      "expected_revision": 5,
+      "phase": "P0",
+      "status": "done",
+      "evidence": "fc75f4a20b583be698a996f4b87d095c1fff4e0c — pid 재사용 오판정 수정, 배포됨"
+    },
+    {
+      "work_id": "wi_1788972bef584bcc",
+      "expected_revision": 3,
+      "phase": "P0",
+      "status": "done",
+      "evidence": "9a2171923aa5100cdb1ebb625da1e5957f6be346 — 행위자 신원 기록, 배포됨"
+    },
+    {
+      "work_id": "wi_b3df22c8cc784b36",
+      "expected_revision": 5,
+      "phase": "P0",
+      "status": "done",
+      "evidence": "fc75f4a20b583be698a996f4b87d095c1fff4e0c — 보드/수집기 분리, 배포됨"
+    },
+    {
+      "work_id": "wi_95934a4f02fae5a7",
+      "expected_revision": 2,
+      "phase": "P0",
+      "status": "done",
+      "evidence": "097f5e823997afdfbb1c048171e8e50871eeb059 — admin.html html/css/js 3분할, 배포됨"
+    }
+  ]
+}
