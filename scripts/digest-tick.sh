@@ -51,6 +51,19 @@ if [ -z "${DATABASE_URL:-}" ]; then
   exit 78
 fi
 
+# A dependency the batch needs and does not have is a failure that says what
+# fixes it, once, here -- rather than a traceback three steps later.
+if ! "$worklog" org --help >/dev/null 2>&1; then
+  echo "the worklog CLI at $worklog cannot run; check the virtualenv" >&2
+  exit 78
+fi
+if ! python3 -c "import openpyxl" >/dev/null 2>&1 \
+   && ! "$(dirname "$worklog")/python" -c "import openpyxl" >/dev/null 2>&1; then
+  echo "openpyxl is missing from the environment that runs this batch." >&2
+  echo "install it: $(dirname "$worklog")/pip install openpyxl" >&2
+  exit 78
+fi
+
 status=0
 
 echo "=== roster sync"

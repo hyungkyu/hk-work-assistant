@@ -50,9 +50,29 @@ def workbook_digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _openpyxl():
+    """The XLSX reader, or an error that says how to get it.
+
+    A missing dependency inside a scheduled batch is otherwise a traceback in
+    a log nobody opens, and the batch reports failure without saying that one
+    `pip install` fixes it. This happened on 2026-09-14: openpyxl was declared
+    in pyproject.toml and never installed into the host virtualenv the batch
+    actually runs from, and the run died on `import openpyxl`.
+    """
+    try:
+        import openpyxl
+    except ModuleNotFoundError as error:  # pragma: no cover - exercised by the test below
+        raise RuntimeError(
+            "openpyxl is required to read the roster workbook and is not installed "
+            "in this environment. Install it into the environment that runs the "
+            "batch: `.venv/bin/pip install openpyxl`"
+        ) from error
+    return openpyxl
+
+
 def rows_from_workbook(data: bytes, tab: str) -> list[dict]:
     """Rows of one tab, taking the first non-empty row as the header."""
-    import openpyxl
+    openpyxl = _openpyxl()
 
     book = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     if tab not in book.sheetnames:
@@ -76,7 +96,7 @@ def rows_from_workbook(data: bytes, tab: str) -> list[dict]:
 
 
 def tab_names(data: bytes) -> list[str]:
-    import openpyxl
+    openpyxl = _openpyxl()
 
     return openpyxl.load_workbook(io.BytesIO(data), read_only=True).sheetnames
 

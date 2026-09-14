@@ -314,3 +314,28 @@ def test_the_plan_carries_the_advisor_so_the_chart_can_group_by_lab() -> None:
     )
     written = plan(records, observation_id=1)
     assert written["person_state"][0]["advisor"] == "신진우 교수님"
+
+
+def test_a_missing_xlsx_reader_says_how_to_install_it(monkeypatch) -> None:
+    """A batch that dies on an import must say what fixes it.
+
+    On 2026-09-14 the roster sync failed with a bare ModuleNotFoundError:
+    openpyxl was declared in pyproject.toml and never installed into the
+    virtualenv the batch actually runs from. A traceback in a log nobody
+    opens is not a report.
+    """
+    import builtins
+
+    from rlwrld_worklog.org import sheet
+
+    real_import = builtins.__import__
+
+    def without_openpyxl(name, *args, **kwargs):
+        if name == "openpyxl":
+            raise ModuleNotFoundError("No module named 'openpyxl'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_openpyxl)
+    with pytest.raises(RuntimeError) as error:
+        sheet.rows_from_workbook(b"", "roster_seed_2")
+    assert "pip install openpyxl" in str(error.value)
