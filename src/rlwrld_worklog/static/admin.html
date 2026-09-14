@@ -2331,10 +2331,16 @@
           badge.className = 'badge';
           badge.textContent = `${node.members.length}명`;
           head.append(title, badge);
-          const grid = document.createElement('div');
-          grid.style.cssText = 'display:grid;gap:10px;'
-            + 'grid-template-columns:repeat(auto-fill,minmax(200px,1fr))';
-          node.members.forEach((person) => {
+          // Banded: 정규직 -> 계약직 · 인턴 under the company, 교수 -> 학생
+          // in a lab. The bands and their order come from the server, which
+          // is the one place that rule is written; this only titles them.
+          const newGrid = () => {
+            const grid = document.createElement('div');
+            grid.style.cssText = 'display:grid;gap:10px;margin-top:8px;'
+              + 'grid-template-columns:repeat(auto-fill,minmax(200px,1fr))';
+            return grid;
+          };
+          const personCard = (person) => {
             const card = document.createElement('button');
             card.className = 'button';
             card.style.cssText = 'text-align:left;display:grid;gap:4px;padding:11px 12px';
@@ -2345,6 +2351,13 @@
             sub.textContent = [person.nickname, person.employment_type || person.title]
               .filter(Boolean).join(' · ');
             card.append(name, sub);
+            // 회사원이면서 학생: the engagement, written on the student's card.
+            if (person.company_mark && person.member_group === '학생') {
+              const mark = document.createElement('span');
+              mark.className = 'badge ok';
+              mark.textContent = person.company_mark;
+              card.appendChild(mark);
+            }
             if (person.status === 'absent_from_sheet') {
               const warn = document.createElement('span');
               warn.className = 'badge wait';
@@ -2357,9 +2370,33 @@
               showPage('person');
               runPersonDay();
             });
-            grid.appendChild(card);
-          });
-          block.append(head, grid);
+            return card;
+          };
+          block.appendChild(head);
+          const bands = node.groups || [];
+          if (bands.length <= 1) {
+            const grid = newGrid();
+            node.members.forEach((person) => grid.appendChild(personCard(person)));
+            block.appendChild(grid);
+          } else {
+            bands.forEach((band) => {
+              const label = document.createElement('div');
+              label.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:10px;'
+                + 'padding-top:8px;border-top:1px solid var(--line-soft,#1e2734);'
+                + 'font:500 12px/1 system-ui;color:var(--muted,#6d7b8e)';
+              const text = document.createElement('span');
+              text.textContent = band.name;
+              const n = document.createElement('span');
+              n.className = 'badge';
+              n.textContent = `${band.people}명`;
+              label.append(text, n);
+              const grid = newGrid();
+              node.members
+                .filter((person) => person.member_group === band.name)
+                .forEach((person) => grid.appendChild(personCard(person)));
+              block.append(label, grid);
+            });
+          }
           host.appendChild(block);
         }
         orgGroups(node.children || [], host);

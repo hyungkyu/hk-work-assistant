@@ -65,6 +65,9 @@ display:grid;place-items:center;font:600 12px/1 var(--ui);color:var(--muted);fle
 .grp{border:1px solid var(--line-soft);border-radius:10px;padding:12px;margin-top:12px;background:#0e131a}
 .grp>.h{margin-bottom:4px}
 .grp h3{margin:0;font-size:14px}
+.band{margin-top:10px}
+.band>.bh{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);
+letter-spacing:.02em;border-top:1px solid var(--line-soft);padding-top:8px}
 .phead{display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:start}
 .phead h2{font-size:20px}
 .sub{color:var(--muted);font-size:13px;margin-top:4px}
@@ -120,6 +123,11 @@ def _person_card(person: dict, *, link: str | None = None) -> str:
         tags.append(f'<span class="pill">{_e(access)}</span>')
     if person.get("status") == "absent_from_sheet":
         tags.append('<span class="pill warn">시트에 없음</span>')
+    # A lab student who is also engaged by the company. HK, 2026-09-14:
+    # 학생 중에는 회사원이면서 학생도 있으니까, 회사원 표시를 해주면 좋겠어.
+    mark = person.get("company_mark")
+    if mark and person.get("member_group") == "학생":
+        tags.append(f'<span class="pill ok">{_e(mark)}</span>')
     subtitle = " · ".join(
         part for part in (person.get("nickname"), person.get("employment_type") or person.get("title")) if part
     )
@@ -148,17 +156,48 @@ def _tree_rows(nodes: list[dict], out: list[str]) -> None:
 
 
 def _group_sections(nodes: list[dict], out: list[str], person_link=None) -> None:
-    """Every node that has members of its own, as a titled group of cards."""
+    """Every node that has members of its own, as a titled group of cards.
+
+    Within a node the people are banded: 정규직 then 계약직 · 인턴 under the
+    company, 교수 then 학생 under a lab. The bands and their order come from
+    `org.chart`, which is the one place that rule is written; this only titles
+    what it was handed, and a node whose members carry no band at all is
+    rendered as one unlabelled run rather than an empty page.
+    """
     for node in nodes:
         if node["members"]:
-            cards = "".join(
-                _person_card(person, link=person_link(person) if person_link else None)
-                for person in node["members"]
-            )
+            bands = node.get("groups") or []
+            blocks: list[str] = []
+            if len(bands) <= 1:
+                blocks.append(
+                    '<div class="people">'
+                    + "".join(
+                        _person_card(person, link=person_link(person) if person_link else None)
+                        for person in node["members"]
+                    )
+                    + "</div>"
+                )
+            else:
+                for band in bands:
+                    members = [
+                        person
+                        for person in node["members"]
+                        if person.get("member_group") == band["name"]
+                    ]
+                    cards = "".join(
+                        _person_card(person, link=person_link(person) if person_link else None)
+                        for person in members
+                    )
+                    blocks.append(
+                        f'<div class="band"><div class="bh">{_e(band["name"])}'
+                        f'<span class="pill">{band["people"]}명</span></div>'
+                        f'<div class="people">{cards}</div></div>'
+                    )
             out.append(
                 f'<div class="grp"><div class="h"><h3>{_e(node["path"])}</h3>'
                 f'<span class="pill">{len(node["members"])}명</span></div>'
-                f'<div class="people">{cards}</div></div>'
+                + "".join(blocks)
+                + "</div>"
             )
         _group_sections(node["children"], out, person_link)
 

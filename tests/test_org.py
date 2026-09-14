@@ -595,3 +595,93 @@ def test_the_form_tab_reads_end_to_end_from_a_real_workbook() -> None:
     students = by_tab["roster_seed_ext"]
     assert [person["name"] for person in students] == ["학생하나", "학생둘"]
     assert [person["advisor"] for person in students] == ["신진우 교수님", "주한별 교수님"]
+
+
+# --- Banding: how a node lists its own people (HK, 2026-09-14) -------------
+#
+# 조직도에서는 정규직 -> 계약직/인턴 으로 구분해서 표시해줘. 버추얼랩은 교수
+# -> 학생 순으로. 학생 중에는 회사원이면서 학생도 있으니까, 회사원 표시를.
+
+from rlwrld_worklog.org.chart import (  # noqa: E402
+    GROUP_CONTRACT,
+    GROUP_PROFESSOR,
+    GROUP_REGULAR,
+    GROUP_STUDENT,
+    GROUP_UNKNOWN,
+    annotate,
+    build_tree,
+    company_mark,
+)
+
+
+def _person(name, path, **fields):
+    person = {"name": name, "chart_path": list(path)}
+    person.update(fields)
+    return person
+
+
+def test_company_people_band_regular_before_contract() -> None:
+    people = [
+        _person("가", ["RLWRLD", "Model Team"], employment_type="인턴"),
+        _person("나", ["RLWRLD", "Model Team"], employment_type="정규직"),
+        _person("다", ["RLWRLD", "Model Team"], employment_type="계약직"),
+        _person("라", ["RLWRLD", "Model Team"], employment_type="준정규직"),
+    ]
+    annotate(people)
+    tree = build_tree(people)
+    node = tree[0]["children"][0]
+    assert [band["name"] for band in node["groups"]] == [GROUP_REGULAR, GROUP_CONTRACT]
+    assert [person["name"] for person in node["members"]] == ["나", "라", "가", "다"]
+
+
+def test_a_lab_lists_the_professor_before_the_students() -> None:
+    people = [
+        _person("학생1", ["RLWRLD Virtual Lab", "주한별 교수님"], affiliation="student"),
+        _person("주한별", ["RLWRLD Virtual Lab", "주한별 교수님"], affiliation="professor"),
+        _person("가학생", ["RLWRLD Virtual Lab", "주한별 교수님"], affiliation="student"),
+    ]
+    annotate(people)
+    node = build_tree(people)[0]["children"][0]
+    assert [band["name"] for band in node["groups"]] == [GROUP_PROFESSOR, GROUP_STUDENT]
+    assert [person["name"] for person in node["members"]] == ["주한별", "가학생", "학생1"]
+
+
+def test_a_student_who_is_also_on_the_payroll_is_marked() -> None:
+    """회사원이면서 학생. The mark is the engagement, not a yes/no."""
+    people = [
+        _person("방문", ["RLWRLD Virtual Lab", "L"], affiliation="student", employment_type="방문 연구원"),
+        _person("인턴", ["RLWRLD Virtual Lab", "L"], affiliation="student", employment_type="인턴"),
+        _person("순수", ["RLWRLD Virtual Lab", "L"], affiliation="student", employment_type=""),
+    ]
+    annotate(people)
+    marks = {person["name"]: person["company_mark"] for person in people}
+    assert marks == {"방문": "방문 연구원", "인턴": "인턴", "순수": None}
+
+
+def test_the_mark_tolerates_the_spacing_the_two_tabs_differ_on() -> None:
+    assert company_mark({"employment_type": "방문연구원"}) == "방문 연구원"
+    assert company_mark({"employment_type": "방문 연구원"}) == "방문 연구원"
+
+
+def test_an_unstated_employment_type_is_its_own_band_not_a_contract() -> None:
+    """Silence is not a demotion: 미상 is visible, and last."""
+    people = [_person("무명", ["RLWRLD", "X"], employment_type="")]
+    annotate(people)
+    assert people[0]["member_group"] == GROUP_UNKNOWN
+    assert build_tree(people)[0]["children"][0]["groups"] == [
+        {"name": GROUP_UNKNOWN, "people": 1}
+    ]
+
+
+def test_the_renderer_titles_the_bands_and_shows_the_mark() -> None:
+    from rlwrld_worklog.render import render_org_chart
+
+    people = [
+        _person("교수님", ["RLWRLD Virtual Lab", "L"], affiliation="professor"),
+        _person("겸직", ["RLWRLD Virtual Lab", "L"], affiliation="student", employment_type="정규직"),
+    ]
+    annotate(people)
+    html = render_org_chart({"tree": build_tree(people), "headcount": {}})
+    assert GROUP_PROFESSOR in html
+    assert GROUP_STUDENT in html
+    assert "정규직" in html

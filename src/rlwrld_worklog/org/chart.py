@@ -140,6 +140,90 @@ def place_professors(people: list[dict]) -> list[str]:
     return unmatched
 
 
+# How somebody is engaged, folded into the two buckets HK asks the chart to
+# show on the company side (2026-09-14): 정규직 먼저, 그 다음 계약직/인턴.
+# 준정규직·자문직·사외이사 sit with 정규직 because that is the access they
+# carry -- the same set `access_of` already treats as staff-equivalent, minus
+# 방문 연구원, who is a student by definition and never appears under a
+# company node.
+REGULAR_EMPLOYMENT = {"정규직", "준정규직", "자문직", "사외이사"}
+
+# The three engagements a Virtual Lab student may also hold in the company.
+# Written on the student's card so a reader can see that a name under a lab
+# is also a person on the payroll. Spacing varies between the tabs
+# ("방문 연구원" / "방문연구원"), so it is compared with spaces removed.
+COMPANY_MARKS = ("정규직", "방문 연구원", "인턴")
+
+GROUP_REGULAR = "정규직"
+GROUP_CONTRACT = "계약직 · 인턴"
+GROUP_PROFESSOR = "교수"
+GROUP_STUDENT = "학생"
+GROUP_UNKNOWN = "미상"
+
+# Order within a node. Not alphabetical: the reading order HK asked for is
+# 정규직 → 계약직/인턴 on the company side and 교수 → 학생 in the labs, and a
+# chart whose rows reorder themselves between days is one nobody trusts.
+GROUP_ORDER = {
+    GROUP_PROFESSOR: 0,
+    GROUP_REGULAR: 0,
+    GROUP_CONTRACT: 1,
+    GROUP_STUDENT: 1,
+    GROUP_UNKNOWN: 2,
+}
+
+
+def _folded(value: str | None) -> str:
+    return str(value or "").replace(" ", "").strip()
+
+
+def company_mark(person: dict) -> str | None:
+    """The company engagement a lab member also holds, or None.
+
+    None rather than "" or "학생": an absent mark means the sheet did not say
+    this student is engaged by the company, which is a different fact from
+    saying they are not.
+    """
+    employment = _folded(person.get("employment_type"))
+    if not employment:
+        return None
+    for mark in COMPANY_MARKS:
+        if _folded(mark) == employment:
+            return mark
+    return None
+
+
+def member_group(person: dict) -> str:
+    """Which band a person is listed under on their own node.
+
+    The node decides the axis. Under a lab the question is 교수인가 학생인가;
+    under the company it is 정규직인가 아닌가. The same person can therefore
+    be a 학생 here and carry a 정규직 mark, which is exactly the case HK named:
+    회사원이면서 학생.
+    """
+    if person.get("affiliation") == "professor":
+        return GROUP_PROFESSOR
+    path = person.get("chart_path") or []
+    if path[:1] == [LAB_ROOT]:
+        return GROUP_STUDENT
+    employment = _folded(person.get("employment_type"))
+    if not employment:
+        return GROUP_UNKNOWN
+    if employment in {_folded(value) for value in REGULAR_EMPLOYMENT}:
+        return GROUP_REGULAR
+    return GROUP_CONTRACT
+
+
+def annotate(people: list[dict]) -> None:
+    """Attach the grouping fields, after paths are final.
+
+    After `place_professors`, because a professor's group depends on the path
+    that pass may have moved them to.
+    """
+    for person in people:
+        person["member_group"] = member_group(person)
+        person["company_mark"] = company_mark(person)
+
+
 def build_tree(people: list[dict]) -> dict[str, Any]:
     """A two-rooted tree from person rows, each carrying its own path.
 
@@ -180,7 +264,28 @@ def build_tree(people: list[dict]) -> dict[str, Any]:
         for node in mapping.values():
             node = dict(node)
             node["children"] = finish(node["children"])
-            node["members"] = sorted(node["members"], key=lambda person: person["name"])
+            node["members"] = sorted(
+                node["members"],
+                key=lambda person: (
+                    GROUP_ORDER.get(person.get("member_group"), 9),
+                    str(person.get("member_group") or ""),
+                    person["name"],
+                ),
+            )
+            # The bands present on this node, in reading order, with their
+            # sizes -- so a renderer can title them without re-deriving the
+            # rule, and a reader sees 정규직 3 · 계약직 · 인턴 1 rather than
+            # counting cards.
+            bands: dict[str, int] = {}
+            for person in node["members"]:
+                key = str(person.get("member_group") or GROUP_UNKNOWN)
+                bands[key] = bands.get(key, 0) + 1
+            node["groups"] = [
+                {"name": name, "people": count}
+                for name, count in sorted(
+                    bands.items(), key=lambda item: (GROUP_ORDER.get(item[0], 9), item[0])
+                )
+            ]
             out.append(node)
         # Named roots first in a fixed order, then by headcount: a chart whose
         # rows move around between days is one nobody trusts.
@@ -321,6 +426,7 @@ def org_chart(database_url: str, *, include_retired: bool = False) -> dict[str, 
         )
 
     unmatched = place_professors(people)
+    annotate(people)
 
     return {
         "observations": observations,
