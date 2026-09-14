@@ -405,7 +405,10 @@ def build_parser() -> argparse.ArgumentParser:
         "ledger-verify", help="Verify counts, duplicates, and provenance"
     )
     ledger_verify.add_argument("source", choices=["slack", "notion", "google-calendar"])
-    ledger_verify.add_argument("--ledger-root", type=Path, required=True)
+    # Repeatable: the ledger is spread over a live staging root and the
+    # backfill archives, and verifying one of them reported fewer records than
+    # the database held every single time.
+    ledger_verify.add_argument("--ledger-root", type=Path, required=True, action="append")
     ledger_verify.add_argument("--legacy-root", type=Path, default=None)
     ledger_verify.add_argument("--database-url", default=None)
     ledger_verify.add_argument("--report", type=Path, default=None)
@@ -1347,7 +1350,7 @@ def ledger_verify(args: argparse.Namespace) -> int:
     from .ledger.verify import verify_ledger, write_report
 
     report = verify_ledger(
-        ledger_root=args.ledger_root,
+        ledger_roots=args.ledger_root,
         source=SOURCE_ARG_TO_LEDGER[args.source],
         legacy_root=args.legacy_root,
         database_url=args.database_url or os.environ.get("DATABASE_URL"),

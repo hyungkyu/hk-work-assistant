@@ -17,7 +17,7 @@ import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from .common import file_sha256
 from .convert import iter_extracted_text_files, iter_ledger_files, read_jsonl
@@ -28,6 +28,16 @@ from .schema import validate_record
 class VerifyReport:
     source: str
     ledger_root: str
+    # Every root the records were read from. The ledger lives under more than
+    # one root -- a live staging root and the backfill archives -- and a
+    # verifier that could only see one always reported fewer records than the
+    # database held, which made `ok:false` the permanent answer and the check
+    # worthless. `ledger_root` stays as the first one for readers that have
+    # only ever seen a single root.
+    ledger_roots: list[str] = field(default_factory=list)
+    roots_with_no_files: list[str] = field(default_factory=list)
+    records_by_root: dict[str, int] = field(default_factory=dict)
+    records_in_more_than_one_root: int = 0
     legacy_root: str | None = None
     ledger_files: int = 0
     ledger_records: int = 0
@@ -53,6 +63,10 @@ class VerifyReport:
             "source": self.source,
             "ok": self.ok,
             "ledger_root": self.ledger_root,
+            "ledger_roots": self.ledger_roots,
+            "roots_with_no_files": self.roots_with_no_files,
+            "records_by_root": dict(sorted(self.records_by_root.items())),
+            "records_in_more_than_one_root": self.records_in_more_than_one_root,
             "legacy_root": self.legacy_root,
             "ledger_files": self.ledger_files,
             "ledger_records": self.ledger_records,
@@ -73,14 +87,30 @@ class VerifyReport:
 
 def verify_ledger(
     *,
-    ledger_root: Path,
+    ledger_root: Path | None = None,
+    ledger_roots: Sequence[Path] | None = None,
     source: str,
     legacy_root: Path | None = None,
     database_url: str | None = None,
     provenance_sample: int = 200,
     validate_schema: bool = True,
 ) -> VerifyReport:
-    report = VerifyReport(source=source, ledger_root=str(ledger_root))
+    roots = [Path(root) for root in (ledger_roots or [])]
+    if ledger_root is not None:
+        roots.insert(0, Path(ledger_root))
+    if not roots:
+        raise ValueError("verify_ledger needs at least one ledger root")
+    # Same root named twice is a caller mistake, not data: counting it twice
+    # would inflate the file totals and fail the database comparison in the
+    # opposite direction from the bug being fixed here.
+    seen_roots: list[Path] = []
+    for root in roots:
+        if root not in seen_roots:
+            seen_roots.append(root)
+    roots = seen_roots
+
+    report = VerifyReport(source=source, ledger_root=str(roots[0]))
+    report.ledger_roots = [str(root) for root in roots]
     if legacy_root:
         report.legacy_root = str(legacy_root)
 
@@ -102,10 +132,30 @@ def verify_ledger(
     provenance_files: dict[str, str] = {}
     missing_provenance = 0
 
-    files = iter_ledger_files(ledger_root, source)
+    files: list[tuple[Path, Path]] = []
+    for root in roots:
+        found = iter_ledger_files(root, source)
+        if not found:
+            # Named and empty. A root that holds nothing is usually a wrong
+            # path, and a verifier that quietly ignored it would report a
+            # clean run over a fraction of the ledger.
+            report.roots_with_no_files.append(str(root))
+        files.extend((root, path) for path in found)
     report.ledger_files = len(files)
-    for path in files:
+
+    # A record can sit in two roots -- a day that was collected live and then
+    # re-archived by a backfill. It is one record; counted twice it would make
+    # the file total exceed the database and fail for the opposite reason.
+    seen_ledger_ids: set[str] = set()
+    for root, path in files:
         for record in read_jsonl(path):
+            ledger_id = record.get("ledger_id")
+            if ledger_id:
+                if ledger_id in seen_ledger_ids:
+                    report.records_in_more_than_one_root += 1
+                    continue
+                seen_ledger_ids.add(ledger_id)
+            report.records_by_root[str(root)] = report.records_by_root.get(str(root), 0) + 1
             report.ledger_records += 1
             entity = record.get("entity_type", "?")
             entity_counter[entity] += 1
@@ -159,8 +209,16 @@ def verify_ledger(
             if (record.get("visibility_routing") or {}).get("routing_anomaly"):
                 unknown_counter["visibility_routing_anomaly"] += 1
 
-    for path in iter_extracted_text_files(ledger_root, source):
-        report.extracted_text += sum(1 for _ in read_jsonl(path))
+    seen_text_ids: set[str] = set()
+    for root in roots:
+        for path in iter_extracted_text_files(root, source):
+            for row in read_jsonl(path):
+                key = str(row.get("ledger_id") or row.get("document_id") or "")
+                if key:
+                    if key in seen_text_ids:
+                        continue
+                    seen_text_ids.add(key)
+                report.extracted_text += 1
 
     report.by_entity_type = dict(entity_counter)
     report.by_capture_profile = dict(profile_counter)

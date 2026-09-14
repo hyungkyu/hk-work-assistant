@@ -163,3 +163,93 @@ def test_notion_verify_counts_entity_types(tmp_path):
     assert report.ok, report.failures
     assert report.by_entity_type == {"page": 3, "block": 2, "comment": 1}
     assert report.extracted_text == 1
+
+
+# --- Multiple ledger roots (P1, 2026-09-14) --------------------------------
+#
+# The ledger is spread over a live staging root and the backfill archives.
+# The verifier read one root, compared its record count to the database, and
+# failed — every time, for months, which made `ok:false` its permanent answer
+# and the check something nobody could act on.
+
+from pathlib import Path as _Path  # noqa: E402
+
+import pytest  # noqa: E402
+
+from rlwrld_worklog.ledger.verify import verify_ledger as _verify  # noqa: E402
+
+
+def _write(root: _Path, source: str, name: str, records: list[dict]) -> None:
+    directory = root / "ledger" / source
+    directory.mkdir(parents=True, exist_ok=True)
+    directory.joinpath(name).write_text(
+        "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _record(ledger_id: str) -> dict:
+    return {
+        "ledger_id": ledger_id,
+        "entity_type": "message",
+        "source_entity_id": ledger_id,
+        "capture_profile": "daily",
+        "content_hash": ledger_id,
+        "observation_window": {"start": "2026-09-01"},
+        "provenance": {"source_file": f"{ledger_id}.json", "source_file_sha256": "x" * 64},
+    }
+
+
+def test_records_from_every_root_are_counted(tmp_path: _Path) -> None:
+    live, archive = tmp_path / "live", tmp_path / "archive"
+    _write(live, "slack", "a.jsonl", [_record("one")])
+    _write(archive, "slack", "b.jsonl", [_record("two"), _record("three")])
+
+    report = _verify(
+        ledger_roots=[live, archive], source="slack", validate_schema=False
+    )
+    assert report.ledger_records == 3
+    assert report.records_by_root == {str(live): 1, str(archive): 2}
+
+
+def test_one_record_in_two_roots_is_counted_once(tmp_path: _Path) -> None:
+    """A day collected live and then re-archived is one record, not two.
+
+    Counted twice it would exceed the database and fail for the opposite
+    reason from the bug this fixes — which would look like progress and be
+    just as wrong.
+    """
+    live, archive = tmp_path / "live", tmp_path / "archive"
+    _write(live, "slack", "a.jsonl", [_record("one")])
+    _write(archive, "slack", "b.jsonl", [_record("one"), _record("two")])
+
+    report = _verify(ledger_roots=[live, archive], source="slack", validate_schema=False)
+    assert report.ledger_records == 2
+    assert report.records_in_more_than_one_root == 1
+
+
+def test_a_root_that_holds_nothing_is_named(tmp_path: _Path) -> None:
+    """Usually a wrong path. Silence there is a clean run over a fraction."""
+    live, empty = tmp_path / "live", tmp_path / "empty"
+    _write(live, "slack", "a.jsonl", [_record("one")])
+    report = _verify(ledger_roots=[live, empty], source="slack", validate_schema=False)
+    assert report.roots_with_no_files == [str(empty)]
+
+
+def test_the_same_root_named_twice_does_not_double(tmp_path: _Path) -> None:
+    live = tmp_path / "live"
+    _write(live, "slack", "a.jsonl", [_record("one")])
+    report = _verify(ledger_roots=[live, live], source="slack", validate_schema=False)
+    assert report.ledger_records == 1
+
+
+def test_a_single_root_still_works_the_old_way(tmp_path: _Path) -> None:
+    live = tmp_path / "live"
+    _write(live, "slack", "a.jsonl", [_record("one")])
+    report = _verify(ledger_root=live, source="slack", validate_schema=False)
+    assert (report.ledger_records, report.ledger_root) == (1, str(live))
+
+
+def test_no_root_at_all_is_refused(tmp_path: _Path) -> None:
+    with pytest.raises(ValueError):
+        _verify(source="slack", validate_schema=False)

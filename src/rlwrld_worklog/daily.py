@@ -771,6 +771,48 @@ def _redact(error: BaseException) -> str:
     return text[:500]
 
 
+def _record_failed_attempt(source: str, config: DailyConfig, error: BaseException):
+    """Leave a manifest for a run that died before its collector existed.
+
+    Best effort by construction: this is the handler for things having gone
+    wrong already, so it must not raise. If even this cannot be written --
+    an unwritable archive root, most likely -- the run log still carries the
+    error, and returning None says the manifest is not there rather than
+    pretending it is.
+    """
+    import uuid
+
+    try:
+        run_id = (
+            datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            + "-"
+            + uuid.uuid4().hex[:12]
+        )
+        archive = RawArchive(
+            config.archive_root,
+            source,
+            run_id,
+            config.environment,
+            capture_density=config.capture_density,
+            dry_run=config.dry_run,
+            config_root=config.config_root,
+        )
+        archive.note_error("capture_never_started", detail=_redact(error))
+        return archive.finish(
+            {
+                "status": "failed",
+                "error_type": type(error).__name__,
+                "error": _redact(error),
+                # Zero pages, and the manifest says why they are zero rather
+                # than leaving a reader to guess that nothing was collected.
+                "counters": archive.partial_counters(),
+                "failed_before_capture": True,
+            }
+        )
+    except Exception:
+        return None
+
+
 def _run_source(
     source: str,
     config: DailyConfig,
@@ -808,8 +850,20 @@ def _run_source(
         # SystemExit is caught deliberately: a collector factory raises it for
         # a missing credential, and one source's missing token must never
         # abort the other sources' runs.
+        #
+        # These are the failures that happen *before* a collector exists --
+        # a missing token, a factory that will not build. They used to leave
+        # no manifest at all, which made the attempt invisible: the collection
+        # audit reads manifests, so a day whose run died here looked exactly
+        # like a day nobody ran. That is the same false calm as a run
+        # reporting `ok` while writing nothing, and it is worse than a failed
+        # manifest, because a failed manifest can be counted.
         capture_stage.error = _redact(error)
         outcome.status = "failed"
+        manifest = _record_failed_attempt(source, config, error)
+        if manifest is not None:
+            capture_stage.detail = {"manifest": str(manifest)}
+            outcome.manifest_path = str(manifest)
         return outcome
 
     capture_stage.status = "ok"

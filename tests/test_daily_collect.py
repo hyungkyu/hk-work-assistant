@@ -1100,3 +1100,70 @@ def test_an_index_failure_degrades_the_run_but_keeps_the_load(tmp_path: Path, mo
     assert stage(result, "load")["status"] == "ok"
     assert stage(result, "index")["status"] == "failed"
     assert summary["exit_code"] == EXIT_DOWNSTREAM_FAILED
+
+
+# --- A run that died before its collector existed (P1, 2026-09-14) ---------
+#
+# A missing token, or a factory that will not build, used to leave no manifest
+# at all. The collection audit reads manifests, so such a day looked exactly
+# like a day nobody ran — the same false calm as a run reporting `ok` while
+# writing nothing, and harder to see, because there was nothing to see.
+
+
+def test_a_missing_token_still_leaves_a_manifest(tmp_path: Path) -> None:
+    def needs_token(config_value: DailyConfig, _credentials: Credentials) -> CaptureOutcome:
+        raise RuntimeError("no Notion token is available")
+
+    summary = run_daily(
+        config(tmp_path),
+        credentials=credentials(tmp_path),
+        captures={"notion": needs_token},
+    )
+    recorded = source(summary, "notion")
+    assert recorded["status"] == "failed"
+    manifest = json.loads(Path(recorded["manifest"]).read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["failed_before_capture"] is True
+    assert "no Notion token" in manifest["error"]
+    # Zero pages, and the manifest says why they are zero.
+    assert manifest["counters"]["pages_archived"] == 0
+    assert manifest["counters"]["coverage_complete"] is False
+    assert [entry["kind"] for entry in manifest["errors"]] == ["capture_never_started"]
+
+
+def test_a_collector_exiting_the_process_also_leaves_a_manifest(tmp_path: Path) -> None:
+    def exits(config_value: DailyConfig, _credentials: Credentials) -> CaptureOutcome:
+        raise SystemExit("SLACK_USER_TOKEN is required")
+
+    summary = run_daily(
+        config(tmp_path), credentials=credentials(tmp_path), captures={"slack": exits}
+    )
+    manifest = json.loads(Path(source(summary, "slack")["manifest"]).read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["error_type"] == "SystemExit"
+
+
+def test_the_manifest_is_best_effort_and_never_masks_the_real_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """This runs when things have already gone wrong. It must not raise.
+
+    If even the manifest cannot be written, the run log still carries the
+    error and the absence is reported as an absence — not as a manifest that
+    is not there.
+    """
+
+    def needs_token(config_value: DailyConfig, _credentials: Credentials) -> CaptureOutcome:
+        raise RuntimeError("the original failure")
+
+    def unwritable(*_args, **_kwargs):
+        raise OSError("archive root is read-only")
+
+    monkeypatch.setattr(daily, "RawArchive", unwritable)
+    summary = run_daily(
+        config(tmp_path), credentials=credentials(tmp_path), captures={"notion": needs_token}
+    )
+    recorded = source(summary, "notion")
+    assert recorded["status"] == "failed"
+    assert "the original failure" in stage(recorded, "capture")["error"]
+    assert recorded.get("manifest") in (None, "")
