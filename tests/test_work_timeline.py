@@ -274,24 +274,27 @@ def test_the_timeline_header_reports_the_items_current_identity(store: WorkStore
 # ------------------------------------------- document compatibility (rule 6)
 
 
-def test_the_timeline_needed_no_new_document_version(store: WorkStore) -> None:
-    """History is an append-only stream, so the fields were added additively.
+def test_every_document_version_has_a_migration_into_the_current_one(
+    store: WorkStore,
+) -> None:
+    """The timeline itself needed no version; `phase` (v3) did.
 
-    A new `DOCUMENT_VERSION` would have forced a migration and a compatibility
-    window for every reader. Because nothing in `items.json` changed shape,
-    none of that was necessary -- and this test fails if that ever stops being
-    true, which is the signal to add an explicit migration and its tests.
+    History is an append-only stream, so those fields were added additively.
+    `phase` changed the shape of `items.json`, so it took a migration -- and
+    what this test now holds is the rule that made that cheap: every stored
+    version below the current one has a registered step into the next, so no
+    file can be readable by a loader and unreachable by a migration.
     """
-    from rlwrld_worklog.work_store import DOCUMENT_VERSION, _MIGRATIONS
+    from rlwrld_worklog.work_store import DOCUMENT_VERSION, _LOADERS, _MIGRATIONS
 
-    assert DOCUMENT_VERSION == 2
-    assert sorted(_MIGRATIONS) == [1]
+    assert sorted(_MIGRATIONS) == list(range(1, DOCUMENT_VERSION))
+    assert sorted(_LOADERS) == list(range(1, DOCUMENT_VERSION + 1))
     seed(store)
     document = store.read_document()
-    assert document["version"] == 2
+    assert document["version"] == DOCUMENT_VERSION
 
 
-def test_an_existing_v2_document_is_read_without_loss(store: WorkStore, tmp_path: Path) -> None:
+def test_an_existing_document_is_read_without_loss(store: WorkStore, tmp_path: Path) -> None:
     item = seed(store, detail="상세", source_ref="incident:x")
     store.update_item(
         item["id"], {"status": "in_progress"}, actor="moa",
@@ -301,14 +304,14 @@ def test_an_existing_v2_document_is_read_without_loss(store: WorkStore, tmp_path
     reread = WorkStore(tmp_path).get_item(item["id"])
     stored = next(row for row in before["items"] if row["id"] == item["id"])
     assert reread == stored
-    assert before["version"] == 2
+    assert before["version"] == 3
     assert reread["detail"] == "상세" and reread["source_ref"] == "incident:x"
 
 
 def test_a_v1_document_still_migrates_and_then_carries_a_timeline(
     tmp_path: Path,
 ) -> None:
-    """The v1 -> v2 path keeps working, and migrated items get timelines too."""
+    """The v1 path keeps working all the way up, and migrated items get timelines."""
     directory = tmp_path / "work"
     directory.mkdir(parents=True)
     (directory / "items.json").write_text(
@@ -329,7 +332,8 @@ def test_a_v1_document_still_migrates_and_then_carries_a_timeline(
     )
     store = WorkStore(tmp_path)
     document = store.read_document()
-    assert document["version"] == 2
+    assert document["version"] == 3
+    assert document["items"][0]["phase"] is None
     payload = store.read_timeline("wi_00000000000000aa")
     assert payload["item_id"] == "wi_00000000000000aa"
     # A migrated item has no history of its own; the timeline says so plainly

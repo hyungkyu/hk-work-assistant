@@ -27,7 +27,7 @@ from .admin_store import _atomic_private_write
 from .cowork import resolve_actor
 
 
-DOCUMENT_VERSION = 2
+DOCUMENT_VERSION = 3
 MAX_ITEMS = 5_000
 MAX_PARENT_DEPTH = 8
 
@@ -82,6 +82,21 @@ TERMINAL_STATUSES = frozenset({"done", "cancelled"})
 PRIORITIES = ("urgent", "high", "normal", "low")
 PRIORITY_RANK = {name: index for index, name in enumerate(PRIORITIES)}
 
+# The programme phase an item belongs to: P0, P1, P2 ... (HK, 2026-09-14:
+# 업무 목록을 p0, P1, P2 등을 붙여줘 구분되게).
+#
+# A separate axis from `priority`, deliberately. Priority says how soon;
+# phase says which piece of the programme this is, and the two disagree all
+# the time -- a P0 item can be `normal` once P0 is nearly closed, and a P2
+# item can be `urgent` because it blocks a demo. Folding phase into priority
+# would have made both unreadable.
+#
+# Open-ended rather than an enum of the three that exist today: the next
+# phase should be nameable without a schema change. `None` is a real answer
+# and the default -- an item nobody has placed in a phase yet says so, rather
+# than being filed under whichever phase happened to be current.
+_PHASE = re.compile(r"^P[0-9]{1,2}$")
+
 # Fields a caller may set on create or update.  Everything else - including the
 # identifier, the revision, and the archive marker - is owned by the store.
 MUTABLE_FIELDS = (
@@ -89,6 +104,7 @@ MUTABLE_FIELDS = (
     "detail",
     "status",
     "priority",
+    "phase",
     "requested_by",
     "assigned_to",
     "parent_id",
@@ -350,6 +366,15 @@ def _normalize_changes(changes: Mapping[str, Any]) -> dict[str, Any]:
             if value not in PRIORITIES:
                 raise WorkValidationError(f"priority must be one of: {', '.join(PRIORITIES)}")
             normalized[field] = value
+        elif field == "phase":
+            # Clearing is explicit and allowed: an item can be taken out of a
+            # phase, and "" means that rather than being rejected as invalid.
+            if value is None or (isinstance(value, str) and not value.strip()):
+                normalized[field] = None
+            elif not isinstance(value, str) or not _PHASE.fullmatch(value.strip().upper()):
+                raise WorkValidationError("phase must look like P0, P1, P2 ... or be empty")
+            else:
+                normalized[field] = value.strip().upper()
         elif field in ("requested_by", "assigned_to"):
             normalized[field] = _normalize_actor(value, field)
         elif field == "parent_id":
@@ -369,6 +394,7 @@ def _blank_item() -> dict[str, Any]:
         "detail": None,
         "status": "backlog",
         "priority": "normal",
+        "phase": None,
         "requested_by": "",
         "assigned_to": "",
         "parent_id": None,
@@ -400,6 +426,18 @@ def empty_document() -> dict[str, Any]:
 DOCUMENT_FIELDS = frozenset({"version", "revision", "updated_at", "items"})
 STORED_ITEM_FIELDS = frozenset(_blank_item())
 
+# What each stored version was allowed to contain. A v2 file carrying `phase`
+# is a v2 file somebody edited by hand, and saying so is the point of keeping
+# the older set rather than validating every version against the newest.
+V2_ITEM_FIELDS = STORED_ITEM_FIELDS - {"phase"}
+
+
+def phase_rank(phase: str | None) -> tuple[int, int]:
+    """Sort key for a phase: P0 < P1 < P2 < ... < no phase at all."""
+    if isinstance(phase, str) and _PHASE.fullmatch(phase):
+        return (0, int(phase[1:]))
+    return (1, 0)
+
 
 def _corrupt(reason: str) -> WorkCorruptionError:
     return WorkCorruptionError(f"work store is corrupt and was left unchanged: {reason}")
@@ -424,12 +462,16 @@ def _stored_timestamp(value: Any, where: str, *, optional: bool) -> datetime | N
 
 
 def _validate_stored_item(
-    item: Any, index: int, *, statuses: Sequence[str] = STATUSES
+    item: Any,
+    index: int,
+    *,
+    statuses: Sequence[str] = STATUSES,
+    fields: frozenset[str] = STORED_ITEM_FIELDS,
 ) -> dict[str, Any]:
     if not isinstance(item, dict):
         raise _corrupt(f"items[{index}] must be an object")
-    missing = sorted(STORED_ITEM_FIELDS - set(item))
-    unknown = sorted(set(item) - STORED_ITEM_FIELDS)
+    missing = sorted(fields - set(item))
+    unknown = sorted(set(item) - fields)
     if missing:
         raise _corrupt(f"items[{index}] is missing fields: {', '.join(missing)}")
     if unknown:
@@ -447,6 +489,9 @@ def _validate_stored_item(
         raise _corrupt(f"{where}.status is not one of: {', '.join(statuses)}")
     if item["priority"] not in PRIORITIES:
         raise _corrupt(f"{where}.priority is not one of: {', '.join(PRIORITIES)}")
+    phase = item.get("phase")
+    if phase is not None and (not isinstance(phase, str) or not _PHASE.fullmatch(phase)):
+        raise _corrupt(f"{where}.phase must look like P0, P1, P2 ... or be null")
     for field in ("requested_by", "assigned_to"):
         value = item[field]
         if not isinstance(value, str) or not _ACTOR.fullmatch(value):
@@ -521,7 +566,11 @@ def _validate_stored_graph(items: Sequence[Mapping[str, Any]]) -> None:
 
 
 def _load_document(
-    parsed: Mapping[str, Any], *, version: int, statuses: Sequence[str]
+    parsed: Mapping[str, Any],
+    *,
+    version: int,
+    statuses: Sequence[str],
+    fields: frozenset[str] = STORED_ITEM_FIELDS,
 ) -> dict[str, Any]:
     """Accept a document exactly as stored, or reject the whole file.
 
@@ -547,7 +596,8 @@ def _load_document(
     else:
         _stored_timestamp(parsed["updated_at"], "document updated_at", optional=False)
     validated = [
-        _validate_stored_item(item, index, statuses=statuses) for index, item in enumerate(items)
+        _validate_stored_item(item, index, statuses=statuses, fields=fields)
+        for index, item in enumerate(items)
     ]
     _validate_stored_graph(validated)
     return {
@@ -559,11 +609,15 @@ def _load_document(
 
 
 def _load_v1_document(parsed: Mapping[str, Any]) -> dict[str, Any]:
-    return _load_document(parsed, version=1, statuses=V1_STATUSES)
+    return _load_document(parsed, version=1, statuses=V1_STATUSES, fields=V2_ITEM_FIELDS)
 
 
 def _load_v2_document(parsed: Mapping[str, Any]) -> dict[str, Any]:
-    return _load_document(parsed, version=2, statuses=STATUSES)
+    return _load_document(parsed, version=2, statuses=STATUSES, fields=V2_ITEM_FIELDS)
+
+
+def _load_v3_document(parsed: Mapping[str, Any]) -> dict[str, Any]:
+    return _load_document(parsed, version=3, statuses=STATUSES)
 
 
 def _migrate_v1_to_v2(document: dict[str, Any]) -> dict[str, Any]:
@@ -583,8 +637,28 @@ def _migrate_v1_to_v2(document: dict[str, Any]) -> dict[str, Any]:
 # own strict loader here plus a _MIGRATIONS[2] that rewrites a validated v2
 # document into v3 shape.  Bridging versions is always an explicit migration,
 # never a silent retention or drop of fields the current schema does not know.
-_LOADERS: dict[int, Any] = {1: _load_v1_document, 2: _load_v2_document}
-_MIGRATIONS: dict[int, Any] = {1: _migrate_v1_to_v2}
+def _migrate_v2_to_v3(document: dict[str, Any]) -> dict[str, Any]:
+    """v2 -> v3: an item gains the programme phase it belongs to.
+
+    Every existing item becomes `phase: None`, which is the honest reading:
+    the store never recorded a phase, so it does not know one, and guessing
+    from a title would have put items in phases nobody placed them in. They
+    are filled in deliberately afterwards, which is a decision with a
+    receipt rather than a migration side effect.
+    """
+    return {
+        **document,
+        "version": 3,
+        "items": [{**item, "phase": None} for item in document["items"]],
+    }
+
+
+_LOADERS: dict[int, Any] = {
+    1: _load_v1_document,
+    2: _load_v2_document,
+    3: _load_v3_document,
+}
+_MIGRATIONS: dict[int, Any] = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3}
 
 
 def _migrate(document: dict[str, Any]) -> dict[str, Any]:
@@ -678,9 +752,14 @@ class WorkStore:
             and (assignee is None or item["assigned_to"] == assignee)
             and (parent_id is None or item["parent_id"] == parent_id)
         ]
-        # Stable sorts: most recently updated first, then grouped by priority.
+        # Stable sorts, applied least significant first: most recently updated,
+        # then priority, then phase. Phase outermost so P0 reads above P1 above
+        # P2 in every column -- which is the whole point of writing it down.
+        # An item with no phase sorts last, visibly, rather than being mixed in
+        # among items somebody has actually placed.
         selected.sort(key=lambda item: (item["updated_at"] or "", item["id"]), reverse=True)
         selected.sort(key=lambda item: PRIORITY_RANK.get(item["priority"], len(PRIORITIES)))
+        selected.sort(key=lambda item: phase_rank(item.get("phase")))
         return {
             "version": document["version"],
             "migrated_from": document.get("migrated_from"),

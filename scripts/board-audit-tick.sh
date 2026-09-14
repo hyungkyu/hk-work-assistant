@@ -72,6 +72,50 @@ report["outcome"] = "clean" if report.get("ok") else "findings"
 print(json.dumps(report, ensure_ascii=False, sort_keys=True))
 STATE
 
+# The board itself, trimmed, next to the audit of it. The audit says how many
+# items disagree with the work; it does not say what the items are, and a
+# reviewer who can only see the count has to take it on faith. Written by the
+# same batch so the two files are always of the same moment.
+#
+# Trimmed on purpose: ids, titles, status, who holds it, the next action.
+# Descriptions and history stay in the store — this is a list to check the
+# work against, not a copy of the board.
+board=$("$worklog" work board 2>/dev/null)
+if [ -n "$board" ]; then
+  BOARD="$board" STARTED="$started" python3 - > "incoming/last-board.json" <<'BOARD' || true
+import json, os
+board = json.loads(os.environ["BOARD"])
+
+
+def walk(value):
+    """Every item object anywhere in the board's column structure."""
+    if isinstance(value, dict):
+        if "id" in value and "status" in value:
+            yield value
+            return
+        for child in value.values():
+            yield from walk(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from walk(child)
+
+
+keep = ("id", "title", "phase", "status", "assigned_to", "next_action", "updated_at", "revision")
+items, seen = [], set()
+for item in walk(board):
+    if item["id"] in seen:
+        continue
+    seen.add(item["id"])
+    items.append({key: item.get(key) for key in keep})
+items.sort(key=lambda item: (str(item.get("phase") or "ZZ"), str(item.get("status")), str(item.get("title"))))
+print(json.dumps(
+    {"started_at": os.environ["STARTED"], "outcome": "snapshot",
+     "items": len(items), "board": items},
+    ensure_ascii=False, sort_keys=True, indent=2,
+))
+BOARD
+fi
+
 summary=$(printf '%s' "$report" | python3 -c 'import json,sys; print(json.load(sys.stdin)["summary"])' 2>/dev/null)
 [ -z "$summary" ] && exit 0
 [ -f "$target_file" ] || exit 0

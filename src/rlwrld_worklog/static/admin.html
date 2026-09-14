@@ -111,6 +111,7 @@
     .work-card-title { font-size: 13px; font-weight: 600; line-height: 1.45; word-break: break-word; }
     .work-chips { display: flex; flex-wrap: wrap; gap: 6px; }
     .work-chip { font-size: 11px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--muted); white-space: nowrap; }
+    .work-chip.phase { color: #dbe6f4; border-color: #3a4a60; background: #1a2331; font-weight: 600; letter-spacing: .04em; }
     .work-chip.priority-urgent { color: var(--danger); border-color: #7b3838; }
     .work-chip.priority-high { color: var(--warning); border-color: #705a2c; }
     .work-chip.assignee { color: var(--accent-2); border-color: #2f5a8f; }
@@ -588,6 +589,7 @@
         <div class="field"><label for="work-requested">요청자</label><input id="work-requested" placeholder="hk" required></div>
         <div class="field"><label for="work-status">상태</label><select id="work-status"></select></div>
         <div class="field"><label for="work-priority">우선순위</label><select id="work-priority"></select></div>
+        <div class="field"><label for="work-phase">단계</label><input id="work-phase" maxlength="3" placeholder="P0 · P1 · P2 (비우면 미지정)"></div>
         <div class="field"><label for="work-parent">상위 업무</label><select id="work-parent"><option value="">없음</option></select></div>
         <div class="field"><label for="work-due">마감</label><input id="work-due" type="date"></div>
         <div class="field full"><label for="work-progress">진행 요약</label><textarea id="work-progress" maxlength="2000"></textarea></div>
@@ -1041,6 +1043,10 @@
 
       const chips = document.createElement('div');
       chips.className = 'work-chips';
+      // The programme phase, first and marked, so a column reads P0 / P1 / P2
+      // at a glance. An item with no phase gets no chip rather than a blank
+      // one: not placed yet is a visible state, not an empty label.
+      if (item.phase) chips.appendChild(workChip(item.phase, 'phase'));
       chips.appendChild(workChip(item.assigned_to, 'assignee'));
       chips.appendChild(workChip(WORK_PRIORITY_LABELS[item.priority] || item.priority, `priority-${item.priority}`));
       chips.appendChild(workChip(WORK_STATUS_LABELS[item.status] || item.status));
@@ -1287,6 +1293,7 @@
       $('work-requested').value = item ? item.requested_by : '';
       $('work-status').value = item ? item.status : 'backlog';
       $('work-priority').value = item ? item.priority : 'normal';
+      $('work-phase').value = (item && item.phase) || '';
       parent.value = item && item.parent_id ? item.parent_id : '';
       $('work-due').value = item && item.due_at ? item.due_at.slice(0, 10) : '';
       $('work-progress').value = item ? item.progress_summary || '' : '';
@@ -1309,6 +1316,7 @@
         requested_by: $('work-requested').value.trim(),
         status: $('work-status').value,
         priority: $('work-priority').value,
+        phase: $('work-phase').value.trim().toUpperCase(),
         parent_id: $('work-parent').value || null,
         due_at: $('work-due').value || null,
         progress_summary: $('work-progress').value.trim(),

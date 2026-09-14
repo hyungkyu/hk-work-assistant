@@ -74,7 +74,7 @@ def test_a_status_without_a_column_is_refused_at_import(
 
 def test_metadata_gives_a_client_everything_it_needs_to_lay_out_the_board() -> None:
     meta = status_metadata()
-    assert meta["document_version"] == DOCUMENT_VERSION == 2
+    assert meta["document_version"] == DOCUMENT_VERSION == 3
     assert meta["queue_stages"] == list(QUEUE_STAGES)
     assert meta["status_labels"]["todo"] == "해야 할 일"
     assert meta["status_labels"]["ready"] == "다음 할 일"
@@ -139,17 +139,34 @@ def test_an_unparseable_timestamp_keeps_the_item_on_the_board() -> None:
 # --------------------------------------------------------- migration
 
 
+def _as_v1(document: dict) -> dict:
+    """A document as version 1 would have written it: no post-v1 item fields."""
+    return {
+        **document,
+        "version": 1,
+        "items": [
+            {key: value for key, value in item.items() if key != "phase"}
+            for item in document["items"]
+        ],
+    }
+
+
 def test_an_existing_v1_document_is_read_and_migrated_without_loss(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     for status in V1_STATUSES:
         create(store, status=status, title=f"item {status}")
     before = json.loads(store.items_path.read_text(encoding="utf-8"))
-    before["version"] = 1
+    # A genuine v1 file, which means without the fields later versions added:
+    # `phase` arrived in v3, and leaving it in would make this a v3 document
+    # wearing a v1 label rather than the thing being tested.
+    before = _as_v1(before)
     store.items_path.write_text(json.dumps(before, ensure_ascii=False, indent=2), encoding="utf-8")
 
     document = store.read_document()
-    assert document["version"] == 2
+    assert document["version"] == 3
     assert document["migrated_from"] == 1
+    # v3 added `phase`, and a v1 item never had one. None, not a guess.
+    assert {item["phase"] for item in document["items"]} == {None}
     assert [item["status"] for item in document["items"]] == [
         item["status"] for item in before["items"]
     ]
@@ -159,7 +176,7 @@ def test_an_existing_v1_document_is_read_and_migrated_without_loss(tmp_path: Pat
 
     create(store, status="todo", title="새 todo")
     stored = json.loads(store.items_path.read_text(encoding="utf-8"))
-    assert stored["version"] == 2
+    assert stored["version"] == 3
     assert len(stored["items"]) == len(V1_STATUSES) + 1
     assert store.read_document()["migrated_from"] is None
 
@@ -170,7 +187,7 @@ def test_a_v1_document_containing_todo_is_corruption_not_a_silent_upgrade(
     store = make_store(tmp_path)
     create(store, status="todo")
     stored = json.loads(store.items_path.read_text(encoding="utf-8"))
-    raw = json.dumps({**stored, "version": 1}, ensure_ascii=False)
+    raw = json.dumps(_as_v1(stored), ensure_ascii=False)
     store.items_path.write_text(raw, encoding="utf-8")
     with pytest.raises(WorkCorruptionError, match="status is not one of"):
         store.read_document()

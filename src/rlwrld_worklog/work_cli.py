@@ -52,6 +52,7 @@ FIELD_FLAGS: tuple[tuple[str, str], ...] = (
     ("--detail", "detail"),
     ("--status", "status"),
     ("--priority", "priority"),
+    ("--phase", "phase"),
     ("--requested-by", "requested_by"),
     ("--assigned-to", "assigned_to"),
     ("--parent-id", "parent_id"),
@@ -307,6 +308,10 @@ OUTBOX_FIELDS = (
     "detail",
     "assigned_to",
     "priority",
+    # Which piece of the programme an item belongs to. On the request side
+    # with priority and assignment: it is the requester who knows whether a
+    # thing is part of P1 or P2, and the executor who is doing it either way.
+    "phase",
     "due_at",
     "status",
     # Only reachable together with `status: done` and an `evidence` field --
@@ -363,6 +368,7 @@ OUTBOX_CREATE_FIELDS = (
     "next_action",
     "assigned_to",
     "priority",
+    "phase",
     "due_at",
     "parent_id",
     "source_ref",

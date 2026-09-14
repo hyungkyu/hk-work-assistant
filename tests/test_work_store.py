@@ -753,16 +753,16 @@ def test_corruption_never_costs_a_previously_written_history(tmp_path: Path) -> 
 
 def test_an_unknown_version_is_reported_before_any_field_validation(tmp_path: Path) -> None:
     store = make_store(tmp_path)
-    # A v3 document is refused because no loader or migration is registered for
+    # A v4 document is refused because no loader or migration is registered for
     # it, not because its extra fields look unfamiliar to the current schema.
     # It is preserved intact so a future release can migrate it.
     raw = write_document(
-        store, {"version": 3, "revision": 1, "updated_at": BASE_TIME, "items": [], "owners": []}
+        store, {"version": 4, "revision": 1, "updated_at": BASE_TIME, "items": [], "owners": []}
     )
     history_before = history_bytes(store)
-    with pytest.raises(WorkCorruptionError, match="unsupported work store version 3"):
+    with pytest.raises(WorkCorruptionError, match="unsupported work store version 4"):
         store.read_document()
-    with pytest.raises(WorkCorruptionError, match="unsupported work store version 3"):
+    with pytest.raises(WorkCorruptionError, match="unsupported work store version 4"):
         store.create_item({"title": "t", "requested_by": "hk", "assigned_to": "codex"}, actor="hk")
     assert store.items_path.read_bytes() == raw
     assert history_bytes(store) == history_before
