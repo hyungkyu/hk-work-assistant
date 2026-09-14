@@ -49,7 +49,10 @@ fi
 # supposed to describe. Keep it here, in review, rather than inferring it from
 # the board itself -- inferring it would make every orphaned item define itself
 # as valid.
-roster=(--executor mori --executor local --executor batch --executor hk)
+# `ari` is HK's joker (2026-09-14): not a standing seat, but a valid holder
+# when he plays it, so an item in its name is not a finding. `mori` is the
+# primary and holds the programme.
+roster=(--executor mori --executor ari --executor local --executor batch --executor hk)
 [ -f "$config_root/board-audit-roster" ] && {
   roster=()
   while IFS= read -r name; do
@@ -80,41 +83,42 @@ STATE
 # Trimmed on purpose: ids, titles, status, who holds it, the next action.
 # Descriptions and history stay in the store — this is a list to check the
 # work against, not a copy of the board.
-board=$("$worklog" work board 2>/dev/null)
-if [ -n "$board" ]; then
-  BOARD="$board" STARTED="$started" python3 - > "incoming/last-board.json" <<'BOARD' || true
+# Written to a temporary file and moved into place, and a failure is written
+# too. The first version piped the board through an environment variable and
+# ended with `|| true`, which on 2026-09-14 produced a zero-byte
+# last-board.json and no way to tell why -- the same shape of silence as the
+# false green this project spent days on. A snapshot that cannot be taken now
+# says so in the file where the snapshot was expected.
+board_err="incoming/.board.err"
+board=$("$worklog" work board 2>"$board_err")
+board_status=$?
+tmp_board=$(mktemp "incoming/.board.XXXXXX") || tmp_board=""
+if [ -n "$tmp_board" ]; then
+  if [ $board_status -ne 0 ] || [ -z "$board" ]; then
+    STARTED="$started" DETAIL="$(tail -c 800 "$board_err" 2>/dev/null)" python3 - > "$tmp_board" <<'FAILED'
 import json, os
-board = json.loads(os.environ["BOARD"])
-
-
-def walk(value):
-    """Every item object anywhere in the board's column structure."""
-    if isinstance(value, dict):
-        if "id" in value and "status" in value:
-            yield value
-            return
-        for child in value.values():
-            yield from walk(child)
-    elif isinstance(value, list):
-        for child in value:
-            yield from walk(child)
-
-
-keep = ("id", "title", "phase", "status", "assigned_to", "next_action", "updated_at", "revision")
-items, seen = [], set()
-for item in walk(board):
-    if item["id"] in seen:
-        continue
-    seen.add(item["id"])
-    items.append({key: item.get(key) for key in keep})
-items.sort(key=lambda item: (str(item.get("phase") or "ZZ"), str(item.get("status")), str(item.get("title"))))
-print(json.dumps(
-    {"started_at": os.environ["STARTED"], "outcome": "snapshot",
-     "items": len(items), "board": items},
-    ensure_ascii=False, sort_keys=True, indent=2,
-))
-BOARD
+print(json.dumps({"started_at": os.environ["STARTED"], "outcome": "board-unreadable",
+                  "detail": os.environ.get("DETAIL", "")}, ensure_ascii=False))
+FAILED
+  else
+    printf '%s' "$board" \
+      | STARTED="$started" python3 scripts/board_snapshot.py > "$tmp_board" 2>"$board_err"
+  fi
+  if [ -s "$tmp_board" ]; then
+    mv "$tmp_board" "incoming/last-board.json"
+  else
+    # Python itself failed. The traceback is the finding, so it is what the
+    # file carries -- an empty file would repeat the defect being fixed.
+    STARTED="$started" DETAIL="$(tail -c 800 "$board_err" 2>/dev/null)" python3 - \
+      > "incoming/last-board.json" <<'BROKEN'
+import json, os
+print(json.dumps({"started_at": os.environ["STARTED"], "outcome": "snapshot-failed",
+                  "detail": os.environ.get("DETAIL", "")}, ensure_ascii=False))
+BROKEN
+    rm -f "$tmp_board"
+  fi
 fi
+rm -f "$board_err"
 
 summary=$(printf '%s' "$report" | python3 -c 'import json,sys; print(json.load(sys.stdin)["summary"])' 2>/dev/null)
 [ -z "$summary" ] && exit 0

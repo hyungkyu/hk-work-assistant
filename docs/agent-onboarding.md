@@ -24,6 +24,11 @@ identified by the executor name on the item it is holding, not by a
 personality. A session that finishes its item and picks up another is the
 same role either way.
 
+`ari` sits outside both: HK's joker, played onto an item when he wants it
+there and holding nothing the rest of the time. The board treats it as a
+valid holder and the audit does not flag it; it is not a seat somebody
+occupies.
+
 That is the whole org. Earlier versions of this project gave every agent a
 name and a speciality (development, operations, analysis). That structure
 described who was talking rather than what was being done, and the board —
