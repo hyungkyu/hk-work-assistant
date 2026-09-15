@@ -401,13 +401,16 @@ def digest_status(database_url: str) -> dict[str, Any]:
 
 
 def resolve_people(database_url: str, names: list[str]) -> dict[str, Any]:
-    """Match each requested name to a person, by name or nickname.
+    """Match each requested name to a person, by name, nickname, or identity.
 
-    Case-insensitive, and matches a full or partial name or the latest
-    nickname -- "hk", "gerald", "샘", "장주철" all have to land. Ambiguity is
-    reported rather than guessed: a name that hits two people is returned as a
-    conflict, because a report that silently picked one of two 김민수 is worse
-    than one that asks.
+    Case-insensitive substring, across the roster name, the latest nickname,
+    and every identity value (email, github, slack ...) -- so "gerald", "샘",
+    "장주철" land by name/nickname, and "hyungkyu" lands because it sits inside
+    hyungkyu.ryu@rlwrld.ai. The Korean roster keeps names in Hangul, so a
+    romanised handle would never match a name column alone; the identity join
+    is what makes the English handle work. Ambiguity is reported rather than
+    guessed: a term that hits two people is returned as a conflict, because a
+    report that silently picked one of two matches is worse than one that asks.
     """
     import psycopg
 
@@ -423,8 +426,10 @@ def resolve_people(database_url: str, names: list[str]) -> dict[str, Any]:
                     SELECT DISTINCT p.person_id, p.name
                       FROM org_person p
                       LEFT JOIN org_person_state s ON s.person_id = p.person_id
+                      LEFT JOIN org_identity i ON i.person_id = p.person_id
                      WHERE lower(p.name) LIKE %(n)s
                         OR lower(coalesce(s.nickname, '')) LIKE %(n)s
+                        OR lower(coalesce(i.value, '')) LIKE %(n)s
                     """,
                     {"n": needle},
                 )
