@@ -408,6 +408,12 @@ class NoteCache:
             pass
 
 
+# Each export is a round trip of roughly a second, and they are independent.
+# Measured on 2026-09-16: one day held 36 distinct notes and took 49.9s against
+# 1.5s for the whole query.
+NOTE_WORKERS = 8
+
+
 def attach_notes(events: list[dict[str, Any]], drive, cache: NoteCache | None = None) -> int:
     """Read each meeting's attached notes once, and put them on the line.
 
@@ -416,21 +422,38 @@ def attach_notes(events: list[dict[str, Any]], drive, cache: NoteCache | None = 
     """
     if drive is None:
         return 0
-    cache = cache if cache is not None else NoteCache()
-    filled = 0
+    cache = cache if cache is not None else NoteCache(note_cache_path())
+
+    wanted: dict[str, list[dict[str, Any]]] = {}
     for event in events:
         if event.get("source") != "google_calendar":
             continue
         for link in event.get("links") or []:
             found = _DRIVE_FILE_ID.search(str(link.get("url") or ""))
-            if not found:
-                continue
-            file_id = found.group(1)
-            note = cache.get(file_id, drive.export_text)
-            if note:
-                event["note"] = note
-                filled += 1
-            break
+            if found:
+                wanted.setdefault(found.group(1), []).append(event)
+                break
+
+    missing = [file_id for file_id in wanted if file_id not in cache.entries]
+    if missing:
+        # Waiting on Google one document at a time is the whole cost. The
+        # reads are independent and the client is only used for `export_text`,
+        # which builds its own request per call.
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=min(NOTE_WORKERS, len(missing))) as pool:
+            for file_id, text in zip(missing, pool.map(drive.export_text, missing)):
+                cache.entries[file_id] = note_head(text)
+                cache.reads += 1
+
+    filled = 0
+    for file_id, sharing in wanted.items():
+        note = cache.entries.get(file_id)
+        if not note:
+            continue
+        for event in sharing:
+            event["note"] = note
+            filled += 1
     return filled
 
 
@@ -751,6 +774,12 @@ def build_day(
     start, end = kst_day_bounds(day)
 
     began = datetime.now(timezone.utc)
+    # A single-day build used to make a throwaway cache with nowhere to write,
+    # so the 36 documents it waited on were read again by the next run. `owned`
+    # marks the cache this call is responsible for saving.
+    owned = note_cache is None and drive is not None
+    if owned:
+        note_cache = NoteCache(note_cache_path())
     with psycopg.connect(database_url) as connection:
         connection.autocommit = False
         with connection.cursor() as cursor:
@@ -837,6 +866,8 @@ def build_day(
                 connection.commit()
     # Reported per day so a slow run names its own cost instead of being
     # guessed at twice in a row.
+    if owned and note_cache is not None:
+        note_cache.save()
     result.seconds = round((datetime.now(timezone.utc) - began).total_seconds(), 1)
     return result
 

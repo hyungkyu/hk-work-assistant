@@ -1205,3 +1205,72 @@ def test_an_unwritable_cache_slows_the_run_rather_than_failing_it(tmp_path):
     unreadable = tmp_path / "broken.json"
     unreadable.write_text("not json", encoding="utf-8")
     assert NoteCache(unreadable).entries == {}
+
+
+def test_notes_are_fetched_in_parallel_and_kept_by_a_single_day_build(tmp_path, monkeypatch):
+    """1.5s of query against 49.9s of waiting on Drive, one document at a time.
+
+    And the single-day path made a cache with nowhere to write, so the 36
+    documents it waited on were read again by the next run.
+    """
+    import threading
+    import time
+
+    from rlwrld_worklog import digest as digest_module
+
+    monkeypatch.setattr(digest_module, "note_cache_path", lambda: tmp_path / "notes.json")
+
+    live = 0
+    peak = 0
+    guard = threading.Lock()
+
+    class Drive:
+        def export_text(self, file_id, limit=4000):
+            nonlocal live, peak
+            with guard:
+                live += 1
+                peak = max(peak, live)
+            try:
+                # The real call waits about a second on Google. Without a wait
+                # here the fakes finish before the next thread starts and the
+                # test cannot tell parallel from serial.
+                time.sleep(0.05)
+                return f"요약\n{file_id} 결론"
+            finally:
+                with guard:
+                    live -= 1
+
+    events = [
+        {
+            "source": "google_calendar",
+            "links": [{"url": f"https://docs.google.com/document/d/1AbCdEfGhIj{index:04d}/edit"}],
+        }
+        for index in range(20)
+    ]
+    cache = digest_module.NoteCache(tmp_path / "notes.json")
+    assert digest_module.attach_notes(events, Drive(), cache) == 20
+    assert peak > 1, "the reads were still serialised"
+    cache.save()
+
+    # The next run reads nothing.
+    again = digest_module.NoteCache(tmp_path / "notes.json")
+    assert digest_module.attach_notes(list(events), Drive(), again) == 20
+    assert again.reads == 0
+
+
+def test_two_meetings_sharing_one_note_still_get_it():
+    from rlwrld_worklog.digest import NoteCache, attach_notes
+
+    class Drive:
+        def export_text(self, file_id, limit=4000):
+            return "요약\n같은 노트"
+
+    link = [{"url": "https://docs.google.com/document/d/shared0000/edit"}]
+    events = [
+        {"source": "google_calendar", "links": link},
+        {"source": "google_calendar", "links": link},
+    ]
+    cache = NoteCache(None)
+    assert attach_notes(events, Drive(), cache) == 2
+    assert cache.reads == 1
+    assert all(event["note"] == "같은 노트" for event in events)
