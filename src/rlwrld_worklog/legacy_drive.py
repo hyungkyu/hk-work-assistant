@@ -25,10 +25,39 @@ class DriveFiles(Protocol):
 
 
 class GoogleDriveFiles:
+    """Drive, with one connection per thread.
+
+    `googleapiclient` builds its service around a single `httplib2.Http`, and
+    that object is not thread-safe: sharing it means two threads writing into
+    one socket, which on 2026-09-16 produced a read timeout followed by a
+    segmentation fault when the digest started reading meeting notes eight at a
+    time. Each thread gets its own service, built from the same credentials.
+    """
+
     def __init__(self, credentials: Any) -> None:
+        import threading
+
         from googleapiclient.discovery import build
 
-        self.service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+        self._credentials = credentials
+        self._local = threading.local()
+        # The first service is built here so that a bad credential fails where
+        # the caller can see it rather than inside a worker thread.
+        self._local.service = build(
+            "drive", "v3", credentials=credentials, cache_discovery=False
+        )
+
+    @property
+    def service(self):
+        found = getattr(self._local, "service", None)
+        if found is None:
+            from googleapiclient.discovery import build
+
+            found = build(
+                "drive", "v3", credentials=self._credentials, cache_discovery=False
+            )
+            self._local.service = found
+        return found
 
     def export_text(self, file_id: str, *, limit: int = 4000) -> str | None:
         """A Google Doc as plain text, for reading rather than archiving.
@@ -50,7 +79,10 @@ class GoogleDriveFiles:
                 .export(fileId=file_id, mimeType="text/plain")
                 .execute()
             )
-        except HttpError:
+        except (HttpError, OSError, TimeoutError):
+            # A note that could not be fetched is a meeting without a note, not
+            # a failed digest. Reported through `notes_attached`, which drops
+            # when this starts happening.
             return None
         if isinstance(data, bytes):
             data = data.decode("utf-8", errors="replace")

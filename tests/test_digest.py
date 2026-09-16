@@ -1274,3 +1274,68 @@ def test_two_meetings_sharing_one_note_still_get_it():
     assert attach_notes(events, Drive(), cache) == 2
     assert cache.reads == 1
     assert all(event["note"] == "같은 노트" for event in events)
+
+
+def test_the_drive_client_gives_each_thread_its_own_connection():
+    """Sharing one httplib2 connection across threads segfaulted on 2026-09-16.
+
+    `googleapiclient` is not thread-safe, and the digest reads notes eight at a
+    time. Built with a fake credential so nothing is dialled: what is checked is
+    that two threads are handed two different service objects.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from unittest.mock import patch
+
+    from rlwrld_worklog.legacy_drive import GoogleDriveFiles
+
+    built = []
+
+    def fake_build(*args, **kwargs):
+        made = object()
+        built.append(made)
+        return made
+
+    with patch("googleapiclient.discovery.build", fake_build):
+        client = GoogleDriveFiles(credentials=object())
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            services = list(pool.map(lambda _: id(client.service), range(4)))
+
+    # One per worker thread, plus the one built eagerly in __init__.
+    assert len(set(services)) > 1
+    assert len(built) > 1
+
+
+def test_a_note_that_times_out_is_a_meeting_without_a_note():
+    from unittest.mock import patch
+
+    from rlwrld_worklog.legacy_drive import GoogleDriveFiles
+
+    class Boom:
+        def files(self):
+            raise TimeoutError("read operation timed out")
+
+    with patch("googleapiclient.discovery.build", lambda *a, **k: Boom()):
+        client = GoogleDriveFiles(credentials=object())
+        assert client.export_text("1AbCdEfGhIjk") is None
+
+
+def test_one_unreadable_note_does_not_take_the_digest_down():
+    """An exception in a pool worker surfaces when its result is read."""
+    from rlwrld_worklog.digest import NoteCache, attach_notes
+
+    class Flaky:
+        def export_text(self, file_id, limit=4000):
+            if file_id.endswith("0002"):
+                raise TimeoutError("read operation timed out")
+            return "요약\n괜찮은 노트"
+
+    events = [
+        {
+            "source": "google_calendar",
+            "links": [{"url": f"https://docs.google.com/document/d/1AbCdEfGhIj{i:04d}/edit"}],
+        }
+        for i in range(4)
+    ]
+    assert attach_notes(events, Flaky(), NoteCache(None)) == 3
+    assert "note" not in events[2]
+    assert events[0]["note"] == "괜찮은 노트"

@@ -411,7 +411,23 @@ class NoteCache:
 # Each export is a round trip of roughly a second, and they are independent.
 # Measured on 2026-09-16: one day held 36 distinct notes and took 49.9s against
 # 1.5s for the whole query.
-NOTE_WORKERS = 8
+# Eight was enough to segfault a shared connection; the client now hands each
+# thread its own. Kept modest because the point is to stop waiting in series,
+# not to hammer Drive.
+NOTE_WORKERS = 4
+
+
+def _read_note(drive, file_id: str) -> str | None:
+    """One note, with any failure kept inside the worker.
+
+    An exception raised in a pool worker surfaces when its result is read and
+    takes the whole digest down with it. A note nobody could fetch is a meeting
+    without a note.
+    """
+    try:
+        return drive.export_text(file_id)
+    except Exception:
+        return None
 
 
 def attach_notes(events: list[dict[str, Any]], drive, cache: NoteCache | None = None) -> int:
@@ -440,9 +456,10 @@ def attach_notes(events: list[dict[str, Any]], drive, cache: NoteCache | None = 
         # reads are independent and the client is only used for `export_text`,
         # which builds its own request per call.
         from concurrent.futures import ThreadPoolExecutor
+        from itertools import repeat
 
         with ThreadPoolExecutor(max_workers=min(NOTE_WORKERS, len(missing))) as pool:
-            for file_id, text in zip(missing, pool.map(drive.export_text, missing)):
+            for file_id, text in zip(missing, pool.map(_read_note, repeat(drive), missing)):
                 cache.entries[file_id] = note_head(text)
                 cache.reads += 1
 
