@@ -416,3 +416,46 @@ def test_digest_report_needs_names_or_all(monkeypatch, capsys) -> None:
     from rlwrld_worklog import cli
     with pytest.raises(SystemExit):
         cli.main(["digest", "--report", "--database-url", "postgresql://x/y"])
+
+
+def test_excerpt_reads_a_slack_message_body():
+    from rlwrld_worklog.digest import excerpt
+
+    assert excerpt("message", {"text": "  배포  스크립트 \n 고침 "}) == "배포 스크립트 고침"
+
+
+def test_excerpt_pairs_a_pull_request_title_with_its_body():
+    from rlwrld_worklog.digest import excerpt
+
+    assert excerpt("pull_request", {"title": "Fix retry", "body": "429 handling"}) == (
+        "Fix retry — 429 handling"
+    )
+
+
+def test_excerpt_reads_a_commit_message_from_its_nested_home():
+    from rlwrld_worklog.digest import excerpt
+
+    assert excerpt("commit", {"commit": {"message": "Add sweep"}}) == "Add sweep"
+
+
+def test_excerpt_flattens_notion_rich_text():
+    from rlwrld_worklog.digest import excerpt
+
+    raw = {"title": [{"plain_text": "주간"}, {"plain_text": "회고"}]}
+    assert excerpt("page", raw) == "주간 회고"
+
+
+def test_excerpt_is_none_rather_than_empty_when_there_are_no_words():
+    from rlwrld_worklog.digest import excerpt
+
+    assert excerpt("message", {"text": "   "}) is None
+    assert excerpt("job", {}) is None
+    assert excerpt(None, None) is None
+
+
+def test_excerpt_truncates_long_bodies_with_an_ellipsis():
+    from rlwrld_worklog.digest import EXCERPT_CHARS, excerpt
+
+    found = excerpt("message", {"text": "가" * 900})
+    assert len(found) == EXCERPT_CHARS
+    assert found.endswith("…")

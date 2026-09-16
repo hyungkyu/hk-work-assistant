@@ -320,11 +320,23 @@ def _person_day_body(digest: dict[str, Any]) -> str:
         where = " · ".join(
             part for part in (event.get("container"), event.get("thread")) if part
         )
-        title = event.get("title")
+        # The excerpt is what the line is actually about, so it leads; the
+        # label snapshot's title is the fallback for records whose payload
+        # holds no words (a Slurm job, a renamed channel). Only when neither
+        # exists does the line admit it has nothing to say.
+        said = event.get("excerpt") or event.get("title")
         label = (
-            f"<strong>{_e(title)}</strong>"
-            if title
-            else f'<span class="ev-none" style="color:var(--dim)">제목 없음</span>'
+            f"<strong>{_e(said)}</strong>"
+            if said
+            else '<span class="ev-none" style="color:var(--dim)">내용 없음</span>'
+        )
+        # Both, when they differ: a PR's title and its description are
+        # different facts, and collapsing them loses one.
+        title = event.get("title")
+        second = (
+            f'<div class="where">{_e(title)}</div>'
+            if title and event.get("excerpt") and title not in str(event.get("excerpt"))
+            else ""
         )
         link = (
             f' <a href="{_e(event["permalink"])}">열기</a>' if event.get("permalink") else ""
@@ -333,7 +345,7 @@ def _person_day_body(digest: dict[str, Any]) -> str:
             f'<div class="ev"><div class="t">{_e(event.get("time"))}</div><div class="c">'
             f'<div class="l1"><span class="tag {_e(event.get("source"))}">'
             f'{_e(event.get("event_type"))}</span>{label}{link}</div>'
-            f'<div class="where">{_e(where)}</div></div></div>'
+            f'{second}<div class="where">{_e(where)}</div></div></div>'
         )
 
     day_block = (

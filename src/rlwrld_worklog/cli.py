@@ -1341,7 +1341,10 @@ def _digest_report(args: argparse.Namespace, database_url: str, digest_module) -
         if not args.person_names:
             raise SystemExit("--report needs --person-name (repeatable) or --all")
         match = digest_module.resolve_people(database_url, args.person_names)
-        person_ids = list(match["resolved"].values())
+        # Two terms can land on one person ("hk" and "류형규"); dict.fromkeys
+        # keeps the first mention's order and reports them once, so nobody
+        # appears twice in the page.
+        person_ids = list(dict.fromkeys(match["resolved"].values()))
         unresolved = match["unresolved"]
         ambiguous = match["ambiguous"]
 

@@ -51,6 +51,75 @@ def _title(labels: dict[str, Any]) -> str | None:
     return None
 
 
+# A line that says only "slack · #general · 제목 없음" tells a reader nothing
+# about what happened. The timeline keeps a pointer to the ledger rather than
+# a copy of the payload (load.py `_payload_for_timeline`), so the words come
+# from `ledger_records.raw_payload`, read through a join -- no reprojection and
+# no second copy of every message.
+EXCERPT_CHARS = 220
+
+# Where the words live, by entity type. First key present wins; a pair means
+# "headline, then body" joined by an em dash, which is what makes a PR read as
+# "title -- what the description says" rather than as a bare title.
+_BODY_KEYS: dict[str, tuple[str, ...]] = {
+    "message": ("text",),
+    "comment": ("body", "text"),
+    "page": ("title",),
+    "event": ("summary", "description"),
+    "commit": ("message",),
+    "pull_request": ("title", "body"),
+    "issue": ("title", "body"),
+    "review": ("state", "body"),
+    "review_comment": ("body",),
+    "issue_comment": ("body",),
+    "job": ("job_name", "name"),
+}
+
+
+def _text_at(raw: dict[str, Any], key: str) -> str | None:
+    """One text field, including the nested places a source hides it."""
+    value = raw.get(key)
+    if value is None and key == "message" and isinstance(raw.get("commit"), dict):
+        # A GitHub commit's message sits under `commit`, not at the top level.
+        value = raw["commit"].get("message")
+    if isinstance(value, dict):
+        # Notion titles arrive as rich text; the plain rendering is the part a
+        # person reads.
+        value = value.get("plain_text") or value.get("content")
+    if isinstance(value, list):
+        parts = [
+            item.get("plain_text") or item.get("text", {}).get("content")
+            for item in value
+            if isinstance(item, dict)
+        ]
+        value = " ".join(part for part in parts if part)
+    if not isinstance(value, str):
+        return None
+    collapsed = " ".join(value.split())
+    return collapsed or None
+
+
+def excerpt(entity_type: str | None, raw_payload: Any) -> str | None:
+    """A short, readable "what this was" for one timeline line.
+
+    None rather than "" when the payload holds no words: an absent excerpt is
+    a fact about the record, and an empty string reads as an empty message.
+    """
+    if not isinstance(raw_payload, dict):
+        return None
+    parts: list[str] = []
+    for key in _BODY_KEYS.get(entity_type or "", ()):
+        found = _text_at(raw_payload, key)
+        if found and found not in parts:
+            parts.append(found)
+    if not parts:
+        return None
+    joined = " — ".join(parts)
+    if len(joined) <= EXCERPT_CHARS:
+        return joined
+    return joined[: EXCERPT_CHARS - 1].rstrip() + "…"
+
+
 def kst_day_bounds(day: date) -> tuple[datetime, datetime]:
     """[00:00, 24:00) KST for one day, as instants."""
     start = datetime.combine(day, datetime.min.time(), tzinfo=KST)
@@ -94,11 +163,15 @@ _EVENTS_SQL = """
            event.thread_id,
            event.permalink,
            event.actor_external_id,
-           event.payload
+           event.payload,
+           ledger.entity_type,
+           ledger.raw_payload
       FROM timeline_events event
       JOIN org_identity identity
         ON identity.value = event.actor_external_id
        AND identity.kind = ANY(%(kinds)s)
+      LEFT JOIN ledger_records ledger
+        ON ledger.ledger_id = event.event_id
      WHERE event.occurred_at >= %(start)s
        AND event.occurred_at < %(end)s
      ORDER BY identity.person_id, event.occurred_at, event.event_type
@@ -189,6 +262,8 @@ def _event(row) -> dict[str, Any]:
         permalink,
         actor_external_id,
         payload,
+        entity_type,
+        raw_payload,
     ) = row
     labels = (payload or {}).get("labels") or {}
     return {
@@ -203,6 +278,8 @@ def _event(row) -> dict[str, Any]:
         # None, not "". An absent title is a fact about the source, and an
         # empty string reads as a title that happens to be blank.
         "title": _title(labels if isinstance(labels, dict) else {}),
+        "entity_type": entity_type,
+        "excerpt": excerpt(entity_type, raw_payload),
     }
 
 
