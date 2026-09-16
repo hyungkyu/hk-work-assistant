@@ -432,6 +432,26 @@ def build_parser() -> argparse.ArgumentParser:
         "slack-thread-sweep",
         help="One-time recovery of Slack replies orphaned from a pre-window parent",
     )
+    reconcile_parser = subparsers.add_parser(
+        "reconcile",
+        help="Count one person's day in every layer (source → 원장 → 타임라인 → 다이제스트)",
+    )
+    reconcile_parser.add_argument("--person-name", required=True)
+    reconcile_parser.add_argument("--since", required=True)
+    reconcile_parser.add_argument("--until", required=True)
+    reconcile_parser.add_argument("--database-url", default=None)
+    reconcile_parser.add_argument(
+        "--source",
+        action="append",
+        default=[],
+        choices=["slack", "notion", "google_calendar", "github", "slurm"],
+        help="Repeatable. Without any, every source is counted",
+    )
+    reconcile_parser.add_argument(
+        "--gaps-only",
+        action="store_true",
+        help="Print only the rows where a layer lost something",
+    )
     slack_sweep.add_argument("--database-url", default=None)
     slack_sweep.add_argument("--archive-root", type=Path, default=None)
     slack_sweep.add_argument("--ledger-root", type=Path, default=None)
@@ -1324,6 +1344,52 @@ def _digest_days(args: argparse.Namespace) -> list[date]:
     return [date.fromisoformat(args.date) if args.date else _kst_today() - timedelta(days=1)]
 
 
+def reconcile_command(args: argparse.Namespace) -> int:
+    """Where did this person's day go? Counted layer by layer, one line each."""
+    from datetime import date as date_type
+
+    from . import digest as digest_module
+    from .reconcile import SOURCES, reconcile
+
+    database_url = _database_url(args)
+    start = date_type.fromisoformat(args.since)
+    end = date_type.fromisoformat(args.until)
+    if end < start:
+        raise SystemExit("--until is before --since")
+    days = [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
+
+    match = digest_module.resolve_people(database_url, [args.person_name])
+    if not match["resolved"]:
+        raise SystemExit(
+            f"찾지 못함: {args.person_name}"
+            + (f" (모호함: {match['ambiguous']})" if match["ambiguous"] else "")
+        )
+    person_id = next(iter(match["resolved"].values()))
+
+    result = reconcile(
+        database_url,
+        person_id,
+        days,
+        sources=tuple(args.source) or SOURCES,
+    )
+    found = result.as_dict()
+    rows = found["gaps"] if args.gaps_only else found["rows"]
+    print(f"{'날짜':<12}{'소스':<17}{'원본':>6}{'원장':>7}{'타임라인':>9}{'다이제스트':>11}  판정")
+    for row in rows:
+        # An unmeasured source prints a dash. Never 0 -- "nobody looked" and
+        # "there was nothing" are different answers.
+        external = "-" if row["external"] is None else str(row["external"])
+        print(
+            f"{row['day']:<12}{row['source']:<17}{external:>6}{row['ledger']:>7}"
+            f"{row['timeline']:>9}{row['digest']:>11}  {row['verdict']}"
+            + (f"  ({row['note']})" if row["note"] else "")
+        )
+    if found["unmeasured"]:
+        print("원본 대조 못 한 소스:", ", ".join(found["unmeasured"]))
+    _print_json("reconcile", {"gaps": len(found["gaps"]), "rows": len(found["rows"])})
+    return 1 if found["gaps"] else 0
+
+
 def _digest_report(args: argparse.Namespace, database_url: str, digest_module) -> int:
     """One HTML page of many people over a date range, by name."""
     days = _digest_days(args)
@@ -1768,6 +1834,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return org_command(args)
     if args.command == "digest":
         return digest_command(args)
+    if args.command == "reconcile":
+        return reconcile_command(args)
     if args.command == "slack-thread-sweep":
         return slack_thread_sweep(args)
     if args.command == "ledger-verify":

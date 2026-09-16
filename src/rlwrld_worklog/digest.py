@@ -157,6 +157,48 @@ def _readable(text: str, names: dict[str, str] | None) -> str:
     return _URL_LINK.sub(lambda m: m.group(2) or m.group(1), text)
 
 
+def audience(
+    source: str,
+    raw: Any,
+    container_id: str | None,
+    parent_relations: Any,
+    names: dict[str, str] | None,
+    places: dict[str, dict[str, Any]] | None,
+) -> list[str]:
+    """Who this was said to.
+
+    HK, 2026-09-16: 내가 한말이 중요한게 아니라, 내가 누구에게 무슨 이야기를
+    했느냐가 중요해. A message's audience is not in any one field: it is the
+    people it names, the person on the other end of a DM, and -- for a reply --
+    whoever started the thread.
+    """
+    if source != "slack":
+        return []
+    raw = raw if isinstance(raw, dict) else {}
+    lookup = names or {}
+    found: list[str] = []
+
+    def add(value: str | None) -> None:
+        if value and value not in found:
+            found.append(value)
+
+    place = (places or {}).get(str(container_id)) if container_id else None
+    if place and place.get("private") and "·" in place["label"]:
+        for part in place["label"].split("·", 1)[1].split(","):
+            add(part.strip())
+
+    parent = parent_relations if isinstance(parent_relations, dict) else {}
+    author = parent.get("author_user_id")
+    if author:
+        add(lookup.get(str(author)) or str(author))
+
+    text = raw.get("text")
+    if isinstance(text, str):
+        for handle in _MENTION.findall(text):
+            add(lookup.get(handle) or f"@{handle}")
+    return found
+
+
 def _where(
     source: str,
     entity_type: str | None,
@@ -173,7 +215,7 @@ def _where(
         # The conversation directory knows DMs by who is in them; the label
         # snapshot only ever holds a channel name, which a DM does not have.
         if places and container_id in places:
-            return places[container_id]
+            return places[container_id]["label"]
         channel = labels.get("channel_name")
         return f"#{channel}" if channel else container_id
     if source == "notion":
@@ -242,7 +284,7 @@ _PLACES_SQL = """
 """
 
 
-def slack_place(raw: Any, relations: Any, names: dict[str, str]) -> str | None:
+def slack_place(raw: Any, relations: Any, names: dict[str, str]) -> dict[str, Any] | None:
     """What to call a Slack conversation.
 
     A channel has a name. A DM does not, and "D0C09PW4T60" tells a reader
@@ -252,19 +294,25 @@ def slack_place(raw: Any, relations: Any, names: dict[str, str]) -> str | None:
     """
     raw = raw if isinstance(raw, dict) else {}
     relations = relations if isinstance(relations, dict) else {}
+    # A DM and a private channel are not the same thing as #general, and a
+    # report that shows them identically invites someone to quote one in the
+    # open. The flag rides with the name so the page can mark it.
     if raw.get("is_im"):
         other = raw.get("user")
         found = names.get(str(other)) if other else None
-        return f"DM · {found}" if found else "DM"
+        return {"label": f"DM · {found}" if found else "DM", "private": True}
     if raw.get("is_mpim"):
         members = [
             names[str(member)]
             for member in (relations.get("member_user_ids") or [])
             if str(member) in names
         ]
-        return f"그룹DM · {', '.join(members[:4])}" if members else "그룹DM"
+        label = f"그룹DM · {', '.join(members[:4])}" if members else "그룹DM"
+        return {"label": label, "private": True}
     name = raw.get("name")
-    return f"#{name}" if name else None
+    if not name:
+        return None
+    return {"label": f"#{name}", "private": bool(raw.get("is_private"))}
 
 
 def _slack_prefix(rows) -> str | None:
@@ -443,20 +491,26 @@ _EVENTS_SQL = """
            -- line that reads "3b16cbdf..." names nothing. The parent page's
            -- own ledger row carries the title, and ledger_records_entity_idx
            -- covers this lookup.
-           parent.raw_payload AS parent_raw
+           parent.raw_payload AS parent_raw,
+           parent.relations AS parent_relations
       FROM matched
       JOIN timeline_events event
         ON event.event_id = matched.event_id
       LEFT JOIN ledger_records ledger
         ON ledger.ledger_id = event.event_id
       LEFT JOIN LATERAL (
-          SELECT page.raw_payload
-            FROM ledger_records page
-           WHERE page.source = 'notion'
-             AND page.entity_type = 'page'
-             AND page.source_entity_id = ledger.relations->>'page_id'
+          SELECT origin.raw_payload, origin.relations
+            FROM ledger_records origin
+           WHERE (origin.source = 'notion'
+                  AND origin.entity_type = 'page'
+                  AND origin.source_entity_id = ledger.relations->>'page_id')
+              -- A reply's audience starts with whoever it is replying to, and
+              -- that name is only on the parent message.
+              OR (origin.source = 'slack'
+                  AND origin.entity_type = 'message'
+                  AND origin.source_entity_id = ledger.relations->>'thread_id')
            LIMIT 1
-      ) AS parent ON ledger.source = 'notion'
+      ) AS parent ON ledger.source IN ('notion', 'slack')
      ORDER BY matched.person_id, event.occurred_at, event.event_type
 """
 
@@ -596,6 +650,7 @@ def _event(
         entity_type,
         raw_payload,
         parent_raw,
+        parent_relations,
     ) = row
     labels = (payload or {}).get("labels") or {}
     return {
@@ -613,6 +668,11 @@ def _event(
         # Computed here because the timeline row keeps no copy of the payload,
         # and the summary must not re-read the ledger to add up a day.
         "gpu_hours": round(_gpu_hours(raw_payload), 3) if source == "slurm" else None,
+        # Who it was said to, and whether the place it was said in is closed.
+        "to": audience(source, raw_payload, container_id, parent_relations, names, places),
+        "private": bool(
+            (places or {}).get(str(container_id), {}).get("private")
+        ) if source == "slack" else False,
         "actor": actor_external_id,
         # None, not "". An absent title is a fact about the source, and an
         # empty string reads as a title that happens to be blank.

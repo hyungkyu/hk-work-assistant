@@ -832,13 +832,25 @@ def test_a_dm_is_named_by_the_person_on_the_other_end():
     from rlwrld_worklog.digest import slack_place
 
     names = {"U1": "김재우", "U2": "김윰", "U3": "류형규"}
-    assert slack_place({"is_im": True, "user": "U1"}, {}, names) == "DM · 김재우"
+    assert slack_place({"is_im": True, "user": "U1"}, {}, names) == {
+        "label": "DM · 김재우",
+        "private": True,
+    }
     # Unknown counterpart: still says it was a DM rather than showing an id.
-    assert slack_place({"is_im": True, "user": "UNKNOWN"}, {}, names) == "DM"
-    assert slack_place(
-        {"is_mpim": True}, {"member_user_ids": ["U1", "U2"]}, names
-    ) == "그룹DM · 김재우, 김윰"
-    assert slack_place({"name": "team_platform"}, {}, names) == "#team_platform"
+    assert slack_place({"is_im": True, "user": "UNKNOWN"}, {}, names)["label"] == "DM"
+    assert slack_place({"is_mpim": True}, {"member_user_ids": ["U1", "U2"]}, names) == {
+        "label": "그룹DM · 김재우, 김윰",
+        "private": True,
+    }
+    assert slack_place({"name": "team_platform"}, {}, names) == {
+        "label": "#team_platform",
+        "private": False,
+    }
+    # A private channel is closed too, and the page has to be able to say so.
+    assert slack_place({"name": "clevel_hr", "is_private": True}, {}, names) == {
+        "label": "#clevel_hr",
+        "private": True,
+    }
 
 
 def test_a_slack_line_with_no_permalink_gets_one_built_from_its_ids():
@@ -919,3 +931,25 @@ def test_the_headline_hides_nothing_while_the_data_is_being_verified():
     found = summarize(events)
     assert found["headline"] == ["잡 900건 · 3,600 GPU-h"]
     assert found["groups"] == []
+
+
+def test_who_it_was_said_to_is_gathered_from_every_place_it_hides():
+    """HK: 내가 누구에게 무슨 이야기를 했느냐가 중요해."""
+    from rlwrld_worklog.digest import audience
+
+    names = {"U1": "김재우", "U2": "김윰", "U3": "손선일"}
+    places = {"D1": {"label": "DM · 김재우", "private": True}}
+    # The DM counterpart, then whoever started the thread, then the mentions.
+    assert audience(
+        "slack", {"text": "<@U2> 확인 부탁"}, "D1", {"author_user_id": "U3"}, names, places
+    ) == ["김재우", "손선일", "김윰"]
+    # A public channel message is addressed to whoever it names.
+    assert audience(
+        "slack", {"text": "<@U1> cc <@U2>"}, "C1", None, names, {}
+    ) == ["김재우", "김윰"]
+    # An unknown id is shown as an id rather than as a plausible name.
+    assert audience("slack", {"text": "<@UNKNOWN>"}, "C1", None, names, {}) == ["@UNKNOWN"]
+    # Nobody named, nobody implied.
+    assert audience("slack", {"text": "배포 완료"}, "C1", None, names, {}) == []
+    # Only Slack has an audience in this sense.
+    assert audience("notion", {"text": "<@U1>"}, "C1", None, names, {}) == []

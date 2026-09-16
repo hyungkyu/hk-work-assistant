@@ -76,6 +76,27 @@ letter-spacing:.02em;border-top:1px solid var(--line-soft);padding-top:8px}
 .stat .k{font-size:11px;color:var(--muted)}
 .stat .v{font:700 20px/1.15 var(--ui);font-variant-numeric:tabular-nums;margin-top:6px}
 .ev{display:grid;grid-template-columns:56px 1fr;gap:12px;padding:10px 0;border-bottom:1px solid var(--line-soft)}
+.conv{display:flex;align-items:center;gap:8px;margin:18px 0 6px;padding-bottom:6px;
+border-bottom:1px solid var(--line-soft)}
+.conv:first-of-type{margin-top:4px}
+.conv .ch{font:600 14px/1.3 var(--ui);color:var(--text)}
+.src-tag{font:500 10px/1 var(--mono);letter-spacing:.04em;text-transform:uppercase;
+border-radius:4px;padding:3px 5px;border:1px solid var(--line);color:var(--dim);white-space:nowrap}
+.msg{display:grid;grid-template-columns:62px 1fr;gap:10px;padding:5px 0;border-radius:6px}
+.msg:hover{background:#0f151d}
+.msg .ts{font:400 11.5px/1.7 var(--mono);color:var(--dim);font-variant-numeric:tabular-nums;
+white-space:nowrap}
+.msg .body{min-width:0}
+.msg .say{font:400 14px/1.6 var(--ui);color:var(--text);overflow-wrap:anywhere;white-space:pre-wrap}
+.msg .say.none{color:var(--dim);font-style:italic}
+.msg .meta{font:400 12px/1.5 var(--ui);color:var(--muted);margin-top:2px}
+.msg .to{font:500 12px/1.5 var(--ui);color:var(--accent);margin-top:3px}
+.lock{font:500 10.5px/1 var(--ui);color:var(--warning);border:1px solid #705a2c;
+background:#2b2415;border-radius:999px;padding:3px 7px;white-space:nowrap}
+.conv.closed .ch{color:var(--warning)}
+.msg .marks{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:3px;font-size:12px}
+.msg .marks a{color:var(--accent-2);text-decoration:none}
+.msg .marks a:hover{text-decoration:underline}
 .ev:last-child{border-bottom:0}
 .ev .t{font:400 12px/1.6 var(--mono);color:var(--dim);font-variant-numeric:tabular-nums}
 .ev .c{min-width:0;display:grid;gap:4px}
@@ -97,6 +118,17 @@ padding:4px 6px;border:1px solid var(--line);color:var(--muted);white-space:nowr
 color:#e6d9b4;font-size:13px;line-height:1.55;margin-bottom:16px}
 @media(max-width:640px){.phead{grid-template-columns:1fr}}
 """
+
+
+# Shown on the conversation header so a reader can tell a Notion document from
+# a Slack channel at a glance, without an uppercase tag on every single line.
+_SOURCE_NAMES = {
+    "slack": "슬랙",
+    "notion": "노션",
+    "google_calendar": "캘린더",
+    "github": "깃헙",
+    "slurm": "슬럼",
+}
 
 
 def _e(value: Any) -> str:
@@ -327,7 +359,13 @@ def _person_day_body(digest: dict[str, Any]) -> str:
         else ""
     )
 
+    # Laid out like Slack, because that is where most of this happened and
+    # HK reads it fluently: the place is a header, and under it each entry is
+    # a line of normal prose with its time in the gutter. The old layout put
+    # an uppercase event_type tag first and the words last, in monospace --
+    # accurate and unreadable.
     rows = []
+    last_where = None
     for event in events:
         # The place in the source's own words -- "#eng", a document title, a
         # calendar -- falling back to the raw container id only when the
@@ -335,51 +373,60 @@ def _person_day_body(digest: dict[str, Any]) -> str:
         where = event.get("where") or " · ".join(
             part for part in (event.get("container"), event.get("thread")) if part
         )
+        if where != last_where:
+            # A DM or a private channel is marked, so nobody reads a line out
+            # of this page and quotes it somewhere it was never said.
+            lock = '<span class="lock">🔒 비공개</span>' if event.get("private") else ""
+            rows.append(
+                f'<div class="conv{" closed" if event.get("private") else ""}"><span class="ch">{_e(where)}</span>{lock}'
+                f'<span class="src-tag {_e(event.get("source"))}">'
+                f'{_e(_SOURCE_NAMES.get(str(event.get("source")), event.get("source")))}'
+                "</span></div>"
+            )
+            last_where = where
+
         # The excerpt is what the line is actually about, so it leads; the
         # label snapshot's title is the fallback for records whose payload
         # holds no words (a Slurm job, a renamed channel). Only when neither
         # exists does the line admit it has nothing to say.
         said = event.get("excerpt") or event.get("title")
-        label = (
-            f"<strong>{_e(said)}</strong>"
+        body = (
+            f'<div class="say">{_e(said)}</div>'
             if said
-            else '<span class="ev-none" style="color:var(--dim)">내용 없음</span>'
+            else '<div class="say none">내용 없음</div>'
         )
         # Both, when they differ: a PR's title and its description are
         # different facts, and collapsing them loses one.
         title = event.get("title")
-        second = (
-            f'<div class="where">{_e(title)}</div>'
-            if title and event.get("excerpt") and title not in str(event.get("excerpt"))
-            else ""
-        )
-        link = (
-            f' <a href="{_e(event["permalink"])}">열기</a>' if event.get("permalink") else ""
-        )
-        # A meeting's Gemini notes are the thing a person actually wants after
-        # the meeting; the event link only shows the invitation again.
-        for extra in event.get("links") or []:
-            link += f' <a href="{_e(extra.get("url"))}">{_e(extra.get("title"))}</a>'
-        # "10:00–11:00 · 5명" for a meeting, "스레드 답글" for a reply: the fact
-        # that source needs and the shared columns cannot hold.
-        detail = event.get("detail")
-        # A page saved eleven times is one piece of news with a count, and the
-        # span says when it started and when it stopped.
+        if title and event.get("excerpt") and title not in str(event.get("excerpt")):
+            body += f'<div class="meta">{_e(title)}</div>'
+
+        # Who it was said to leads the metadata: HK, 2026-09-16, 내가 한말이
+        # 중요한게 아니라, 내가 누구에게 무슨 이야기를 했느냐가 중요해.
+        said_to = event.get("to") or []
+        if said_to:
+            body += f'<div class="to">→ {_e(", ".join(said_to))}</div>'
+
+        marks = []
+        # "10:00–11:00 · 5명" for a meeting, "스레드 답글" for a reply.
+        if event.get("detail"):
+            marks.append(f'<span class="meta">{_e(event["detail"])}</span>')
         repeat = event.get("repeat") or 1
         if repeat > 1:
-            last = event.get("last_time")
-            span = f"{event.get('time')}–{last}" if last else event.get("time")
-            times = f'<div class="t">{_e(span)}</div>'
-            badge = f' <span class="rep">×{repeat}</span>'
-        else:
-            times = f'<div class="t">{_e(event.get("time"))}</div>'
-            badge = ""
-        context = " · ".join(part for part in (where, detail) if part)
+            marks.append(f'<span class="rep">×{repeat}</span>')
+        if event.get("permalink"):
+            marks.append(f'<a href="{_e(event["permalink"])}">원본</a>')
+        # A meeting's Gemini notes are what a person wants afterwards; the
+        # event link only shows the invitation again.
+        for extra in event.get("links") or []:
+            marks.append(f'<a href="{_e(extra.get("url"))}">{_e(extra.get("title"))}</a>')
+        trail = f'<div class="marks">{" ".join(marks)}</div>' if marks else ""
+
+        last = event.get("last_time")
+        stamp = f"{event.get('time')}–{last}" if repeat > 1 and last else event.get("time")
         rows.append(
-            f'<div class="ev">{times}<div class="c">'
-            f'<div class="l1"><span class="tag {_e(event.get("source"))}">'
-            f'{_e(event.get("event_type"))}</span>{label}{badge}{link}</div>'
-            f'{second}<div class="where">{_e(context)}</div></div></div>'
+            f'<div class="msg"><div class="ts">{_e(stamp)}</div>'
+            f'<div class="body">{body}{trail}</div></div>'
         )
 
     day_block = (
