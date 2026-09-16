@@ -676,11 +676,26 @@ def test_a_notion_block_reads_its_words_out_of_whatever_shape_it_has():
 
 
 def test_a_block_is_placed_by_its_document_not_its_own_id():
-    from rlwrld_worklog.digest import _where
+    """HK: 노션 "305524ee-0661-413e-9994-45961b1ac112" 이런식 말고, 제목과 링크."""
+    from rlwrld_worklog.digest import _where, notion_key, notion_link
 
-    parent = {"properties": {"title": {"title": [{"plain_text": "주간 회고"}]}}}
-    assert _where("notion", "block", {}, {}, "c-id", parent) == "주간 회고"
-    assert _where("notion", "block", {}, {}, "c-id", None) == "c-id"
+    dashed = "305524ee-0661-413e-9994-45961b1ac112"
+    pages = {notion_key(dashed): {"title": "주간 회고", "url": "https://notion/x"}}
+
+    # Notion writes ids both dashed and undashed; the lookup normalises.
+    assert _where("notion", "block", {}, {}, dashed, None, None, pages) == "주간 회고"
+    assert _where("notion", "block", {}, {}, dashed.replace("-", ""), None, None, pages) == (
+        "주간 회고"
+    )
+
+    parent = {"properties": {"title": {"title": [{"plain_text": "옛 경로"}]}}}
+    assert _where("notion", "block", {}, {}, "c-id", parent) == "옛 경로"
+
+    # A title nobody recorded never renders as a raw id.
+    assert _where("notion", "block", {}, {}, dashed, None, None, {}) == "노션 문서"
+    # And the document is still reachable, because the id is enough for a URL.
+    assert notion_link(dashed) == "https://www.notion.so/305524ee0661413e999445961b1ac112"
+    assert notion_link(None) is None
 
 
 def test_a_document_edited_paragraph_by_paragraph_is_one_line():
@@ -1076,11 +1091,20 @@ def test_a_document_edited_all_day_summarises_what_changed():
     assert folded[0]["parts"] == ["GPU 재분배", "학생 lab 비교"]
 
 
-def test_a_meeting_is_not_filed_under_whichever_calendar_it_was_read_from():
-    """HK: 구캘은 캘린더 오너를 알 필요는 없어."""
+def test_a_meeting_is_filed_under_its_own_title():
+    """HK: 구캘은 캘린더 오너를 알 필요는 없어 / 회의: 회의제목 으로."""
     from rlwrld_worklog.digest import _where
 
-    assert _where("google_calendar", "event", {"calendar_summary": "hk@rlwrld.ai"}, {}, "cal-1") is None
+    # The calendar it was read from never appears.
+    assert _where(
+        "google_calendar",
+        "event",
+        {"calendar_summary": "hk@rlwrld.ai"},
+        {"summary": "주간 리더 미팅"},
+        "cal-1",
+    ) == "회의: 주간 리더 미팅"
+    # A meeting with no title says it is a meeting rather than naming a calendar.
+    assert _where("google_calendar", "event", {"calendar_summary": "hk@rlwrld.ai"}, {}, "cal-1") == "회의"
 
 
 def test_a_meeting_note_is_read_once_and_put_on_the_line():
@@ -1339,3 +1363,17 @@ def test_one_unreadable_note_does_not_take_the_digest_down():
     assert attach_notes(events, Flaky(), NoteCache(None)) == 3
     assert "note" not in events[2]
     assert events[0]["note"] == "괜찮은 노트"
+
+
+def test_a_dm_with_no_conversation_row_is_named_from_its_messages():
+    """Half his day is DMs, and "D0C09PW4T60" names nobody.
+
+    The directory capture does not always record an `im` conversation, so the
+    fallback asks who wrote in that channel and uses the roster for the names.
+    """
+    from rlwrld_worklog.digest import _DM_MEMBERS_SQL
+
+    # Scoped to DM channels and to the day being built, not the whole history.
+    assert "LIKE 'D%%'" in _DM_MEMBERS_SQL
+    assert "source_created_at >= %(start)s" in _DM_MEMBERS_SQL
+    assert "array_agg(DISTINCT relations->>'author_user_id')" in _DM_MEMBERS_SQL

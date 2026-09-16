@@ -374,13 +374,9 @@ def _person_day_body(digest: dict[str, Any]) -> str:
         # The place in the source's own words -- "#eng", a document title, a
         # calendar -- falling back to the raw container id only when the
         # collector recorded no name for it.
-        where = event.get("where")
-        if where is None and event.get("source") != "google_calendar":
-            where = " · ".join(
-                part for part in (event.get("container"), event.get("thread")) if part
-            )
-        # A meeting groups under one heading rather than under a calendar id.
-        where = where or ("회의" if event.get("source") == "google_calendar" else "")
+        where = event.get("where") or " · ".join(
+            part for part in (event.get("container"), event.get("thread")) if part
+        )
         if where != last_where:
             # A DM or a private channel is marked, so nobody reads a line out
             # of this page and quotes it somewhere it was never said.
@@ -405,11 +401,17 @@ def _person_day_body(digest: dict[str, Any]) -> str:
             if parts
             else event.get("excerpt") or event.get("title")
         )
-        body = (
-            f'<div class="say">{_e(said)}</div>'
-            if said
-            else '<div class="say none">내용 없음</div>'
-        )
+        # A meeting's heading is already its title; repeating it as the line
+        # leaves the row saying the same thing twice.
+        if event.get("source") == "google_calendar" and said and str(where).endswith(said):
+            said = None
+        if said:
+            body = f'<div class="say">{_e(said)}</div>'
+        elif event.get("note") or event.get("detail"):
+            # A meeting whose heading carries the title says the rest below.
+            body = ""
+        else:
+            body = '<div class="say none">내용 없음</div>' 
         # Both, when they differ: a PR's title and its description are
         # different facts, and collapsing them loses one.
         title = event.get("title")

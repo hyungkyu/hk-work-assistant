@@ -209,7 +209,8 @@ def _where(
     raw: Any,
     container_id: str | None,
     parent_raw: Any = None,
-    places: dict[str, str] | None = None,
+    places: dict[str, dict[str, Any]] | None = None,
+    pages: dict[str, dict[str, Any]] | None = None,
 ) -> str | None:
     """The place, in the source's own words rather than as an id."""
     labels = labels if isinstance(labels, dict) else {}
@@ -222,20 +223,38 @@ def _where(
         channel = labels.get("channel_name")
         return f"#{channel}" if channel else container_id
     if source == "notion":
-        # A page is its own document; a block or comment hangs off one, and
-        # the document is the place a person would go looking.
+        # A page is its own document; a block or comment hangs off one, and the
+        # document is the place a person would go looking. A bare id is never
+        # the answer: HK, 2026-09-16, 노션 "305524ee-..." 이런식 말고, 노션
+        # 제목과 바로 가기 링크.
         found = (
-            _plain_notion_title(parent_raw if isinstance(parent_raw, dict) else {})
+            (pages or {}).get(notion_key(container_id) or "", {}).get("title")
+            or _plain_notion_title(parent_raw if isinstance(parent_raw, dict) else {})
             or _text_at(raw, "title")
             or _plain_notion_title(raw)
             or labels.get("name")
         )
-        return found or container_id
+        return found or "노션 문서"
     if source == "google_calendar":
-        # HK, 2026-09-16: 구캘은 캘린더 오너를 알 필요는 없어. The title is the
-        # meeting and the calendar it happened to be read from is plumbing.
-        return None
+        # HK, 2026-09-16: 구캘은 캘린더 오너를 알 필요는 없어 / 회의: 회의제목.
+        # The meeting's own title is its heading; the calendar it happened to be
+        # read from is plumbing.
+        found = _text_at(raw, "summary") or labels.get("summary")
+        return f"회의: {found}" if found else "회의"
     return container_id
+
+
+def notion_key(value: Any) -> str | None:
+    """A Notion id in one shape, because Notion uses two."""
+    if not isinstance(value, str) or not value:
+        return None
+    return value.replace("-", "").lower() or None
+
+
+def notion_link(page_id: Any) -> str | None:
+    """A document's own URL, derivable from its id when the page row is absent."""
+    key = notion_key(page_id)
+    return f"https://www.notion.so/{key}" if key else None
 
 
 def _plain_notion_title(raw: dict[str, Any]) -> str | None:
@@ -277,6 +296,33 @@ def links(source: str, raw: Any) -> list[dict[str, str]]:
                         break
     return found
 
+
+# Who wrote in each Slack conversation, for the DMs the directory capture
+# missed. Scoped to the day being built, because that is the only day whose
+# conversations this digest names.
+_DM_MEMBERS_SQL = """
+    SELECT scope->>'channel_id' AS channel,
+           array_agg(DISTINCT relations->>'author_user_id') AS members
+      FROM ledger_records
+     WHERE source = 'slack' AND entity_type = 'message'
+       AND scope->>'channel_id' LIKE 'D%%'
+       AND source_created_at >= %(start)s AND source_created_at < %(end)s
+     GROUP BY 1
+"""
+
+# Every Notion page the ledger knows, by id, for naming the documents blocks
+# belong to. The LATERAL join that used to do this matched `page_id` against
+# `source_entity_id` literally, and Notion writes ids both dashed and undashed,
+# so a page whose id was stored the other way never matched and the line showed
+# "305524ee-0661-413e-9994-45961b1ac112". Normalising in SQL would cost the
+# index, so the map is built once per day instead.
+_NOTION_PAGES_SQL = """
+    SELECT DISTINCT ON (source_entity_id)
+           source_entity_id, raw_payload
+      FROM ledger_records
+     WHERE source = 'notion' AND entity_type = 'page'
+     ORDER BY source_entity_id, collected_at DESC
+"""
 
 _PLACES_SQL = """
     SELECT DISTINCT ON (source_entity_id)
@@ -846,6 +892,33 @@ def build_day(
                 if (place := slack_place(raw, relations, names))
             }
 
+            # A DM whose conversation row the collector never recorded still
+            # has to be named: "D0C09PW4T60" tells a reader nothing, and for
+            # someone whose day is half DMs that is half the page. Who is in it
+            # is answerable from the messages themselves.
+            cursor.execute(_DM_MEMBERS_SQL, {"start": start, "end": end})
+            for channel, members in cursor.fetchall():
+                channel = str(channel)
+                if channel in places or not channel.startswith("D"):
+                    continue
+                known = [names[str(m)] for m in (members or []) if str(m) in names]
+                places[channel] = {
+                    "label": f"DM · {', '.join(known[:3])}" if known else "DM",
+                    "private": True,
+                }
+
+            cursor.execute(_NOTION_PAGES_SQL)
+            pages = {}
+            for page_id, raw in cursor.fetchall():
+                key = notion_key(page_id)
+                if not key:
+                    continue
+                raw = raw if isinstance(raw, dict) else {}
+                pages[key] = {
+                    "title": _plain_notion_title(raw),
+                    "url": raw.get("url") or notion_link(page_id),
+                }
+
             cursor.execute(_EVENTS_SQL, {"start": start, "end": end, "kinds": list(_ALL_KINDS)})
             # DISTINCT ON forces its own ordering, so the person-major,
             # time-ascending order the writer depends on is restored here.
@@ -870,7 +943,13 @@ def build_day(
                     events = []
                 current = person_id
                 events.append(
-                    _event(row, names=names, slack_prefix=slack_prefix, places=places)
+                    _event(
+                        row,
+                        names=names,
+                        slack_prefix=slack_prefix,
+                        places=places,
+                        pages=pages,
+                    )
                 )
             if current is not None:
                 folded = collapse(events)
@@ -894,7 +973,8 @@ def _event(
     *,
     names: dict[str, str] | None = None,
     slack_prefix: str | None = None,
-    places: dict[str, str] | None = None,
+    places: dict[str, dict[str, Any]] | None = None,
+    pages: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     (
         _person_id,
@@ -925,8 +1005,14 @@ def _event(
         # A block has no URL of its own and its page id names nothing; the
         # document's own URL is what a reader wants to open.
         or (
-            (parent_raw or {}).get("url")
-            if entity_type == "block" and isinstance(parent_raw, dict)
+            (
+                (pages or {}).get(notion_key(container_id) or "", {}).get("url")
+                or (parent_raw or {}).get("url")
+                if isinstance(parent_raw, dict) or pages
+                else None
+            )
+            or notion_link(container_id)
+            if source == "notion"
             else None
         ),
         # Links the event carries of its own -- a meeting's Gemini notes, its
@@ -953,7 +1039,7 @@ def _event(
         # a Slack channel, a Notion document, a calendar, a repository. The raw
         # container id ("C07ABCDEF") stays in `container` for machines.
         "where": _where(
-            source, entity_type, labels, raw_payload, container_id, parent_raw, places
+            source, entity_type, labels, raw_payload, container_id, parent_raw, places, pages
         ),
         # The one extra fact that source needs and the others do not -- a
         # meeting's time span, a reply's threadedness, a review's verdict.
