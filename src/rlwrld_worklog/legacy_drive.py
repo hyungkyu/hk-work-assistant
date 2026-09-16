@@ -18,6 +18,18 @@ DATE_FOLDER = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 class DriveFiles(Protocol):
+    def export_text(self, file_id: str, *, limit: int = 4000) -> str | None: ...
+
+    def list_children(self, folder_id: str) -> list[dict[str, Any]]: ...
+    def download(self, file_id: str, destination: Path) -> None: ...
+
+
+class GoogleDriveFiles:
+    def __init__(self, credentials: Any) -> None:
+        from googleapiclient.discovery import build
+
+        self.service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+
     def export_text(self, file_id: str, *, limit: int = 4000) -> str | None:
         """A Google Doc as plain text, for reading rather than archiving.
 
@@ -45,16 +57,6 @@ class DriveFiles(Protocol):
         if not isinstance(data, str):
             return None
         return data[:limit] or None
-
-    def list_children(self, folder_id: str) -> list[dict[str, Any]]: ...
-    def download(self, file_id: str, destination: Path) -> None: ...
-
-
-class GoogleDriveFiles:
-    def __init__(self, credentials: Any) -> None:
-        from googleapiclient.discovery import build
-
-        self.service = build("drive", "v3", credentials=credentials, cache_discovery=False)
 
     def list_children(self, folder_id: str) -> list[dict[str, Any]]:
         fields = "nextPageToken,files(id,name,mimeType,size,md5Checksum,modifiedTime,createdTime)"

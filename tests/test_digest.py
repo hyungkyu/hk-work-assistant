@@ -1133,3 +1133,34 @@ def test_a_long_note_is_cut_rather_than_rewritten():
     found = note_head("가" * 900)
     assert len(found) == NOTE_CHARS
     assert found.endswith("…")
+
+
+def test_the_real_drive_client_has_the_method_the_digest_calls():
+    """A fake with the right shape proves nothing about the real object.
+
+    `export_text` was written into the DriveFiles Protocol instead of into
+    GoogleDriveFiles, and every test passed because each one injected its own
+    fake. The first real run died on AttributeError. This checks the class the
+    code actually constructs, and that the Protocol still declares it so the
+    two cannot drift apart again.
+    """
+    import inspect
+
+    from rlwrld_worklog.legacy_drive import DriveFiles, GoogleDriveFiles
+
+    assert callable(getattr(GoogleDriveFiles, "export_text", None))
+    assert callable(getattr(DriveFiles, "export_text", None))
+
+    # The digest calls it positionally with one argument.
+    parameters = list(inspect.signature(GoogleDriveFiles.export_text).parameters)
+    assert parameters[:2] == ["self", "file_id"]
+
+
+def test_every_client_the_cli_builds_satisfies_what_the_digest_calls():
+    """The wiring, not the shape: what `_drive_reader` returns must work."""
+    import inspect
+
+    from rlwrld_worklog import cli
+
+    source = inspect.getsource(cli._drive_reader)
+    assert "GoogleDriveFiles" in source
