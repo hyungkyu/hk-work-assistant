@@ -559,3 +559,34 @@ def test_a_calendar_event_with_no_email_says_unknown_rather_than_guessing():
     )
     assert found["actor"] is None
     assert found["actor_kind"] == "unknown"
+
+
+def test_a_notion_block_is_attributed_to_whoever_last_touched_it():
+    """Projecting a block with no actor is worse than not projecting it."""
+    from rlwrld_worklog.ledger.load import _projection
+
+    found = _projection(
+        {
+            "entity_type": "block",
+            "source_entity_id": "block-1",
+            "relations": {"last_edited_by_user_id": "u-1", "page_id": "page-1"},
+            "scope": {"notion_source_id": "src-1"},
+            "raw_payload": {"url": "https://notion/block-1"},
+        }
+    )
+    assert found["actor"] == "u-1"
+    assert found["actor_kind"] == "notion_user"
+    # Placed by its document, not by itself.
+    assert found["container"] == "page-1"
+    assert found["thread"] == "page-1"
+
+
+def test_a_notion_block_with_no_author_says_unknown():
+    from rlwrld_worklog.ledger.load import _projection
+
+    found = _projection(
+        {"entity_type": "block", "source_entity_id": "b", "relations": {},
+         "scope": {}, "raw_payload": {}}
+    )
+    assert found["actor"] is None
+    assert found["actor_kind"] == "unknown"

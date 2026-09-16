@@ -808,6 +808,15 @@ def test_a_block_line_names_its_document_through_the_parent_join(database):
                 },
             )
             rows = cursor.fetchall()
+        with connection.cursor() as cursor:
+            # Removed before the assertions, not after: a failure must not
+            # leave rows behind for the ledger round-trip test, which counts
+            # every row in the database against the files on disk.
+            cursor.execute("DELETE FROM timeline_events WHERE external_id = 'block-1'")
+            cursor.execute(
+                "DELETE FROM ledger_records WHERE source_entity_id IN ('block-1', 'page-1')"
+            )
+        connection.commit()
 
     # Other tests share this database and this window; this test is about the
     # Notion rows it inserted.

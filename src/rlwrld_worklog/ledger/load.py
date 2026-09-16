@@ -353,8 +353,22 @@ def _projection(record: dict[str, Any]) -> dict[str, Any]:
         permalink = raw.get("permalink")
     elif entity == "page":
         actor = relations.get("last_edited_by_user_id") or relations.get("created_by_user_id")
+        actor_kind = "notion_user" if actor else "unknown"
         container = scope.get("notion_source_id")
         thread = record["source_entity_id"]
+        permalink = raw.get("url")
+    elif entity == "block":
+        # Same authorship fields as a page -- a block records who last touched
+        # it. Adding `block` to PROJECTED_ENTITY_TYPES without this branch put
+        # every block on the timeline with no actor at all: projected and still
+        # invisible, which is worse than not projected because the counts look
+        # right while no one's day changes.
+        actor = relations.get("last_edited_by_user_id") or relations.get("created_by_user_id")
+        actor_kind = "notion_user" if actor else "unknown"
+        # A block belongs to its document, and the document is where a reader
+        # would go looking -- not the block's own id.
+        container = relations.get("page_id") or scope.get("notion_source_id")
+        thread = relations.get("page_id") or record["source_entity_id"]
         permalink = raw.get("url")
     elif entity == "comment":
         actor = relations.get("created_by_user_id")
