@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Protocol
 
 KST = timezone(timedelta(hours=9))
@@ -32,6 +33,32 @@ KST = timezone(timedelta(hours=9))
 # The sources a person's day is assembled from. Slurm is included so that a
 # missing cluster shows up too, even though nothing can ask it a second time.
 SOURCES = ("slack", "notion", "google_calendar", "github", "slurm")
+
+
+def running_code() -> str:
+    """Which build produced this table.
+
+    Three times in one day a run was read as "the fix did not work" when the
+    fix had simply not been applied yet -- the patch queue ticks every three
+    minutes and the numbers look identical until it does. A check whose output
+    cannot be dated is a check that wastes a round trip, so it says which
+    commit it is.
+    """
+    import subprocess
+
+    here = Path(__file__).resolve().parent
+    try:
+        found = subprocess.run(
+            ["git", "-C", str(here), "log", "--oneline", "-1"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if found.returncode == 0 and found.stdout.strip():
+            return found.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "버전 알 수 없음"
 
 
 def day_bounds(day: date) -> tuple[datetime, datetime]:

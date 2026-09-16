@@ -235,3 +235,11 @@ def test_one_meeting_on_a_dozen_calendars_is_one_meeting():
 
     assert "iCalUID" in _LEDGER_SQL
     assert "count(DISTINCT" in _LEDGER_SQL
+
+
+def test_the_table_says_which_build_produced_it():
+    """Three runs in one day were read as failures of an unapplied fix."""
+    from rlwrld_worklog.reconcile import running_code
+
+    found = running_code()
+    assert isinstance(found, str) and found

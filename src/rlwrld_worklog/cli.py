@@ -1354,7 +1354,7 @@ def reconcile_command(args: argparse.Namespace) -> int:
     from datetime import date as date_type
 
     from . import digest as digest_module
-    from .reconcile import SOURCES, reconcile
+    from .reconcile import SOURCES, reconcile, running_code
 
     database_url = args.database_url or os.environ.get("DATABASE_URL")
     if not database_url:
@@ -1433,6 +1433,7 @@ def reconcile_command(args: argparse.Namespace) -> int:
     )
     found = result.as_dict()
     rows = found["gaps"] if args.gaps_only else found["rows"]
+    print(f"코드: {running_code()}")
     print(f"{'날짜':<12}{'소스':<17}{'원본':>6}{'원장':>7}{'타임라인':>9}{'다이제스트':>11}  판정")
     for row in rows:
         # An unmeasured source prints a dash. Never 0 -- "nobody looked" and

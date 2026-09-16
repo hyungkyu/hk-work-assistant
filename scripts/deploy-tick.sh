@@ -240,6 +240,9 @@ case "$verdict" in
   MATCH*)
     outcome="deployed"
     detail="$verdict at $head_sha$units_note$migrate_note"
+    # A new build is exactly when someone wants to know whether the fix worked.
+    # Read-only, and its own failure never fails the deploy.
+    bash scripts/verify-tick.sh >/dev/null 2>&1 || true
     ;;
   *)
     # Built, restarted, and still not the commit. Saying "deployed" here is the
