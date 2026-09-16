@@ -590,3 +590,49 @@ def test_a_notion_block_with_no_author_says_unknown():
     )
     assert found["actor"] is None
     assert found["actor_kind"] == "unknown"
+
+
+def test_a_meeting_is_placed_on_the_day_it_happens_not_the_day_it_was_booked():
+    """The defect that made a Tuesday show no meetings.
+
+    `source_created_at` for a calendar event is when somebody booked it. Using
+    it as the activity time put a September meeting on the June day it was
+    created, which is why HK's week showed one meeting a day while his calendar
+    held ten.
+    """
+    from rlwrld_worklog.ledger.load import occurred_at_for
+
+    booked_in_june = {
+        "entity_type": "event",
+        "source_created_at": "2026-06-01T04:00:00Z",
+        "raw_payload": {"start": {"dateTime": "2026-09-15T10:00:00+09:00"}},
+    }
+    assert occurred_at_for(booked_in_june) == "2026-09-15T10:00:00+09:00"
+
+    # An all-day event has a date and no clock time.
+    all_day = {
+        "entity_type": "event",
+        "source_created_at": "2026-06-01T04:00:00Z",
+        "raw_payload": {"start": {"date": "2026-09-15"}},
+    }
+    assert occurred_at_for(all_day) == "2026-09-15"
+
+    # No start at all: fall back rather than lose the row.
+    assert (
+        occurred_at_for({"entity_type": "event", "source_created_at": "2026-06-01T04:00:00Z",
+                         "raw_payload": {}})
+        == "2026-06-01T04:00:00Z"
+    )
+
+
+def test_every_other_source_still_happens_when_it_was_created():
+    """A message is created when it is sent; only meetings are the exception."""
+    from rlwrld_worklog.ledger.load import occurred_at_for
+
+    for entity in ("message", "block", "page", "commit", "job"):
+        record = {
+            "entity_type": entity,
+            "source_created_at": "2026-09-15T02:00:00Z",
+            "raw_payload": {"start": {"dateTime": "2099-01-01T00:00:00Z"}},
+        }
+        assert occurred_at_for(record) == "2026-09-15T02:00:00Z"

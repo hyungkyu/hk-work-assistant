@@ -402,6 +402,33 @@ def _projection(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def occurred_at_for(record: dict[str, Any]) -> Any:
+    """When this actually happened, which is not always when it was created.
+
+    `source_created_at` is a ledger fact: when the object came into existence.
+    For almost every source that is also when the activity happened -- a
+    message is created when it is sent. A calendar event is the exception: it
+    is created when somebody books it, and it happens later, sometimes months
+    later. Using the creation time put a Tuesday meeting on the June day it was
+    booked, so a person's Tuesday showed no meetings and some day in June
+    showed forty.
+
+    An all-day event has a date and no clock time; it starts at midnight in the
+    calendar's own day, and saying so is better than dropping it.
+    """
+    if record.get("entity_type") != "event":
+        return record.get("source_created_at")
+    raw = record.get("raw_payload") or {}
+    start = raw.get("start") if isinstance(raw, dict) else None
+    if isinstance(start, dict):
+        moment = start.get("dateTime") or start.get("date")
+        if isinstance(moment, str) and moment:
+            return moment
+    # No start at all: fall back rather than lose the row, and the projection
+    # reports it the same way it reports any event with no time.
+    return record.get("source_created_at")
+
+
 def _payload_for_timeline(record: dict[str, Any], projection: dict[str, Any]) -> dict[str, Any]:
     """Timeline payload keeps a pointer back to the ledger rather than a copy.
 
@@ -602,7 +629,10 @@ def _load_records(cursor, records: Iterable[dict[str, Any]], batch_id, result: L
             continue
 
         projection = _projection(record)
-        occurred_at = _timestamp(record.get("source_created_at"))
+        # Both this path and the reprojection backfill must agree on when a
+        # thing happened, or a nightly load would quietly put every meeting
+        # back on the day it was booked.
+        occurred_at = _timestamp(occurred_at_for(record))
         if occurred_at is None:
             result.skipped_not_projected += 1
             result.errors.append(f"{record['ledger_id']}: no source_created_at, not projected")

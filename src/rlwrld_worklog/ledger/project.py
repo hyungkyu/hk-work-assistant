@@ -34,6 +34,7 @@ from .load import (
     _origin_for,
     _payload_for_timeline,
     _projection,
+    occurred_at_for,
     _timestamp,
 )
 
@@ -188,7 +189,7 @@ def project_timeline(
 
 
 def _project_one(cursor, record, result: ProjectResult, *, ingested_at, Jsonb, dry_run) -> None:
-    occurred_at = _moment(record.get("source_created_at"))
+    occurred_at = _moment(occurred_at_for(record))
     if occurred_at is None:
         # The loader reports this the same way and for the same reason: an
         # event with no time cannot sit on a timeline, and dropping it

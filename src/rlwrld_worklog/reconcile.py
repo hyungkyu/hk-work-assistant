@@ -169,8 +169,24 @@ def calendar_day_count(
 _LEDGER_SQL = """
     SELECT count(DISTINCT source_entity_id) FROM ledger_records
      WHERE source = %(source)s
-       AND source_created_at >= %(start)s AND source_created_at < %(end)s
+       AND {window}
 """
+
+# When the thing happened, per source. For everything but the calendar that is
+# the creation time. A meeting is created when it is booked and happens later,
+# so asking "how many meetings on Tuesday" against the creation time compares
+# two different days and drifts in both directions -- which is exactly what the
+# first clean-looking run did.
+_CREATED_WINDOW = "source_created_at >= %(start)s AND source_created_at < %(end)s"
+_WINDOW_BY_SOURCE = {
+    "google_calendar": (
+        "((raw_payload->'start'->>'dateTime') IS NOT NULL"
+        " AND (raw_payload->'start'->>'dateTime')::timestamptz >= %(start)s"
+        " AND (raw_payload->'start'->>'dateTime')::timestamptz < %(end)s)"
+        " OR ((raw_payload->'start'->>'dateTime') IS NULL"
+        "     AND (raw_payload->'start'->>'date') = %(day)s)"
+    ),
+}
 
 _LEDGER_BY_PERSON = {
     # How each source says "this record is that person's", in the ledger's own
@@ -205,10 +221,18 @@ def count_layers(cursor, person_id: str, source: str, day: date) -> tuple[int, i
     """Ledger, timeline and digest counts for one person, source and day."""
     start, end = day_bounds(day)
     handles = person_handles(cursor, person_id)
-    params = {"source": source, "start": start, "end": end, "handles": handles}
+    params = {
+        "source": source,
+        "start": start,
+        "end": end,
+        "handles": handles,
+        "day": day.isoformat(),
+    }
 
+    window = _WINDOW_BY_SOURCE.get(source, _CREATED_WINDOW)
+    ledger_sql = _LEDGER_SQL.format(window=f"({window})")
     predicate = _LEDGER_BY_PERSON.get(source)
-    cursor.execute(f"{_LEDGER_SQL} AND {predicate}" if predicate else _LEDGER_SQL, params)
+    cursor.execute(f"{ledger_sql} AND {predicate}" if predicate else ledger_sql, params)
     ledger = int(cursor.fetchone()[0])
 
     cursor.execute(
