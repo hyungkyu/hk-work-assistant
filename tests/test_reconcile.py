@@ -184,3 +184,40 @@ def test_an_unknown_person_is_refused_rather_than_reported_as_empty(monkeypatch)
 
     with pytest.raises(SystemExit):
         cli.reconcile_command(Args())
+
+
+def test_the_calendar_comparison_asks_both_sides_the_same_question():
+    """72 against 18 was not 수집 누락; it was two different questions.
+
+    The source side used to count every event visible on every calendar the
+    account can see. The ledger side counts events the person organises or
+    attends. Now both mean the same thing.
+    """
+    from rlwrld_worklog.reconcile import calendar_day_count, event_involves
+
+    me = {"hk@rlwrld.ai"}
+    assert event_involves({"organizer": {"email": "HK@rlwrld.ai"}}, me)
+    assert event_involves({"creator": {"email": "hk@rlwrld.ai"}}, me)
+    assert event_involves(
+        {"attendees": [{"email": "hk@rlwrld.ai", "responseStatus": "accepted"}]}, me
+    )
+    # A declined invitation is not attendance on either side.
+    assert not event_involves(
+        {"attendees": [{"email": "hk@rlwrld.ai", "responseStatus": "declined"}]}, me
+    )
+    # Somebody else's meeting, visible but not his.
+    assert not event_involves({"organizer": {"email": "other@rlwrld.ai"}}, me)
+    assert not event_involves({}, me)
+
+    class Fake:
+        def iter_day_events(self, calendar_id, *, time_min, time_max):
+            return [
+                {"id": "mine", "organizer": {"email": "hk@rlwrld.ai"}},
+                {"id": "holiday", "organizer": {"email": "holidays@google.com"}},
+                {"id": "theirs", "organizer": {"email": "other@rlwrld.ai"}},
+            ]
+
+    # Two calendars, the same three events: one is his, and it counts once.
+    assert calendar_day_count(Fake(), ["a@x", "b@x"], date(2026, 9, 15), me) == 1
+    # Without an address list the old behaviour is kept, deduplicated by id.
+    assert calendar_day_count(Fake(), ["a@x", "b@x"], date(2026, 9, 15), None) == 3

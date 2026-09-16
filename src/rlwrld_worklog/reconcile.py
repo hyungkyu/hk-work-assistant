@@ -106,25 +106,57 @@ class CalendarList(Protocol):
     def iter_day_events(self, calendar_id: str, *, time_min: str, time_max: str) -> Any: ...
 
 
-def calendar_day_count(
-    client: CalendarList, calendar_ids: list[str], day: date
-) -> int | None:
-    """How many events the calendars themselves hold for that day.
+def event_involves(event: Any, emails: set[str]) -> bool:
+    """Is this meeting this person's, in the same sense the ledger means it?
 
-    Counted per calendar and summed, because an event a person attends lives on
-    the organiser's calendar too and both are collected.
+    The first version of this counted every event visible on every calendar the
+    account can see -- subscribed calendars, public holidays, other people's
+    schedules -- and compared it with a ledger count filtered to events the
+    person organises or attends. 72 against 18 read as 수집 누락 and was
+    nothing of the kind. A comparison is only a comparison when both sides ask
+    the same question.
+    """
+    event = event if isinstance(event, dict) else {}
+    organiser = (event.get("organizer") or {}).get("email")
+    creator = (event.get("creator") or {}).get("email")
+    for value in (organiser, creator):
+        if isinstance(value, str) and value.lower() in emails:
+            return True
+    for attendee in event.get("attendees") or []:
+        if not isinstance(attendee, dict):
+            continue
+        value = attendee.get("email")
+        if isinstance(value, str) and value.lower() in emails:
+            # A declined invitation is not attendance, and the ledger side of
+            # this comparison excludes it too.
+            return attendee.get("responseStatus") != "declined"
+    return False
+
+
+def calendar_day_count(
+    client: CalendarList,
+    calendar_ids: list[str],
+    day: date,
+    emails: set[str] | None = None,
+) -> int | None:
+    """How many of that day's meetings are this person's.
+
+    Deduplicated by event id, because a meeting a person attends sits on the
+    organiser's calendar as well as their own and both are readable here.
     """
     start, end = day_bounds(day)
-    total = 0
     seen: set[str] = set()
+    total = 0
     for calendar_id in calendar_ids:
         for event in client.iter_day_events(
             calendar_id, time_min=start.isoformat(), time_max=end.isoformat()
         ):
-            identifier = str((event or {}).get("id") or "")
-            if identifier and identifier in seen:
+            if emails and not event_involves(event, emails):
                 continue
+            identifier = str((event or {}).get("id") or "")
             if identifier:
+                if identifier in seen:
+                    continue
                 seen.add(identifier)
             total += 1
     return total
@@ -229,6 +261,14 @@ def reconcile(
     result = ReconcileResult()
     with psycopg.connect(database_url) as connection:
         with connection.cursor() as cursor:
+            # The person's own addresses, so the source side of the calendar
+            # comparison filters by exactly what the ledger side filters by.
+            cursor.execute(
+                "SELECT lower(value) FROM org_identity WHERE person_id = %s "
+                "AND kind LIKE 'email%%'",
+                (person_id,),
+            )
+            emails = {str(row[0]) for row in cursor.fetchall()}
             for day in days:
                 for source in sources:
                     ledger, timeline, digest = count_layers(cursor, person_id, source, day)
@@ -237,7 +277,9 @@ def reconcile(
                     if source == "slack" and slack_client and slack_user_id:
                         external = slack_day_count(slack_client, slack_user_id, day)
                     elif source == "google_calendar" and calendar_client and calendar_ids:
-                        external = calendar_day_count(calendar_client, calendar_ids, day)
+                        external = calendar_day_count(
+                            calendar_client, calendar_ids, day, emails
+                        )
                     if external is None and source in {"slack", "google_calendar"}:
                         note = "원본 미조회"
                         result.unmeasured.append(source)
