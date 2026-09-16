@@ -81,6 +81,7 @@ letter-spacing:.02em;border-top:1px solid var(--line-soft);padding-top:8px}
 .ev .c{min-width:0;display:grid;gap:4px}
 .ev .l1{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13.5px}
 .ev .where{color:var(--dim);font:400 11.5px/1.4 var(--mono);overflow-wrap:anywhere}
+.rep{font:500 10.5px/1 var(--mono);color:var(--dim);border:1px solid var(--line);border-radius:4px;padding:1px 4px;margin-left:4px;white-space:nowrap}
 .ev a{color:var(--accent-2);text-decoration:none}
 .ev a:hover{text-decoration:underline}
 .tag{font:500 10.5px/1 var(--mono);letter-spacing:.04em;text-transform:uppercase;border-radius:4px;
@@ -317,7 +318,10 @@ def _person_day_body(digest: dict[str, Any]) -> str:
 
     rows = []
     for event in events:
-        where = " · ".join(
+        # The place in the source's own words -- "#eng", a document title, a
+        # calendar -- falling back to the raw container id only when the
+        # collector recorded no name for it.
+        where = event.get("where") or " · ".join(
             part for part in (event.get("container"), event.get("thread")) if part
         )
         # The excerpt is what the line is actually about, so it leads; the
@@ -341,11 +345,26 @@ def _person_day_body(digest: dict[str, Any]) -> str:
         link = (
             f' <a href="{_e(event["permalink"])}">열기</a>' if event.get("permalink") else ""
         )
+        # "10:00–11:00 · 5명" for a meeting, "스레드 답글" for a reply: the fact
+        # that source needs and the shared columns cannot hold.
+        detail = event.get("detail")
+        # A page saved eleven times is one piece of news with a count, and the
+        # span says when it started and when it stopped.
+        repeat = event.get("repeat") or 1
+        if repeat > 1:
+            last = event.get("last_time")
+            span = f"{event.get('time')}–{last}" if last else event.get("time")
+            times = f'<div class="t">{_e(span)}</div>'
+            badge = f' <span class="rep">×{repeat}</span>'
+        else:
+            times = f'<div class="t">{_e(event.get("time"))}</div>'
+            badge = ""
+        context = " · ".join(part for part in (where, detail) if part)
         rows.append(
-            f'<div class="ev"><div class="t">{_e(event.get("time"))}</div><div class="c">'
+            f'<div class="ev">{times}<div class="c">'
             f'<div class="l1"><span class="tag {_e(event.get("source"))}">'
-            f'{_e(event.get("event_type"))}</span>{label}{link}</div>'
-            f'{second}<div class="where">{_e(where)}</div></div></div>'
+            f'{_e(event.get("event_type"))}</span>{label}{badge}{link}</div>'
+            f'{second}<div class="where">{_e(context)}</div></div></div>'
         )
 
     day_block = (

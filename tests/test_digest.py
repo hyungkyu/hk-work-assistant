@@ -588,3 +588,72 @@ def test_a_meeting_reaches_every_attendee_not_only_its_organiser(database):
     from rlwrld_worklog.digest import _event as row_to_event
 
     assert all(row_to_event(row)["excerpt"] == "주간 리뷰 — 로드맵 점검" for row in rows)
+
+
+def test_slack_markup_becomes_something_a_person_can_read():
+    from rlwrld_worklog.digest import excerpt
+
+    found = excerpt(
+        "message",
+        {"text": "<@U07EKRU6F7H> <#C01|eng> 배포 <https://x.dev|링크> 봐줘"},
+        names={"U07EKRU6F7H": "류형규"},
+    )
+    assert found == "@류형규 #eng 배포 링크 봐줘"
+
+
+def test_an_unknown_slack_id_keeps_its_id_rather_than_inventing_a_name():
+    from rlwrld_worklog.digest import excerpt
+
+    assert excerpt("message", {"text": "<@UNOBODY> 봐줘"}, names={}) == "<@UNOBODY> 봐줘"
+
+
+def test_a_slack_line_says_the_channel_by_name():
+    from rlwrld_worklog.digest import _where
+
+    assert _where("slack", "message", {"channel_name": "eng"}, {}, "C07") == "#eng"
+    assert _where("slack", "message", {}, {}, "C07") == "C07"
+
+
+def test_a_meeting_line_carries_its_clock_time_and_headcount():
+    from rlwrld_worklog.digest import _detail
+
+    raw = {
+        "start": {"dateTime": "2026-09-15T10:00:00+09:00"},
+        "end": {"dateTime": "2026-09-15T11:30:00+09:00"},
+        "attendees": [{}, {}, {}],
+    }
+    assert _detail("google_calendar", "event", raw, None) == "10:00–11:30 · 3명"
+
+
+def test_an_all_day_event_says_so_rather_than_claiming_midnight():
+    from rlwrld_worklog.digest import _detail
+
+    raw = {"start": {"date": "2026-09-15"}, "end": {"date": "2026-09-16"}}
+    assert _detail("google_calendar", "event", raw, None) == "종일"
+
+
+def test_a_page_saved_many_times_folds_into_one_line_with_a_count():
+    from rlwrld_worklog.digest import collapse
+
+    events = [
+        {"source": "notion", "where": "주간 회고", "excerpt": "주간 회고", "time": "09:10"},
+        {"source": "notion", "where": "주간 회고", "excerpt": "주간 회고", "time": "09:40"},
+        {"source": "notion", "where": "주간 회고", "excerpt": "주간 회고", "time": "11:05"},
+        {"source": "slack", "where": "#eng", "excerpt": "배포했어", "time": "11:10"},
+    ]
+    folded = collapse(events)
+    assert [event["excerpt"] for event in folded] == ["주간 회고", "배포했어"]
+    assert folded[0]["repeat"] == 3
+    assert (folded[0]["time"], folded[0]["last_time"]) == ("09:10", "11:05")
+    assert folded[1]["repeat"] == 1
+
+
+def test_lines_with_no_words_are_never_folded_together():
+    """Two Slurm jobs with no readable payload are two jobs, not one run twice."""
+    from rlwrld_worklog.digest import collapse
+
+    events = [
+        {"source": "slurm", "where": "cluster", "excerpt": None, "time": "01:00"},
+        {"source": "slurm", "where": "cluster", "excerpt": None, "time": "02:00"},
+    ]
+    assert len(collapse(events)) == 2

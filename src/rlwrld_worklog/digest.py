@@ -17,6 +17,7 @@ The day is KST, because that is the day the people being described worked.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -99,7 +100,9 @@ def _text_at(raw: dict[str, Any], key: str) -> str | None:
     return collapsed or None
 
 
-def excerpt(entity_type: str | None, raw_payload: Any) -> str | None:
+def excerpt(
+    entity_type: str | None, raw_payload: Any, *, names: dict[str, str] | None = None
+) -> str | None:
     """A short, readable "what this was" for one timeline line.
 
     None rather than "" when the payload holds no words: an absent excerpt is
@@ -114,10 +117,128 @@ def excerpt(entity_type: str | None, raw_payload: Any) -> str | None:
             parts.append(found)
     if not parts:
         return None
-    joined = " — ".join(parts)
+    joined = _readable(" — ".join(parts), names)
     if len(joined) <= EXCERPT_CHARS:
         return joined
     return joined[: EXCERPT_CHARS - 1].rstrip() + "…"
+
+
+_MENTION = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]*)?>")
+_CHANNEL_LINK = re.compile(r"<#[A-Z0-9]+\|([^>]*)>")
+_URL_LINK = re.compile(r"<(https?://[^|>]+)(?:\|([^>]*))?>")
+
+
+def _readable(text: str, names: dict[str, str] | None) -> str:
+    """Slack's wire markup, as a person reads it.
+
+    `<@U07EKRU6F7H>` is who the message was addressed to, and leaving it as an
+    id makes that fact unreadable. An id with no roster entry keeps its id
+    rather than becoming a plausible-looking name.
+    """
+    lookup = names or {}
+
+    def mention(match: re.Match[str]) -> str:
+        found = lookup.get(match.group(1))
+        return f"@{found}" if found else match.group(0)
+
+    text = _MENTION.sub(mention, text)
+    text = _CHANNEL_LINK.sub(lambda m: f"#{m.group(1)}", text)
+    return _URL_LINK.sub(lambda m: m.group(2) or m.group(1), text)
+
+
+def _where(
+    source: str,
+    entity_type: str | None,
+    labels: Any,
+    raw: Any,
+    container_id: str | None,
+) -> str | None:
+    """The place, in the source's own words rather than as an id."""
+    labels = labels if isinstance(labels, dict) else {}
+    raw = raw if isinstance(raw, dict) else {}
+    if source == "slack":
+        channel = labels.get("channel_name")
+        return f"#{channel}" if channel else container_id
+    if source == "notion":
+        # A page is its own document; a comment hangs off one.
+        found = _text_at(raw, "title") or _plain_notion_title(raw) or labels.get("name")
+        return found or container_id
+    if source == "google_calendar":
+        return labels.get("calendar_name") or container_id
+    return container_id
+
+
+def _plain_notion_title(raw: dict[str, Any]) -> str | None:
+    """A Notion page keeps its title inside `properties`, shape varying by database."""
+    from .normalizers import _plain_text
+
+    properties = raw.get("properties")
+    if not isinstance(properties, dict):
+        return None
+    found = " ".join(_plain_text(properties).split())
+    return found[:200] or None
+
+
+def _detail(source: str, entity_type: str | None, raw: Any, thread_id: str | None) -> str | None:
+    """The one fact this source needs that the shared columns cannot hold."""
+    raw = raw if isinstance(raw, dict) else {}
+    if source == "google_calendar":
+        span = _time_span(raw)
+        attendees = raw.get("attendees")
+        people = f"{len(attendees)}명" if isinstance(attendees, list) and attendees else None
+        return " · ".join(part for part in (span, people) if part) or None
+    if source == "slack" and thread_id:
+        return "스레드 답글"
+    if entity_type == "review":
+        state = raw.get("state")
+        return str(state).lower() if state else None
+    return None
+
+
+def _time_span(raw: dict[str, Any]) -> str | None:
+    """A meeting's clock time in KST, from Google's start/end pair."""
+    def one(key: str) -> str | None:
+        value = raw.get(key)
+        if not isinstance(value, dict):
+            return None
+        stamp = value.get("dateTime")
+        if not isinstance(stamp, str):
+            # An all-day event has `date` and no clock time. Saying so beats
+            # inventing 00:00.
+            return "종일" if value.get("date") else None
+        try:
+            return datetime.fromisoformat(stamp).astimezone(KST).strftime("%H:%M")
+        except ValueError:
+            return None
+
+    start, end = one("start"), one("end")
+    if start == "종일":
+        return "종일"
+    if start and end:
+        return f"{start}–{end}"
+    return start or end
+
+
+def collapse(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fold repeats of the same thing into one line carrying a count.
+
+    A Notion page saved twenty times is twenty timeline rows and one piece of
+    news. Identity is (source, where, excerpt): the same words in the same
+    place. Times are kept as a range rather than dropped, because when it
+    started and when it stopped are both part of what happened.
+    """
+    folded: list[dict[str, Any]] = []
+    index: dict[tuple, int] = {}
+    for event in events:
+        key = (event.get("source"), event.get("where"), event.get("excerpt"))
+        if event.get("excerpt") is None or key not in index:
+            index[key] = len(folded)
+            folded.append({**event, "repeat": 1})
+            continue
+        seen = folded[index[key]]
+        seen["repeat"] += 1
+        seen["last_time"] = event.get("time")
+    return folded
 
 
 def kst_day_bounds(day: date) -> tuple[datetime, datetime]:
@@ -262,6 +383,16 @@ def build_day(
             )
             result.unattributed_events = int(cursor.fetchone()[0])
 
+            # Slack writes mentions as <@U07EKRU6F7H>, which is unreadable. One
+            # lookup for the whole day turns them into names, so a line can say
+            # who it was addressed to.
+            cursor.execute(
+                "SELECT identity.value, person.name FROM org_identity identity "
+                "JOIN org_person person ON person.person_id = identity.person_id "
+                "WHERE identity.kind = 'slack'"
+            )
+            names = {str(value): str(name) for value, name in cursor.fetchall()}
+
             cursor.execute(_EVENTS_SQL, {"start": start, "end": end, "kinds": list(_ALL_KINDS)})
             rows = cursor.fetchall()
 
@@ -270,12 +401,12 @@ def build_day(
             for row in rows:
                 person_id = row[0]
                 if current is not None and person_id != current:
-                    _write(cursor, current, day, events, result, Jsonb)
+                    _write(cursor, current, day, collapse(events), result, Jsonb)
                     events = []
                 current = person_id
-                events.append(_event(row))
+                events.append(_event(row, names=names))
             if current is not None:
-                _write(cursor, current, day, events, result, Jsonb)
+                _write(cursor, current, day, collapse(events), result, Jsonb)
 
             if dry_run:
                 connection.rollback()
@@ -284,7 +415,7 @@ def build_day(
     return result
 
 
-def _event(row) -> dict[str, Any]:
+def _event(row, *, names: dict[str, str] | None = None) -> dict[str, Any]:
     (
         _person_id,
         occurred_at,
@@ -312,7 +443,14 @@ def _event(row) -> dict[str, Any]:
         # empty string reads as a title that happens to be blank.
         "title": _title(labels if isinstance(labels, dict) else {}),
         "entity_type": entity_type,
-        "excerpt": excerpt(entity_type, raw_payload),
+        "excerpt": excerpt(entity_type, raw_payload, names=names),
+        # Where a person would go looking for this, in that source's own terms:
+        # a Slack channel, a Notion document, a calendar, a repository. The raw
+        # container id ("C07ABCDEF") stays in `container` for machines.
+        "where": _where(source, entity_type, labels, raw_payload, container_id),
+        # The one extra fact that source needs and the others do not -- a
+        # meeting's time span, a reply's threadedness, a review's verdict.
+        "detail": _detail(source, entity_type, raw_payload, thread_id),
     }
 
 
