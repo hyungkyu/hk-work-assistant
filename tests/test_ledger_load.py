@@ -233,17 +233,27 @@ def test_timeline_payload_points_at_the_ledger_instead_of_copying_it(tmp_path, m
         assert params["classifications"] == ["unclassified"]
 
 
-def test_notion_blocks_stay_out_of_the_timeline(tmp_path, monkeypatch):
+def test_notion_blocks_reach_the_timeline(tmp_path, monkeypatch):
+    """Reverses a deliberate earlier decision, with the evidence that broke it.
+
+    Blocks were kept out as "page content, not a timeline activity". The
+    consequence, measured on 2026-09-16 for one person over one week: 36 block
+    records last-edited by him, 2 timeline events. Editing a Notion document
+    updates its blocks and not the page row, so the old rule made real writing
+    invisible to the very question this system exists to answer. The digest
+    folds a document's blocks back into one line per document per day, which
+    is what the old rule was protecting against.
+    """
     out = prepared(tmp_path, source="notion")
     recorder = {"statements": []}
     install_fake(monkeypatch, recorder)
     result = load_source(
         database_url="postgresql://fake", ledger_root=out, source="notion", dry_run=True
     )
-    # 3 pages + 2 blocks + 1 comment stored; only pages and the comment projected
+    # 3 pages + 2 blocks + 1 comment stored, and now all six projected
     assert result.ledger_records == 6
-    assert result.timeline_events == 4
-    assert result.skipped_not_projected == 2
+    assert result.timeline_events == 6
+    assert result.skipped_not_projected == 0
     assert result.extracted_text == 1
 
 

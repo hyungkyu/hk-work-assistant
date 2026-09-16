@@ -519,6 +519,10 @@ def test_a_meeting_reaches_every_attendee_not_only_its_organiser(database):
             cursor.execute(
                 "DELETE FROM org_identity WHERE value IN ('a@rlwrld.ai', 'b@rlwrld.ai')"
             )
+            cursor.execute(
+                "DELETE FROM person_day_digest WHERE person_id IN "
+                "(SELECT person_id FROM org_person WHERE name IN ('주최', '참석'))"
+            )
             cursor.execute("DELETE FROM org_person WHERE name IN ('주최', '참석')")
             cursor.execute("DELETE FROM timeline_events WHERE external_id = 'evt-fanout'")
             cursor.execute("DELETE FROM ledger_records WHERE source_entity_id = 'evt-fanout'")
@@ -582,6 +586,9 @@ def test_a_meeting_reaches_every_attendee_not_only_its_organiser(database):
             )
             rows = cursor.fetchall()
 
+    # Other tests share this database and this window; this test is about the
+    # calendar rows it inserted.
+    rows = [row for row in rows if row[2] == "google_calendar"]
     people = [str(row[0]) for row in rows]
     assert sorted(people) == sorted([str(organiser), str(attendee)])
     assert people.count(str(organiser)) == 1
@@ -657,3 +664,156 @@ def test_lines_with_no_words_are_never_folded_together():
         {"source": "slurm", "where": "cluster", "excerpt": None, "time": "02:00"},
     ]
     assert len(collapse(events)) == 2
+
+
+def test_a_notion_block_reads_its_words_out_of_whatever_shape_it_has():
+    """A block names its rich_text after its own type, so there is no one field."""
+    from rlwrld_worklog.digest import excerpt
+
+    assert excerpt("block", {"paragraph": {"rich_text": [{"plain_text": "GPU 재분배"}]}}) == "GPU 재분배"
+    assert excerpt("block", {"to_do": {"rich_text": [{"plain_text": "초안 정리"}]}}) == "초안 정리"
+    assert excerpt("block", {"divider": {}}) is None
+
+
+def test_a_block_is_placed_by_its_document_not_its_own_id():
+    from rlwrld_worklog.digest import _where
+
+    parent = {"properties": {"title": {"title": [{"plain_text": "주간 회고"}]}}}
+    assert _where("notion", "block", {}, {}, "c-id", parent) == "주간 회고"
+    assert _where("notion", "block", {}, {}, "c-id", None) == "c-id"
+
+
+def test_a_document_edited_paragraph_by_paragraph_is_one_line():
+    """Thirty blocks in one document is one piece of news, not thirty."""
+    from rlwrld_worklog.digest import collapse
+
+    events = [
+        {"source": "notion", "where": "주간 회고", "excerpt": "첫 문단",
+         "fold_by": "document", "time": "09:10"},
+        {"source": "notion", "where": "주간 회고", "excerpt": "둘째 문단",
+         "fold_by": "document", "time": "09:12"},
+        {"source": "notion", "where": "로드맵", "excerpt": "셋째",
+         "fold_by": "document", "time": "10:00"},
+    ]
+    folded = collapse(events)
+    assert [event["where"] for event in folded] == ["주간 회고", "로드맵"]
+    assert folded[0]["repeat"] == 2
+    assert folded[0]["last_time"] == "09:12"
+
+
+@REQUIRES_DATABASE
+def test_a_block_line_names_its_document_through_the_parent_join(database):
+    """The LATERAL lookup that turns a page id into a page title, run for real."""
+    import uuid
+
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    from rlwrld_worklog.digest import _ALL_KINDS, _EVENTS_SQL
+    from rlwrld_worklog.digest import _event as row_to_event
+
+    person, page_id, block = uuid.uuid4(), "page-1", uuid.uuid4()
+    page_ledger = uuid.uuid4()
+    moment = datetime(2026, 9, 12, 10, tzinfo=KST)
+
+    def ledger_row(cursor, ledger_id, entity_type, source_entity_id, raw, relations):
+        fields = dict(_CAL_LEDGER_FIELDS)
+        fields.update(
+            source="notion",
+            entity_type=entity_type,
+            source_entity_id=source_entity_id,
+            ledger_id=ledger_id,
+            scope=Jsonb({}),
+            source_entity_key=Jsonb({"id": source_entity_id}),
+            raw_payload=Jsonb(raw),
+            relations=Jsonb(relations),
+            provenance=Jsonb({}),
+            coverage=Jsonb({}),
+            observation_window=Jsonb({}),
+            capture_completeness=Jsonb({}),
+            supplement_provenance=Jsonb({}),
+            visibility_routing=Jsonb({}),
+            denormalized_label_snapshot=Jsonb({}),
+            source_created_at=moment,
+            collected_at=moment,
+        )
+        cursor.execute(
+            f"INSERT INTO ledger_records ({','.join(fields)}) "
+            f"VALUES ({','.join('%s' for _ in fields)})",
+            list(fields.values()),
+        )
+
+    with psycopg.connect(os.environ["WORKLOG_TEST_DATABASE_URL"]) as connection:
+        with connection.cursor() as cursor:
+            # Repeatable on a database other tests have already written to:
+            # this clears exactly the rows it is about to insert.
+            cursor.execute("DELETE FROM org_identity WHERE value = 'notion-user-1'")
+            cursor.execute(
+                "DELETE FROM person_day_digest WHERE person_id IN "
+                "(SELECT person_id FROM org_person WHERE name = '블록편집자')"
+            )
+            cursor.execute("DELETE FROM org_person WHERE name = '블록편집자'")
+            cursor.execute(
+                "DELETE FROM timeline_events WHERE external_id IN ('block-1')"
+            )
+            cursor.execute(
+                "DELETE FROM ledger_records WHERE source_entity_id IN ('block-1', 'page-1')"
+            )
+            cursor.execute(
+                "INSERT INTO roster_observation (observed_at, source, row_count) "
+                "VALUES (now(), 'roster_seed_2', 1) RETURNING observation_id"
+            )
+            observation = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO org_person (person_id, name, first_seen, last_seen) "
+                "VALUES (%s, '블록편집자', %s, %s)",
+                (person, observation, observation),
+            )
+            cursor.execute(
+                "INSERT INTO org_identity (person_id, kind, value, first_seen, last_seen, "
+                "origin) VALUES (%s, 'notion', 'notion-user-1', %s, %s, 'roster')",
+                (person, observation, observation),
+            )
+            ledger_row(
+                cursor,
+                page_ledger,
+                "page",
+                page_id,
+                {"properties": {"title": {"title": [{"plain_text": "주간 회고"}]}}},
+                {},
+            )
+            ledger_row(
+                cursor,
+                block,
+                "block",
+                "block-1",
+                {"paragraph": {"rich_text": [{"plain_text": "GPU 재분배 정리"}]}},
+                {"page_id": page_id, "last_edited_by_user_id": "notion-user-1"},
+            )
+            cursor.execute(
+                "INSERT INTO timeline_events (event_id, source, event_type, external_id, "
+                "actor_external_id, occurred_at, ingested_at, container_id, thread_id, payload) "
+                "VALUES (%s, 'notion', 'notion_block', 'block-1', 'notion-user-1', %s, now(), "
+                "%s, 'block-1', %s)",
+                (block, moment, page_id, Jsonb({"labels": {}})),
+            )
+        connection.commit()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                _EVENTS_SQL,
+                {
+                    "start": datetime(2026, 9, 12, tzinfo=KST),
+                    "end": datetime(2026, 9, 13, tzinfo=KST),
+                    "kinds": list(_ALL_KINDS),
+                },
+            )
+            rows = cursor.fetchall()
+
+    # Other tests share this database and this window; this test is about the
+    # Notion rows it inserted.
+    mine = [row for row in rows if row[2] == "notion"]
+    assert len(mine) == 1
+    event = row_to_event(mine[0])
+    assert event["where"] == "주간 회고"
+    assert event["excerpt"] == "GPU 재분배 정리"
+    assert event["fold_by"] == "document"

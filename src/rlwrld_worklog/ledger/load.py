@@ -36,11 +36,18 @@ LEGACY_ORIGIN_PRIORITY = 20
 LEGACY_THREAD_STORE_PRIORITY = 10
 LIVE_ORIGIN_PRIORITY = 100
 
-# Entity types projected onto the activity timeline. Notion blocks stay in the
-# ledger only: they are page content, not a timeline activity, and promoting
-# them would double-count page edits. Slurm step rows (`.batch`, `.extern`)
-# never reach the ledger at all, for the same reason -- they are parts of a
-# job, not activities.
+# Entity types projected onto the activity timeline. Slurm step rows
+# (`.batch`, `.extern`) never reach the ledger at all: they are parts of a job,
+# not activities.
+#
+# Notion blocks were excluded on the same reasoning -- page content, not an
+# activity, and promoting them would double-count page edits. That was wrong,
+# and the measurement is on 2026-09-16: for one person over one week, 36 block
+# records last-edited by him and 2 timeline events. Editing a Notion document
+# updates its blocks, not the page row, so the rule made real writing
+# invisible. Blocks are projected now, and the double-counting the old rule
+# feared is handled where it belongs -- the digest folds a document's blocks
+# into one line per document per day.
 #
 # GitHub and Slurm were absent from this set until 2026-09-11, and the effect
 # was not a missing feature but a silent one: measured on the nightly load of
@@ -52,6 +59,12 @@ LIVE_ORIGIN_PRIORITY = 100
 PROJECTED_ENTITY_TYPES = {
     "message",
     "page",
+    # Editing a Notion document updates its blocks, not the page row, so a
+    # week of real writing showed up as 36 block records and 2 timeline
+    # events. Leaving blocks unprojected meant the timeline could not see
+    # anyone actually working in Notion. The digest folds a document's blocks
+    # back into one line, so this does not turn one edit session into fifty.
+    "block",
     "comment",
     "event",
     # GitHub
@@ -68,6 +81,7 @@ PROJECTED_ENTITY_TYPES = {
 EVENT_TYPE_BY_ENTITY = {
     "message": "message",
     "page": "notion_page",
+    "block": "notion_block",
     "comment": "notion_comment",
     "event": "calendar_event",
     # Prefixed by source, because `issue` and `comment` alone would collide

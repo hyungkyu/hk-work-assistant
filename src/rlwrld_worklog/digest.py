@@ -110,6 +110,17 @@ def excerpt(
     """
     if not isinstance(raw_payload, dict):
         return None
+    if entity_type == "block":
+        # A block keeps its words in rich_text under a key named after its own
+        # type (paragraph, heading_2, to_do ...), so there is no single field
+        # to read -- the recursive walk is the only shape-independent way in.
+        from .normalizers import _plain_text
+
+        found = " ".join(_plain_text(raw_payload).split())
+        if not found:
+            return None
+        found = _readable(found, names)
+        return found if len(found) <= EXCERPT_CHARS else found[: EXCERPT_CHARS - 1] + "…"
     parts: list[str] = []
     for key in _BODY_KEYS.get(entity_type or "", ()):
         found = _text_at(raw_payload, key)
@@ -152,6 +163,7 @@ def _where(
     labels: Any,
     raw: Any,
     container_id: str | None,
+    parent_raw: Any = None,
 ) -> str | None:
     """The place, in the source's own words rather than as an id."""
     labels = labels if isinstance(labels, dict) else {}
@@ -160,8 +172,14 @@ def _where(
         channel = labels.get("channel_name")
         return f"#{channel}" if channel else container_id
     if source == "notion":
-        # A page is its own document; a comment hangs off one.
-        found = _text_at(raw, "title") or _plain_notion_title(raw) or labels.get("name")
+        # A page is its own document; a block or comment hangs off one, and
+        # the document is the place a person would go looking.
+        found = (
+            _plain_notion_title(parent_raw if isinstance(parent_raw, dict) else {})
+            or _text_at(raw, "title")
+            or _plain_notion_title(raw)
+            or labels.get("name")
+        )
         return found or container_id
     if source == "google_calendar":
         return labels.get("calendar_name") or container_id
@@ -230,8 +248,14 @@ def collapse(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     folded: list[dict[str, Any]] = []
     index: dict[tuple, int] = {}
     for event in events:
-        key = (event.get("source"), event.get("where"), event.get("excerpt"))
-        if event.get("excerpt") is None or key not in index:
+        fold_by = event.get("fold_by")
+        key = (
+            event.get("source"),
+            event.get("where"),
+            "" if fold_by == "document" else event.get("excerpt"),
+        )
+        foldable = fold_by == "document" or event.get("excerpt") is not None
+        if not foldable or key not in index:
             index[key] = len(folded)
             folded.append({**event, "repeat": 1})
             continue
@@ -318,12 +342,25 @@ _EVENTS_SQL = """
            event.actor_external_id,
            event.payload,
            ledger.entity_type,
-           ledger.raw_payload
+           ledger.raw_payload,
+           -- A Notion block knows its page id but not its page title, and a
+           -- line that reads "3b16cbdf..." names nothing. The parent page's
+           -- own ledger row carries the title, and ledger_records_entity_idx
+           -- covers this lookup.
+           parent.raw_payload AS parent_raw
       FROM matched
       JOIN timeline_events event
         ON event.event_id = matched.event_id
       LEFT JOIN ledger_records ledger
         ON ledger.ledger_id = event.event_id
+      LEFT JOIN LATERAL (
+          SELECT page.raw_payload
+            FROM ledger_records page
+           WHERE page.source = 'notion'
+             AND page.entity_type = 'page'
+             AND page.source_entity_id = ledger.relations->>'page_id'
+           LIMIT 1
+      ) AS parent ON ledger.source = 'notion'
      ORDER BY matched.person_id, event.occurred_at, event.event_type
 """
 
@@ -428,6 +465,7 @@ def _event(row, *, names: dict[str, str] | None = None) -> dict[str, Any]:
         payload,
         entity_type,
         raw_payload,
+        parent_raw,
     ) = row
     labels = (payload or {}).get("labels") or {}
     return {
@@ -447,10 +485,15 @@ def _event(row, *, names: dict[str, str] | None = None) -> dict[str, Any]:
         # Where a person would go looking for this, in that source's own terms:
         # a Slack channel, a Notion document, a calendar, a repository. The raw
         # container id ("C07ABCDEF") stays in `container` for machines.
-        "where": _where(source, entity_type, labels, raw_payload, container_id),
+        "where": _where(source, entity_type, labels, raw_payload, container_id, parent_raw),
         # The one extra fact that source needs and the others do not -- a
         # meeting's time span, a reply's threadedness, a review's verdict.
         "detail": _detail(source, entity_type, raw_payload, thread_id),
+        # What counts as "the same thing happening again". Normally the same
+        # words in the same place; for a Notion block it is the document
+        # itself, because editing a document paragraph by paragraph is one
+        # piece of news, not thirty.
+        "fold_by": "document" if entity_type == "block" else None,
     }
 
 
