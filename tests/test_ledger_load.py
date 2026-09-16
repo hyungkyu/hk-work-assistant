@@ -507,3 +507,45 @@ def test_the_image_carries_the_migrations_it_may_be_asked_to_apply(  ) -> None:
 
     dockerfile = (_Path(__file__).resolve().parents[1] / "Dockerfile").read_text(encoding="utf-8")
     assert "COPY sql ./sql" in dockerfile
+
+
+def test_a_calendar_event_attributes_to_its_organiser():
+    from rlwrld_worklog.ledger.load import _projection
+
+    found = _projection(
+        {
+            "entity_type": "event",
+            "source_entity_id": "evt-1",
+            "relations": {"organizer_email": "a@rlwrld.ai", "creator_email": "b@rlwrld.ai"},
+            "scope": {"calendar_id": "cal-1"},
+            "raw_payload": {"htmlLink": "https://cal/evt-1"},
+        }
+    )
+    assert found["actor"] == "a@rlwrld.ai"
+    assert found["actor_kind"] == "calendar_email"
+    assert found["permalink"] == "https://cal/evt-1"
+
+
+def test_a_calendar_event_falls_back_to_its_creator():
+    from rlwrld_worklog.ledger.load import _projection
+
+    found = _projection(
+        {
+            "entity_type": "event",
+            "source_entity_id": "evt-2",
+            "relations": {"creator_email": "b@rlwrld.ai"},
+            "scope": {},
+            "raw_payload": {},
+        }
+    )
+    assert found["actor"] == "b@rlwrld.ai"
+
+
+def test_a_calendar_event_with_no_email_says_unknown_rather_than_guessing():
+    from rlwrld_worklog.ledger.load import _projection
+
+    found = _projection(
+        {"entity_type": "event", "source_entity_id": "e", "relations": {}, "scope": {}, "raw_payload": {}}
+    )
+    assert found["actor"] is None
+    assert found["actor_kind"] == "unknown"

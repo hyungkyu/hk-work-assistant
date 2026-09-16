@@ -347,6 +347,18 @@ def _projection(record: dict[str, Any]) -> dict[str, Any]:
         container = relations.get("page_id")
         thread = relations.get("discussion_id")
         permalink = None
+    elif entity == "event":
+        # A calendar event used to fall through to the `else` below, where the
+        # actor is hardcoded None -- so every meeting in the system attributed
+        # to nobody and no one's digest ever showed a meeting. The organiser is
+        # the one person the event names as having done something; the creator
+        # is the fallback for an event booked on someone else's behalf.
+        # Attendance is a different fact, and one actor column cannot hold it.
+        actor = relations.get("organizer_email") or relations.get("creator_email")
+        actor_kind = "calendar_email" if actor else "unknown"
+        container = scope.get("calendar_id")
+        thread = record["source_entity_id"]
+        permalink = raw.get("htmlLink")
     else:
         actor = None
         container = scope.get("calendar_id")

@@ -184,6 +184,10 @@ _KIND_BY_ACTOR_KIND = {
     "github_login": "github",
     "slurm_user": "slurm",
     "git_email": "email_official",
+    # A calendar organiser is an email address, and the roster keeps work
+    # addresses under email_official -- the same space a commit's git email
+    # lands in.
+    "calendar_email": "email_official",
 }
 
 _ALL_KINDS = (
