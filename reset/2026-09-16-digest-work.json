@@ -1,0 +1,89 @@
+{
+  "name": "2026-09-16-digest-work",
+  "note": "9/15~16 리포트 작업이 보드에 전혀 올라가지 않은 것을 뒤늦게 올림. 셋은 패치가 나갔지만 배포 확인 전이라 done이 아니라 ready. 마지막 항목은 이 누락 자체를 고치는 운영 규칙.",
+  "entries": [
+    {
+      "op": "create",
+      "title": "다이제스트 각 줄에 실제 내용 표시",
+      "detail": "타임라인이 '제목 없음'만 보여 무슨 일이었는지 읽을 수 없었음. 원인은 설계: timeline_events.payload는 원장 포인터만 들고 원문을 복사하지 않음(load.py _payload_for_timeline). ledger_records 조인으로 원문을 읽어 소스별 발췌를 만듦 — 슬랙 text, 커밋 commit.message, PR 제목+본문, 노션 rich text 평문화.",
+      "next_action": "패치 0033 배포 확인 후 리포트 재생성해서 내용이 보이는지 확인",
+      "assigned_to": "mori",
+      "priority": "high",
+      "phase": "P1",
+      "status": "ready",
+      "source_ref": "incoming/0033-digest-excerpt.patch"
+    },
+    {
+      "op": "create",
+      "title": "캘린더 이벤트를 사람에게 붙이기 (주최자)",
+      "detail": "3일치 548건 중 사람에게 붙은 것이 0건. 수집 문제가 아니라 코드 문제였음 — load.py _projection에 event 분기가 없어 else의 actor=None 하드코딩으로 떨어짐. 지금까지 누구의 다이제스트에도 회의가 뜬 적 없음. 주최자 이메일(없으면 생성자)로 붙게 수정.",
+      "next_action": "0034 배포 후 ledger project --source google_calendar 재투영, attributed 수치 재확인",
+      "assigned_to": "mori",
+      "priority": "high",
+      "phase": "P1",
+      "status": "ready",
+      "source_ref": "incoming/0034-calendar-actor.patch"
+    },
+    {
+      "op": "create",
+      "title": "회의를 참석자 모두의 하루에 붙이기",
+      "detail": "어제 한 일은 회의를 '연' 것이 아니라 '참석한' 것. 타임라인은 액터 컬럼이 하나라 주최자만 붙이면 앉아 있던 사람 전원에게 회의가 안 보임. 스키마 대신 다이제스트 쿼리를 UNION 두 갈래로: 액터 경로 + 캘린더 attendee_responses 펼침. declined 제외, 주최자 중복 제거, 이메일 대소문자 무시. 실제 포스트그레스에 프로젝트 스키마 올려 검증함.",
+      "next_action": "0035 배포 후 리포트에서 참석 회의가 뜨는지 눈으로 확인",
+      "assigned_to": "mori",
+      "priority": "high",
+      "phase": "P1",
+      "status": "ready",
+      "source_ref": "incoming/0035-calendar-attendee-fanout.patch"
+    },
+    {
+      "op": "create",
+      "title": "슬랙 고아 답글 622건 부모 수집",
+      "detail": "부모 메시지가 원장에 없는 스레드 답글 622건. slack-thread-sweep 서브커맨드와 slack_sweep.py는 이미 있음. 아직 실행하지 않음.",
+      "next_action": "dry-run으로 남은 고아 수를 먼저 재측정한 뒤 실행",
+      "assigned_to": "mori",
+      "priority": "normal",
+      "phase": "P1",
+      "status": "todo"
+    },
+    {
+      "op": "create",
+      "title": "24시 이후 수집 원칙과 재수집 경로",
+      "detail": "하루는 그 날 자정이 지나야 확정. 자정 전에 수집한 날은 다음날 다시 수집한다(HK 원칙). 지금은 days.log의 ok만 보고 건너뛰어서 규칙 버전이 올라가도 재수집이 안 됨 — 8/25, 9/1~9/3이 그렇게 빠졌었음. backfill-days.sh --force와 함께 처리. 410 재동기화 구간을 false-green으로 만들지 않는 것이 조건.",
+      "next_action": "observed_through가 day_end를 넘지 못한 날을 고르는 판정부터 코드로 확정",
+      "assigned_to": "mori",
+      "priority": "normal",
+      "phase": "P1",
+      "status": "todo"
+    },
+    {
+      "op": "create",
+      "title": "리포트에서 슬럼 잡 접기 여부 결정",
+      "detail": "3일치 슬럼 잡이 7,907건(붙은 것 7,372건)으로 다른 소스 전체를 압도함. 한 사람의 하루가 잡 로그로 덮일 수 있음. 실물 리포트를 보고 접을지 정한다.",
+      "next_action": "HK가 리포트 확인 후 결정",
+      "assigned_to": "hk",
+      "priority": "normal",
+      "phase": "P2",
+      "status": "todo"
+    },
+    {
+      "op": "create",
+      "title": "test_slack_sweep 부모-부재 테스트 실패",
+      "detail": "빈 테스트 DB에서 InvalidTextRepresentation으로 실패. 이번 다이제스트 작업 이전 트리에서도 동일하게 실패하므로 기존 문제이며 이번 변경과 무관함.",
+      "next_action": "픽스처가 넣는 값의 타입부터 확인",
+      "assigned_to": "mori",
+      "priority": "low",
+      "phase": "P1",
+      "status": "todo"
+    },
+    {
+      "op": "create",
+      "title": "모리는 작업을 시작할 때 보드에 먼저 올린다",
+      "detail": "9/15~16 리포트 작업이 채팅으로만 진행되고 보드에 한 줄도 올라가지 않음. HK가 '업무 일지가 갱신이 안 되는 느낌'으로 먼저 알아챔. P0의 정의가 '누가 무엇을 하고 언제 끝나고 뭐가 블로커인지 투명하게 공유되는 것'인데 그것을 만드는 쪽이 그것을 쓰지 않았음. 규칙: 한 덩어리 작업을 시작하면 착수 시점에 항목을 만들고, 패치를 보내면 ready로, 배포가 확인되면 sha와 함께 done으로 옮긴다. 채팅은 보드의 대체재가 아니다.",
+      "next_action": "docs/agent-onboarding.md에 이 규칙을 적고, 다음 작업부터 착수 시점에 항목을 먼저 만든다",
+      "assigned_to": "mori",
+      "priority": "urgent",
+      "phase": "P0",
+      "status": "ready"
+    }
+  ]
+}
