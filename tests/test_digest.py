@@ -1164,3 +1164,44 @@ def test_every_client_the_cli_builds_satisfies_what_the_digest_calls():
 
     source = inspect.getsource(cli._drive_reader)
     assert "GoogleDriveFiles" in source
+
+
+def test_a_meeting_note_is_read_once_for_the_whole_run(tmp_path):
+    """The cache that was missing: 270 people x 7 days x one weekly meeting."""
+    from rlwrld_worklog.digest import NoteCache, attach_notes
+
+    calls = []
+
+    class Drive:
+        def export_text(self, file_id, limit=4000):
+            calls.append(file_id)
+            return "요약\n결론만 남겼다."
+
+    cache = NoteCache(tmp_path / "notes.json")
+    link = [{"url": "https://docs.google.com/document/d/1AbC_defGHIjk/edit"}]
+    for _ in range(50):
+        events = [{"source": "google_calendar", "links": link}]
+        assert attach_notes(events, Drive(), cache) == 1
+        assert events[0]["note"] == "결론만 남겼다."
+    assert calls == ["1AbC_defGHIjk"]
+    assert cache.reads == 1
+
+    # And the next run does not read it again.
+    cache.save()
+    again = NoteCache(tmp_path / "notes.json")
+    events = [{"source": "google_calendar", "links": link}]
+    attach_notes(events, Drive(), again)
+    assert again.reads == 0
+    assert events[0]["note"] == "결론만 남겼다."
+
+
+def test_an_unwritable_cache_slows_the_run_rather_than_failing_it(tmp_path):
+    from rlwrld_worklog.digest import NoteCache
+
+    blocked = tmp_path / "missing-dir" / "x" / "notes.json"
+    cache = NoteCache(blocked)
+    cache.entries["a"] = "b"
+    cache.save()  # must not raise
+    unreadable = tmp_path / "broken.json"
+    unreadable.write_text("not json", encoding="utf-8")
+    assert NoteCache(unreadable).entries == {}

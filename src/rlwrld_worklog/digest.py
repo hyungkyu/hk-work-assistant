@@ -17,9 +17,12 @@ The day is KST, because that is the day the people being described worked.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 KST = timezone(timedelta(hours=9))
@@ -317,6 +320,15 @@ def slack_place(raw: Any, relations: Any, names: dict[str, str]) -> dict[str, An
     return {"label": f"#{name}", "private": bool(raw.get("is_private"))}
 
 
+def note_cache_path() -> Path | None:
+    """Beside the rest of the collected data, never in the repository."""
+    root = os.environ.get("RAW_ARCHIVE_ROOT") or "/data/rlwrld-worklog"
+    try:
+        return Path(root) / "digest" / "meeting-notes.json"
+    except (TypeError, ValueError):
+        return None
+
+
 _DRIVE_FILE_ID = re.compile(r"/d/([A-Za-z0-9_-]{10,})")
 
 # How much of a meeting note to carry. Enough to see what the meeting decided,
@@ -350,16 +362,61 @@ def note_head(text: str | None) -> str | None:
     return joined if len(joined) <= NOTE_CHARS else joined[: NOTE_CHARS - 1].rstrip() + "…"
 
 
-def attach_notes(events: list[dict[str, Any]], drive) -> int:
+class NoteCache:
+    """Meeting notes already read, shared across a whole run and kept on disk.
+
+    The first version cached inside one person's one day, so a weekly meeting's
+    note was re-exported for each of 270 people and again for each of 7 days --
+    thousands of Drive round trips for a few dozen distinct documents, and a
+    backfill that took minutes per day. A note does not change after the
+    meeting, so it is read once and remembered.
+
+    A cache that cannot be written is not an error: the run is slower and
+    still correct.
+    """
+
+    def __init__(self, path: Path | None = None) -> None:
+        self.path = path
+        self.entries: dict[str, str | None] = {}
+        self.reads = 0
+        if path and path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    self.entries = {
+                        str(key): (str(value) if value is not None else None)
+                        for key, value in loaded.items()
+                    }
+            except (OSError, ValueError):
+                self.entries = {}
+
+    def get(self, file_id: str, read):
+        if file_id not in self.entries:
+            self.entries[file_id] = note_head(read(file_id))
+            self.reads += 1
+        return self.entries[file_id]
+
+    def save(self) -> None:
+        if not self.path:
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(
+                json.dumps(self.entries, ensure_ascii=False), encoding="utf-8"
+            )
+        except OSError:
+            pass
+
+
+def attach_notes(events: list[dict[str, Any]], drive, cache: NoteCache | None = None) -> int:
     """Read each meeting's attached notes once, and put them on the line.
 
-    Once per document per build, cached: the same weekly meeting's note is
-    linked from every copy of the event. A meeting with no note, or one the
-    token cannot read, simply has none -- never an invented summary.
+    A meeting with no note, or one the token cannot read, simply has none --
+    never an invented summary.
     """
     if drive is None:
         return 0
-    cache: dict[str, str | None] = {}
+    cache = cache if cache is not None else NoteCache()
     filled = 0
     for event in events:
         if event.get("source") != "google_calendar":
@@ -369,10 +426,9 @@ def attach_notes(events: list[dict[str, Any]], drive) -> int:
             if not found:
                 continue
             file_id = found.group(1)
-            if file_id not in cache:
-                cache[file_id] = note_head(drive.export_text(file_id))
-            if cache[file_id]:
-                event["note"] = cache[file_id]
+            note = cache.get(file_id, drive.export_text)
+            if note:
+                event["note"] = note
                 filled += 1
             break
     return filled
@@ -663,6 +719,7 @@ def build_day(
     *,
     dry_run: bool = False,
     drive=None,
+    note_cache: NoteCache | None = None,
 ) -> DigestResult:
     """Build (or rebuild) every person's digest for one KST day."""
     import psycopg
@@ -739,7 +796,7 @@ def build_day(
                 person_id = row[0]
                 if current is not None and person_id != current:
                     folded = collapse(events)
-                    result.notes_attached += attach_notes(folded, drive)
+                    result.notes_attached += attach_notes(folded, drive, note_cache)
                     _write(cursor, current, day, folded, result, Jsonb)
                     events = []
                 current = person_id
@@ -748,7 +805,7 @@ def build_day(
                 )
             if current is not None:
                 folded = collapse(events)
-                result.notes_attached += attach_notes(folded, drive)
+                result.notes_attached += attach_notes(folded, drive, note_cache)
                 _write(cursor, current, day, folded, result, Jsonb)
 
             if dry_run:
@@ -1007,11 +1064,19 @@ def build_range(
     database_url: str, start: date, end: date, *, dry_run: bool = False, drive=None
 ) -> list[dict[str, Any]]:
     """Every day in [start, end], oldest first. The backfill path."""
+    # One cache for the whole backfill: the same meeting recurs across the
+    # range and its note is the same document every time.
+    cache = NoteCache(note_cache_path())
     out = []
     day = start
     while day <= end:
-        out.append(build_day(database_url, day, dry_run=dry_run, drive=drive).as_dict())
+        out.append(
+            build_day(
+                database_url, day, dry_run=dry_run, drive=drive, note_cache=cache
+            ).as_dict()
+        )
         day += timedelta(days=1)
+    cache.save()
     return out
 
 
