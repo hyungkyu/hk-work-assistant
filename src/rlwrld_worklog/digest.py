@@ -164,11 +164,16 @@ def _where(
     raw: Any,
     container_id: str | None,
     parent_raw: Any = None,
+    places: dict[str, str] | None = None,
 ) -> str | None:
     """The place, in the source's own words rather than as an id."""
     labels = labels if isinstance(labels, dict) else {}
     raw = raw if isinstance(raw, dict) else {}
     if source == "slack":
+        # The conversation directory knows DMs by who is in them; the label
+        # snapshot only ever holds a channel name, which a DM does not have.
+        if places and container_id in places:
+            return places[container_id]
         channel = labels.get("channel_name")
         return f"#{channel}" if channel else container_id
     if source == "notion":
@@ -182,7 +187,7 @@ def _where(
         )
         return found or container_id
     if source == "google_calendar":
-        return labels.get("calendar_name") or container_id
+        return labels.get("calendar_summary") or labels.get("calendar_name") or container_id
     return container_id
 
 
@@ -195,6 +200,96 @@ def _plain_notion_title(raw: dict[str, Any]) -> str | None:
         return None
     found = " ".join(_plain_text(properties).split())
     return found[:200] or None
+
+
+def links(source: str, raw: Any) -> list[dict[str, str]]:
+    """Named links the event itself carries, beyond its own permalink.
+
+    A meeting's Gemini notes arrive as a calendar attachment, which is the one
+    thing a person actually wants to click afterwards -- the event link only
+    shows the invitation again.
+    """
+    raw = raw if isinstance(raw, dict) else {}
+    found: list[dict[str, str]] = []
+    if source == "google_calendar":
+        for attachment in raw.get("attachments") or []:
+            if not isinstance(attachment, dict):
+                continue
+            url = attachment.get("fileUrl")
+            if not isinstance(url, str) or not url:
+                continue
+            title = attachment.get("title")
+            found.append({"url": url, "title": str(title) if title else "첨부"})
+        conference = raw.get("conferenceData")
+        if isinstance(conference, dict):
+            for entry in conference.get("entryPoints") or []:
+                if isinstance(entry, dict) and entry.get("entryPointType") == "video":
+                    uri = entry.get("uri")
+                    if isinstance(uri, str) and uri:
+                        found.append({"url": uri, "title": "회의 참여"})
+                        break
+    return found
+
+
+_PLACES_SQL = """
+    SELECT DISTINCT ON (source_entity_id)
+           source_entity_id,
+           raw_payload,
+           relations
+      FROM ledger_records
+     WHERE source = 'slack' AND entity_type = 'conversation'
+     ORDER BY source_entity_id, collected_at DESC
+"""
+
+
+def slack_place(raw: Any, relations: Any, names: dict[str, str]) -> str | None:
+    """What to call a Slack conversation.
+
+    A channel has a name. A DM does not, and "D0C09PW4T60" tells a reader
+    nothing about who they were talking to -- which, for a person whose day is
+    half DMs, is most of the day. So a DM is named by the person on the other
+    end, and a group DM by its members.
+    """
+    raw = raw if isinstance(raw, dict) else {}
+    relations = relations if isinstance(relations, dict) else {}
+    if raw.get("is_im"):
+        other = raw.get("user")
+        found = names.get(str(other)) if other else None
+        return f"DM · {found}" if found else "DM"
+    if raw.get("is_mpim"):
+        members = [
+            names[str(member)]
+            for member in (relations.get("member_user_ids") or [])
+            if str(member) in names
+        ]
+        return f"그룹DM · {', '.join(members[:4])}" if members else "그룹DM"
+    name = raw.get("name")
+    return f"#{name}" if name else None
+
+
+def _slack_prefix(rows) -> str | None:
+    """The workspace's archive URL prefix, learned from the day's own rows."""
+    for row in rows:
+        source, permalink = row[2], row[6]
+        if source == "slack" and isinstance(permalink, str) and "/archives/" in permalink:
+            return permalink.split("/archives/", 1)[0]
+    return None
+
+
+def _slack_permalink(raw: Any, container_id: str | None, prefix: str | None) -> str | None:
+    """A Slack link built from ids, for records the API did not hand one to.
+
+    Messages fetched through search carry no permalink, so half a person's day
+    had nothing to click. The archive URL is a pure function of the channel id
+    and the timestamp; the workspace prefix is taken from a permalink the same
+    day already provided rather than hardcoded, so this never invents a
+    workspace that does not exist.
+    """
+    raw = raw if isinstance(raw, dict) else {}
+    stamp = raw.get("ts")
+    if not prefix or not container_id or not isinstance(stamp, str) or "." not in stamp:
+        return None
+    return f"{prefix}/archives/{container_id}/p{stamp.replace('.', '')}"
 
 
 def _detail(source: str, entity_type: str | None, raw: Any, thread_id: str | None) -> str | None:
@@ -249,12 +344,13 @@ def collapse(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     index: dict[tuple, int] = {}
     for event in events:
         fold_by = event.get("fold_by")
-        key = (
-            event.get("source"),
-            event.get("where"),
-            "" if fold_by == "document" else event.get("excerpt"),
-        )
-        foldable = fold_by == "document" or event.get("excerpt") is not None
+        if fold_by == "document":
+            key = (event.get("source"), event.get("where"), "")
+        elif fold_by == "thread":
+            key = (event.get("source"), event.get("thread"), "")
+        else:
+            key = (event.get("source"), event.get("where"), event.get("excerpt"))
+        foldable = fold_by is not None or event.get("excerpt") is not None
         if not foldable or key not in index:
             index[key] = len(folded)
             folded.append({**event, "repeat": 1})
@@ -431,8 +527,33 @@ def build_day(
             )
             names = {str(value): str(name) for value, name in cursor.fetchall()}
 
+            # Slack's own display names, for the people on the other end of a
+            # DM who are not on the roster at all.
+            cursor.execute(
+                "SELECT DISTINCT ON (source_entity_id) source_entity_id, "
+                "denormalized_label_snapshot FROM ledger_records "
+                "WHERE source = 'slack' AND entity_type = 'user' "
+                "ORDER BY source_entity_id, collected_at DESC"
+            )
+            for value, snapshot in cursor.fetchall():
+                label = snapshot if isinstance(snapshot, dict) else {}
+                shown = label.get("real_name") or label.get("name")
+                names.setdefault(str(value), str(shown)) if shown else None
+
+            cursor.execute(_PLACES_SQL)
+            places = {
+                str(channel): place
+                for channel, raw, relations in cursor.fetchall()
+                if (place := slack_place(raw, relations, names))
+            }
+
             cursor.execute(_EVENTS_SQL, {"start": start, "end": end, "kinds": list(_ALL_KINDS)})
             rows = cursor.fetchall()
+
+            # Messages fetched through Slack search carry no permalink, so the
+            # workspace prefix is borrowed from one that does rather than
+            # hardcoded. No prefix means no invented links.
+            slack_prefix = _slack_prefix(rows)
 
             current: str | None = None
             events: list[dict] = []
@@ -442,7 +563,9 @@ def build_day(
                     _write(cursor, current, day, collapse(events), result, Jsonb)
                     events = []
                 current = person_id
-                events.append(_event(row, names=names))
+                events.append(
+                    _event(row, names=names, slack_prefix=slack_prefix, places=places)
+                )
             if current is not None:
                 _write(cursor, current, day, collapse(events), result, Jsonb)
 
@@ -453,7 +576,13 @@ def build_day(
     return result
 
 
-def _event(row, *, names: dict[str, str] | None = None) -> dict[str, Any]:
+def _event(
+    row,
+    *,
+    names: dict[str, str] | None = None,
+    slack_prefix: str | None = None,
+    places: dict[str, str] | None = None,
+) -> dict[str, Any]:
     (
         _person_id,
         occurred_at,
@@ -476,7 +605,11 @@ def _event(row, *, names: dict[str, str] | None = None) -> dict[str, Any]:
         "event_type": event_type,
         "container": container_id,
         "thread": thread_id,
-        "permalink": permalink,
+        "permalink": permalink
+        or (_slack_permalink(raw_payload, container_id, slack_prefix) if source == "slack" else None),
+        # Links the event carries of its own -- a meeting's Gemini notes, its
+        # video room. Separate from `permalink`, which is the event itself.
+        "links": links(source, raw_payload),
         "actor": actor_external_id,
         # None, not "". An absent title is a fact about the source, and an
         # empty string reads as a title that happens to be blank.
@@ -486,7 +619,9 @@ def _event(row, *, names: dict[str, str] | None = None) -> dict[str, Any]:
         # Where a person would go looking for this, in that source's own terms:
         # a Slack channel, a Notion document, a calendar, a repository. The raw
         # container id ("C07ABCDEF") stays in `container` for machines.
-        "where": _where(source, entity_type, labels, raw_payload, container_id, parent_raw),
+        "where": _where(
+            source, entity_type, labels, raw_payload, container_id, parent_raw, places
+        ),
         # The one extra fact that source needs and the others do not -- a
         # meeting's time span, a reply's threadedness, a review's verdict.
         "detail": _detail(source, entity_type, raw_payload, thread_id),
@@ -494,7 +629,17 @@ def _event(row, *, names: dict[str, str] | None = None) -> dict[str, Any]:
         # words in the same place; for a Notion block it is the document
         # itself, because editing a document paragraph by paragraph is one
         # piece of news, not thirty.
-        "fold_by": "document" if entity_type == "block" else None,
+        # A recurring meeting is re-collected every day, and each capture is its
+        # own ledger row, so folding a meeting by its words leaves one meeting
+        # showing up several times. A meeting is the same meeting when it has
+        # the same event id.
+        "fold_by": (
+            "document"
+            if entity_type == "block"
+            else "thread"
+            if source == "google_calendar"
+            else None
+        ),
     }
 
 

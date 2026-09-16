@@ -826,3 +826,63 @@ def test_a_block_line_names_its_document_through_the_parent_join(database):
     assert event["where"] == "주간 회고"
     assert event["excerpt"] == "GPU 재분배 정리"
     assert event["fold_by"] == "document"
+
+
+def test_a_dm_is_named_by_the_person_on_the_other_end():
+    from rlwrld_worklog.digest import slack_place
+
+    names = {"U1": "김재우", "U2": "김윰", "U3": "류형규"}
+    assert slack_place({"is_im": True, "user": "U1"}, {}, names) == "DM · 김재우"
+    # Unknown counterpart: still says it was a DM rather than showing an id.
+    assert slack_place({"is_im": True, "user": "UNKNOWN"}, {}, names) == "DM"
+    assert slack_place(
+        {"is_mpim": True}, {"member_user_ids": ["U1", "U2"]}, names
+    ) == "그룹DM · 김재우, 김윰"
+    assert slack_place({"name": "team_platform"}, {}, names) == "#team_platform"
+
+
+def test_a_slack_line_with_no_permalink_gets_one_built_from_its_ids():
+    from rlwrld_worklog.digest import _slack_permalink
+
+    assert _slack_permalink(
+        {"ts": "1789533729.912259"}, "C0C25QG02MQ", "https://rlwrld.slack.com"
+    ) == "https://rlwrld.slack.com/archives/C0C25QG02MQ/p1789533729912259"
+    # No workspace prefix means no invented link.
+    assert _slack_permalink({"ts": "1789533729.912259"}, "C1", None) is None
+    assert _slack_permalink({}, "C1", "https://x.slack.com") is None
+
+
+def test_a_meeting_carries_its_notes_and_its_room():
+    from rlwrld_worklog.digest import links
+
+    raw = {
+        "attachments": [{"fileUrl": "https://docs.google.com/d/1", "title": "Gemini 메모"}],
+        "conferenceData": {
+            "entryPoints": [
+                {"entryPointType": "phone", "uri": "tel:123"},
+                {"entryPointType": "video", "uri": "https://meet.google.com/abc"},
+            ]
+        },
+    }
+    assert links("google_calendar", raw) == [
+        {"url": "https://docs.google.com/d/1", "title": "Gemini 메모"},
+        {"url": "https://meet.google.com/abc", "title": "회의 참여"},
+    ]
+    assert links("slack", {"attachments": [{"fileUrl": "x"}]}) == []
+
+
+def test_a_recurring_meeting_folds_by_its_event_id_not_its_words():
+    """Re-collected daily, each capture its own row: still one meeting."""
+    from rlwrld_worklog.digest import collapse
+
+    events = [
+        {"source": "google_calendar", "thread": "evt-1", "where": "RLWRLD",
+         "excerpt": "주간 리뷰", "fold_by": "thread", "time": "10:00"},
+        {"source": "google_calendar", "thread": "evt-1", "where": "RLWRLD",
+         "excerpt": "주간 리뷰 — 안건 추가됨", "fold_by": "thread", "time": "10:00"},
+        {"source": "google_calendar", "thread": "evt-2", "where": "RLWRLD",
+         "excerpt": "1:1", "fold_by": "thread", "time": "14:00"},
+    ]
+    folded = collapse(events)
+    assert len(folded) == 2
+    assert folded[0]["repeat"] == 2

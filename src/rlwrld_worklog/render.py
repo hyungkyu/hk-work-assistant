@@ -345,6 +345,10 @@ def _person_day_body(digest: dict[str, Any]) -> str:
         link = (
             f' <a href="{_e(event["permalink"])}">열기</a>' if event.get("permalink") else ""
         )
+        # A meeting's Gemini notes are the thing a person actually wants after
+        # the meeting; the event link only shows the invitation again.
+        for extra in event.get("links") or []:
+            link += f' <a href="{_e(extra.get("url"))}">{_e(extra.get("title"))}</a>'
         # "10:00–11:00 · 5명" for a meeting, "스레드 답글" for a reply: the fact
         # that source needs and the shared columns cannot hold.
         detail = event.get("detail")
