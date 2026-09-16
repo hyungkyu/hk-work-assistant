@@ -154,8 +154,40 @@ class DigestResult:
         }
 
 
+# Who an event belongs to. For every source but one that is the actor: the
+# person who sent, committed, wrote or submitted it. A meeting is different --
+# what a person did yesterday was *attend* it, and a timeline row has one actor
+# column, so the organiser alone would hide every meeting from everyone who sat
+# in it. The second arm is that fan-out, done here rather than in the schema:
+# one event legitimately belongs to many people's days. A declined invitation is
+# not attendance and is left out; UNION folds the organiser's two matches into
+# one row.
 _EVENTS_SQL = """
-    SELECT identity.person_id,
+    WITH matched AS (
+        SELECT identity.person_id, event.event_id
+          FROM timeline_events event
+          JOIN org_identity identity
+            ON identity.value = event.actor_external_id
+           AND identity.kind = ANY(%(kinds)s)
+         WHERE event.occurred_at >= %(start)s
+           AND event.occurred_at < %(end)s
+        UNION
+        SELECT identity.person_id, event.event_id
+          FROM timeline_events event
+          JOIN ledger_records ledger
+            ON ledger.ledger_id = event.event_id
+          CROSS JOIN LATERAL jsonb_array_elements(
+              coalesce(ledger.relations->'attendee_responses', '[]'::jsonb)
+          ) AS attendee
+          JOIN org_identity identity
+            ON lower(identity.value) = lower(attendee->>'email')
+           AND identity.kind = ANY(%(kinds)s)
+         WHERE event.source = 'google_calendar'
+           AND coalesce(attendee->>'responseStatus', '') <> 'declined'
+           AND event.occurred_at >= %(start)s
+           AND event.occurred_at < %(end)s
+    )
+    SELECT matched.person_id,
            event.occurred_at,
            event.source,
            event.event_type,
@@ -166,15 +198,12 @@ _EVENTS_SQL = """
            event.payload,
            ledger.entity_type,
            ledger.raw_payload
-      FROM timeline_events event
-      JOIN org_identity identity
-        ON identity.value = event.actor_external_id
-       AND identity.kind = ANY(%(kinds)s)
+      FROM matched
+      JOIN timeline_events event
+        ON event.event_id = matched.event_id
       LEFT JOIN ledger_records ledger
         ON ledger.ledger_id = event.event_id
-     WHERE event.occurred_at >= %(start)s
-       AND event.occurred_at < %(end)s
-     ORDER BY identity.person_id, event.occurred_at, event.event_type
+     ORDER BY matched.person_id, event.occurred_at, event.event_type
 """
 
 # Which identity kinds an actor handle can match, by the `actor_kind` the

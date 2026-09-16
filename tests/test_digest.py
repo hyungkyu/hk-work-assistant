@@ -13,7 +13,7 @@ import os
 import pytest
 import sys
 import uuid
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -459,3 +459,132 @@ def test_excerpt_truncates_long_bodies_with_an_ellipsis():
     found = excerpt("message", {"text": "가" * 900})
     assert len(found) == EXCERPT_CHARS
     assert found.endswith("…")
+
+
+_CAL_LEDGER_FIELDS = {
+    "schema_version": "v1",
+    "capture_profile": "live",
+    "source": "google_calendar",
+    "entity_type": "event",
+    "tenant_workspace_id": "ws",
+    "tenant_status": "known",
+    "source_entity_id": "evt-fanout",
+    "source_updated_at_status": "unknown",
+    "deleted_status": "unknown",
+    "content_hash": "h",
+    "source_file": "f",
+    "source_file_sha256": "s",
+    "record_pointer": "p",
+    "legacy_layout_version": "v1",
+    "converter_version": "v1",
+    "observation_role": "current_head",
+    "capture_completeness_status": "recorded",
+}
+
+
+@REQUIRES_DATABASE
+def test_a_meeting_reaches_every_attendee_not_only_its_organiser(database):
+    """What a person did yesterday was attend the meeting, not just book it.
+
+    A timeline row has one actor column, so without this fan-out a meeting
+    shows up only in the organiser's day and is invisible to everyone who sat
+    in it. Declined invitations are not attendance; the organiser, who is also
+    listed as an attendee, must still appear exactly once.
+    """
+    import uuid
+
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    from rlwrld_worklog.digest import _ALL_KINDS, _EVENTS_SQL
+
+    organiser, attendee, event_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    moment = datetime(2026, 9, 12, 10, tzinfo=KST)
+    relations = {
+        "organizer_email": "a@rlwrld.ai",
+        "attendee_responses": [
+            {"email": "a@rlwrld.ai", "responseStatus": "accepted"},
+            # Upper case on purpose: an address is not case sensitive, and a
+            # roster that stores it lowercase must still match.
+            {"email": "B@RLWRLD.ai", "responseStatus": "accepted"},
+            {"email": "c@rlwrld.ai", "responseStatus": "declined"},
+        ],
+    }
+    with psycopg.connect(os.environ["WORKLOG_TEST_DATABASE_URL"]) as connection:
+        with connection.cursor() as cursor:
+            # The fixture recreates the base schema but the org tables outlive
+            # it, so this test clears only what it is about to insert. Written
+            # out rather than truncating: a test that wipes tables it does not
+            # own destroys the next test's fixtures.
+            cursor.execute(
+                "DELETE FROM org_identity WHERE value IN ('a@rlwrld.ai', 'b@rlwrld.ai')"
+            )
+            cursor.execute("DELETE FROM org_person WHERE name IN ('주최', '참석')")
+            cursor.execute("DELETE FROM timeline_events WHERE external_id = 'evt-fanout'")
+            cursor.execute("DELETE FROM ledger_records WHERE source_entity_id = 'evt-fanout'")
+            cursor.execute(
+                "INSERT INTO roster_observation (observed_at, source, row_count) "
+                "VALUES (now(), 'roster_seed_2', 2) RETURNING observation_id"
+            )
+            observation = cursor.fetchone()[0]
+            for person, name, email in (
+                (organiser, "주최", "a@rlwrld.ai"),
+                (attendee, "참석", "b@rlwrld.ai"),
+            ):
+                cursor.execute(
+                    "INSERT INTO org_person (person_id, name, first_seen, last_seen) "
+                    "VALUES (%s, %s, %s, %s)",
+                    (person, name, observation, observation),
+                )
+                cursor.execute(
+                    "INSERT INTO org_identity (person_id, kind, value, first_seen, last_seen, "
+                    "origin) VALUES (%s, 'email_official', %s, %s, %s, 'roster')",
+                    (person, email, observation, observation),
+                )
+            fields = dict(_CAL_LEDGER_FIELDS)
+            fields.update(
+                ledger_id=event_id,
+                scope=Jsonb({"calendar_id": "cal"}),
+                source_entity_key=Jsonb({"id": "evt-fanout"}),
+                raw_payload=Jsonb({"summary": "주간 리뷰", "description": "로드맵 점검"}),
+                relations=Jsonb(relations),
+                provenance=Jsonb({}),
+                coverage=Jsonb({}),
+                observation_window=Jsonb({}),
+                capture_completeness=Jsonb({}),
+                supplement_provenance=Jsonb({}),
+                visibility_routing=Jsonb({}),
+                denormalized_label_snapshot=Jsonb({}),
+                source_created_at=moment,
+                collected_at=moment,
+            )
+            cursor.execute(
+                f"INSERT INTO ledger_records ({','.join(fields)}) "
+                f"VALUES ({','.join('%s' for _ in fields)})",
+                list(fields.values()),
+            )
+            cursor.execute(
+                "INSERT INTO timeline_events (event_id, source, event_type, external_id, "
+                "actor_external_id, occurred_at, ingested_at, container_id, thread_id, payload) "
+                "VALUES (%s, 'google_calendar', 'calendar_event', 'evt-fanout', 'a@rlwrld.ai', "
+                "%s, now(), 'cal', 'evt-fanout', %s)",
+                (event_id, moment, Jsonb({"labels": {}})),
+            )
+        connection.commit()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                _EVENTS_SQL,
+                {
+                    "start": datetime(2026, 9, 12, tzinfo=KST),
+                    "end": datetime(2026, 9, 13, tzinfo=KST),
+                    "kinds": list(_ALL_KINDS),
+                },
+            )
+            rows = cursor.fetchall()
+
+    people = [str(row[0]) for row in rows]
+    assert sorted(people) == sorted([str(organiser), str(attendee)])
+    assert people.count(str(organiser)) == 1
+    from rlwrld_worklog.digest import _event as row_to_event
+
+    assert all(row_to_event(row)["excerpt"] == "주간 리뷰 — 로드맵 점검" for row in rows)
