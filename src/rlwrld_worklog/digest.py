@@ -476,7 +476,16 @@ _EVENTS_SQL = """
            AND event.occurred_at >= %(start)s
            AND event.occurred_at < %(end)s
     )
-    SELECT DISTINCT ON (matched.person_id, event.source, event.external_id)
+    -- A meeting's identity is its iCalUID, not its row: the same meeting sits
+    -- on the organiser's calendar and on every attendee's, and the ledger keys
+    -- each copy by `calendar_id:event_id`, so one meeting arrived as a dozen.
+    -- iCalUID is the same value across all the copies. Null for every other
+    -- source, which falls back to the external id.
+    SELECT DISTINCT ON (
+               matched.person_id,
+               event.source,
+               coalesce(ledger.raw_payload->>'iCalUID', event.external_id)
+           )
            matched.person_id,
            event.occurred_at,
            event.source,
@@ -519,7 +528,8 @@ _EVENTS_SQL = """
      -- The ledger is right to keep both: it records observations. A day's
      -- reading is not, so the official capture wins and the supplement is the
      -- fallback, which is the same priority order the head store already uses.
-     ORDER BY matched.person_id, event.source, event.external_id,
+     ORDER BY matched.person_id, event.source,
+              coalesce(ledger.raw_payload->>'iCalUID', event.external_id),
               CASE WHEN ledger.capture_profile LIKE '%%search%%' THEN 1 ELSE 0 END,
               event.occurred_at
 """

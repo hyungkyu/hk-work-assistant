@@ -167,7 +167,8 @@ def calendar_day_count(
 # supplement -- and counting rows made a correct ledger look like it was
 # inflating by 2-3x against the source.
 _LEDGER_SQL = """
-    SELECT count(DISTINCT source_entity_id) FROM ledger_records
+    SELECT count(DISTINCT coalesce(raw_payload->>'iCalUID', source_entity_id))
+      FROM ledger_records
      WHERE source = %(source)s
        AND {window}
 """
@@ -237,7 +238,9 @@ def count_layers(cursor, person_id: str, source: str, day: date) -> tuple[int, i
 
     cursor.execute(
         """
-        SELECT count(*) FROM timeline_events event
+        SELECT count(DISTINCT coalesce(ledger.raw_payload->>'iCalUID', event.external_id))
+          FROM timeline_events event
+          LEFT JOIN ledger_records ledger ON ledger.ledger_id = event.event_id
           JOIN org_identity identity ON identity.value = event.actor_external_id
          WHERE event.source = %(source)s AND identity.person_id = %(person)s
            AND event.occurred_at >= %(start)s AND event.occurred_at < %(end)s

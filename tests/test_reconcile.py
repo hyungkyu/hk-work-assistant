@@ -221,3 +221,17 @@ def test_the_calendar_comparison_asks_both_sides_the_same_question():
     assert calendar_day_count(Fake(), ["a@x", "b@x"], date(2026, 9, 15), me) == 1
     # Without an address list the old behaviour is kept, deduplicated by id.
     assert calendar_day_count(Fake(), ["a@x", "b@x"], date(2026, 9, 15), None) == 3
+
+
+def test_one_meeting_on_a_dozen_calendars_is_one_meeting():
+    """The ledger keys each copy by calendar, so a meeting arrived as many.
+
+    `source_entity_id` is `calendar_id:event_id`, so the same meeting sitting
+    on the organiser's calendar and on every attendee's became a dozen distinct
+    rows: 54 against the 16 the calendar actually held. iCalUID is the value
+    every copy shares.
+    """
+    from rlwrld_worklog.reconcile import _LEDGER_SQL
+
+    assert "iCalUID" in _LEDGER_SQL
+    assert "count(DISTINCT" in _LEDGER_SQL
