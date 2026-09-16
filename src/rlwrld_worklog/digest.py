@@ -610,6 +610,9 @@ def _event(
         # Links the event carries of its own -- a meeting's Gemini notes, its
         # video room. Separate from `permalink`, which is the event itself.
         "links": links(source, raw_payload),
+        # Computed here because the timeline row keeps no copy of the payload,
+        # and the summary must not re-read the ledger to add up a day.
+        "gpu_hours": round(_gpu_hours(raw_payload), 3) if source == "slurm" else None,
         "actor": actor_external_id,
         # None, not "". An absent title is a fact about the source, and an
         # empty string reads as a title that happens to be blank.
@@ -643,6 +646,118 @@ def _event(
     }
 
 
+_ELAPSED = re.compile(r"^(?:(\d+)-)?(\d+):(\d+):(\d+)(?:\.\d+)?$")
+
+
+def _gpu_hours(raw: Any) -> float:
+    """GPU-hours for one Slurm job, from what sacct recorded.
+
+    AllocTRES names the GPUs (`gres/gpu=4`) and Elapsed the wall time; neither
+    alone is the cost. A job missing either contributes nothing rather than a
+    guessed number.
+    """
+    raw = raw if isinstance(raw, dict) else {}
+    tres = raw.get("AllocTRES")
+    elapsed = raw.get("Elapsed")
+    if not isinstance(tres, str) or not isinstance(elapsed, str):
+        return 0.0
+    gpus = 0
+    for part in tres.split(","):
+        key, _, value = part.partition("=")
+        if key.strip() in {"gres/gpu", "gpu"}:
+            try:
+                gpus = int(value)
+            except ValueError:
+                return 0.0
+            break
+    match = _ELAPSED.match(elapsed.strip())
+    if not gpus or not match:
+        return 0.0
+    days, hours, minutes, seconds = (int(value or 0) for value in match.groups())
+    return gpus * (days * 24 + hours + minutes / 60 + seconds / 3600)
+
+
+def _hours(events: list[dict]) -> float:
+    """Meeting hours, counting each meeting once however often it was captured."""
+    spans: dict[str, float] = {}
+    for event in events:
+        detail = event.get("detail") or ""
+        head = detail.split(" · ")[0]
+        if "–" not in head:
+            continue
+        start, _, end = head.partition("–")
+        try:
+            begin = int(start[:2]) * 60 + int(start[3:5])
+            finish = int(end[:2]) * 60 + int(end[3:5])
+        except ValueError:
+            continue
+        if finish > begin:
+            spans[str(event.get("thread"))] = (finish - begin) / 60
+    return sum(spans.values())
+
+
+def summarize(events: list[dict]) -> dict[str, Any]:
+    """The day in one line, and then in a handful of groups.
+
+    Pure counting -- no model, no selection of what mattered. The full timeline
+    is still the record; this is the part a person reads first, because a day
+    with 7,900 Slurm jobs in it cannot be read as a list.
+    """
+    by_source: dict[str, list[dict]] = {}
+    for event in events:
+        by_source.setdefault(str(event.get("source")), []).append(event)
+
+    headline: list[str] = []
+    groups: list[dict[str, Any]] = []
+
+    meetings = by_source.get("google_calendar") or []
+    if meetings:
+        distinct = {str(event.get("thread")) for event in meetings}
+        hours = _hours(meetings)
+        label = f"회의 {len(distinct)}건"
+        if hours:
+            label += f" ({hours:.1f}h)"
+        headline.append(label)
+
+    messages = by_source.get("slack") or []
+    if messages:
+        places = {str(event.get("where")) for event in messages if event.get("where")}
+        headline.append(f"슬랙 {len(messages)}건 · {len(places)}곳")
+
+    notion = by_source.get("notion") or []
+    if notion:
+        documents = {str(event.get("where")) for event in notion if event.get("where")}
+        headline.append(f"노션 문서 {len(documents)}개")
+
+    github = by_source.get("github") or []
+    if github:
+        kinds: dict[str, int] = {}
+        for event in github:
+            kinds[str(event.get("event_type"))] = kinds.get(str(event.get("event_type")), 0) + 1
+        shown = {
+            "github_pull_request": "PR",
+            "github_commit": "커밋",
+            "github_review": "리뷰",
+        }
+        parts = [f"{name} {kinds[key]}" for key, name in shown.items() if kinds.get(key)]
+        headline.append("깃헙 " + " · ".join(parts) if parts else f"깃헙 {len(github)}건")
+
+    jobs = by_source.get("slurm") or []
+    if jobs:
+        gpu_hours = sum(float(event.get("gpu_hours") or 0) for event in jobs)
+        label = f"잡 {len(jobs)}건"
+        if gpu_hours:
+            label += f" · {gpu_hours:,.0f} GPU-h"
+        headline.append(label)
+
+    # Nothing is folded away here yet. HK, 2026-09-16: 지금 에그리게이션보다
+    # 나열로 보는건, 데이터 누락을 확인하기 위함이야 -- while the data is still
+    # being verified, a view that hides rows hides exactly what he is looking
+    # for. The headline is a checksum over the full list, not a replacement for
+    # it: "회의 0건" on a day full of meetings is the fastest way to see a gap.
+    return {"headline": headline, "groups": groups}
+
+
 def _counts(events: list[dict]) -> dict[str, Any]:
     by_source: dict[str, int] = {}
     by_event_type: dict[str, int] = {}
@@ -650,6 +765,7 @@ def _counts(events: list[dict]) -> dict[str, Any]:
         by_source[event["source"]] = by_source.get(event["source"], 0) + 1
         by_event_type[event["event_type"]] = by_event_type.get(event["event_type"], 0) + 1
     return {
+        "summary": summarize(events),
         "by_source": dict(sorted(by_source.items())),
         "by_event_type": dict(sorted(by_event_type.items())),
     }

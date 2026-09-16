@@ -81,6 +81,7 @@ letter-spacing:.02em;border-top:1px solid var(--line-soft);padding-top:8px}
 .ev .c{min-width:0;display:grid;gap:4px}
 .ev .l1{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13.5px}
 .ev .where{color:var(--dim);font:400 11.5px/1.4 var(--mono);overflow-wrap:anywhere}
+.headline{border:1px solid var(--line);background:var(--panel-2);border-radius:10px;padding:11px 13px;margin-bottom:14px;font:500 13.5px/1.5 var(--ui);color:var(--text)}
 .rep{font:500 10.5px/1 var(--mono);color:var(--dim);border:1px solid var(--line);border-radius:4px;padding:1px 4px;margin-left:4px;white-space:nowrap}
 .ev a{color:var(--accent-2);text-decoration:none}
 .ev a:hover{text-decoration:underline}
@@ -316,6 +317,16 @@ def _person_day_body(digest: dict[str, Any]) -> str:
         f'<div class="v">{digest.get("events_total", 0)}</div></div>'
     )
 
+    # A one-line checksum over the list below. It is not a summary that
+    # replaces the timeline: a day whose headline says 회의 0건 while the
+    # person sat in four meetings is a gap, visible at a glance.
+    headline = ((digest.get("counts") or {}).get("summary") or {}).get("headline") or []
+    head_line = (
+        f'<div class="headline">{" · ".join(_e(part) for part in headline)}</div>'
+        if headline
+        else ""
+    )
+
     rows = []
     for event in events:
         # The place in the source's own words -- "#eng", a document title, a
@@ -374,6 +385,7 @@ def _person_day_body(digest: dict[str, Any]) -> str:
     day_block = (
         f'<div class="card"><div class="h"><h2>그날 한 일</h2>'
         f'<span class="pill">{len(events)}건 · 시간 순 · 전부</span></div>'
+        f'{head_line}'
         f'{"".join(rows)}'
         '<div class="src" style="margin-top:12px"><b>timeline_events</b> → '
         "<b>person_day_digest</b> · 기계적으로 나열한다. 요약하지 않고 고르지 않는다</div></div>"

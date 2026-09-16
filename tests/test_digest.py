@@ -886,3 +886,36 @@ def test_a_recurring_meeting_folds_by_its_event_id_not_its_words():
     folded = collapse(events)
     assert len(folded) == 2
     assert folded[0]["repeat"] == 2
+
+
+def test_gpu_hours_needs_both_the_gpus_and_the_time():
+    from rlwrld_worklog.digest import _gpu_hours
+
+    assert _gpu_hours({"AllocTRES": "cpu=16,gres/gpu=4,mem=1T", "Elapsed": "02:00:00"}) == 8
+    assert _gpu_hours({"AllocTRES": "gres/gpu=2", "Elapsed": "1-00:00:00"}) == 48
+    # A CPU-only job costs no GPU hours; a job missing either field contributes
+    # nothing rather than a guessed number.
+    assert _gpu_hours({"AllocTRES": "cpu=8", "Elapsed": "02:00:00"}) == 0
+    assert _gpu_hours({"AllocTRES": "gres/gpu=4"}) == 0
+    assert _gpu_hours(None) == 0
+
+
+def test_the_headline_counts_a_repeated_meeting_once():
+    from rlwrld_worklog.digest import summarize
+
+    events = [
+        {"source": "google_calendar", "thread": "e1", "detail": "10:00–11:00 · 5명"},
+        {"source": "google_calendar", "thread": "e1", "detail": "10:00–11:00 · 5명"},
+        {"source": "google_calendar", "thread": "e2", "detail": "14:00–15:30 · 3명"},
+    ]
+    assert summarize(events)["headline"] == ["회의 2건 (2.5h)"]
+
+
+def test_the_headline_hides_nothing_while_the_data_is_being_verified():
+    """HK, 2026-09-16: 나열로 보는건 데이터 누락을 확인하기 위함이야."""
+    from rlwrld_worklog.digest import summarize
+
+    events = [{"source": "slurm", "gpu_hours": 4.0} for _ in range(900)]
+    found = summarize(events)
+    assert found["headline"] == ["잡 900건 · 3,600 GPU-h"]
+    assert found["groups"] == []
