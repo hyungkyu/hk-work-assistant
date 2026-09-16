@@ -552,6 +552,7 @@ class DigestResult:
     # Meeting lines that carry their notes. Reported because a drop to zero
     # means the Drive read stopped working, which is otherwise invisible.
     notes_attached: int = 0
+    seconds: float = 0.0
     errors: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -567,6 +568,7 @@ class DigestResult:
             # for, and it belongs next to the number it is missing from.
             "unattributed_events": self.unattributed_events,
             "notes_attached": self.notes_attached,
+            "seconds": self.seconds,
             "errors": self.errors[:20],
             "generator": GENERATOR,
         }
@@ -614,13 +616,33 @@ _EVENTS_SQL = """
           FROM timeline_events event
           JOIN ledger_records ledger
             ON ledger.ledger_id = event.event_id
+          CROSS JOIN LATERAL jsonb_array_elements_text(
+              coalesce(ledger.relations->'mentioned_user_ids', '[]'::jsonb)
+          ) AS named
           JOIN org_identity identity
-            ON (identity.kind = 'notion'
-                AND coalesce(ledger.relations->'mentioned_user_ids', '[]'::jsonb)
-                    ? identity.value)
-            OR (identity.kind = 'slack'
-                AND ledger.raw_payload->>'text' LIKE '%%<@' || identity.value || '%%')
-         WHERE event.occurred_at >= %(start)s
+            ON identity.kind = 'notion' AND identity.value = named
+         WHERE event.source = 'notion'
+           AND event.occurred_at >= %(start)s
+           AND event.occurred_at < %(end)s
+        UNION ALL
+        -- The handles a message names, pulled out of its text once, then
+        -- matched by equality. The first version compared every identity in
+        -- the roster against every message with LIKE -- roughly 880 by
+        -- several thousand per day, which is what made a backfill crawl.
+        SELECT identity.person_id, event.event_id, true AS mentioned
+          FROM timeline_events event
+          JOIN ledger_records ledger
+            ON ledger.ledger_id = event.event_id
+          CROSS JOIN LATERAL (
+              SELECT DISTINCT found[1] AS handle
+                FROM regexp_matches(
+                    coalesce(ledger.raw_payload->>'text', ''), '<@([A-Z0-9]+)', 'g'
+                ) AS found
+          ) AS named
+          JOIN org_identity identity
+            ON identity.kind = 'slack' AND identity.value = named.handle
+         WHERE event.source = 'slack'
+           AND event.occurred_at >= %(start)s
            AND event.occurred_at < %(end)s
     ),
     matched AS (
@@ -728,6 +750,7 @@ def build_day(
     result = DigestResult(dry_run=dry_run, day=day.isoformat())
     start, end = kst_day_bounds(day)
 
+    began = datetime.now(timezone.utc)
     with psycopg.connect(database_url) as connection:
         connection.autocommit = False
         with connection.cursor() as cursor:
@@ -812,6 +835,9 @@ def build_day(
                 connection.rollback()
             else:
                 connection.commit()
+    # Reported per day so a slow run names its own cost instead of being
+    # guessed at twice in a row.
+    result.seconds = round((datetime.now(timezone.utc) - began).total_seconds(), 1)
     return result
 
 

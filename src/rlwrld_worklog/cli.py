@@ -365,6 +365,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--all", action="store_true", help="With --report: everyone the org knows"
     )
     digest_parser.add_argument(
+        "--no-notes",
+        action="store_true",
+        help="Skip reading meeting notes from Drive. Use it to tell whether a "
+        "slow run is the notes or the query",
+    )
+    digest_parser.add_argument(
         "--status", action="store_true", help="Which days have digests"
     )
     digest_parser.add_argument(
@@ -1349,7 +1355,7 @@ def _digest_days(args: argparse.Namespace) -> list[date]:
     return [date.fromisoformat(args.date) if args.date else _kst_today() - timedelta(days=1)]
 
 
-def _drive_reader():
+def _drive_reader(args: argparse.Namespace | None = None):
     """A Drive reader for meeting notes, or None when there is no token.
 
     None rather than a raising stub: a digest built without Drive is a digest
@@ -1357,6 +1363,8 @@ def _drive_reader():
     get built. The count of notes attached is reported either way, so a silent
     drop to zero is visible.
     """
+    if args is not None and getattr(args, "no_notes", False):
+        return None
     try:
         from .daily import load_credentials
         from .google_auth import DRIVE_READONLY_SCOPE
@@ -1566,7 +1574,7 @@ def digest_command(args: argparse.Namespace) -> int:
                 database_url,
                 days=args.catch_up,
                 dry_run=not args.apply,
-                drive=_drive_reader(),
+                drive=_drive_reader(args),
             ),
         )
         return 0
@@ -1577,7 +1585,7 @@ def digest_command(args: argparse.Namespace) -> int:
         _print_json(
             "digest_backfill",
             digest_module.build_range(
-                database_url, start, end, dry_run=not args.apply, drive=_drive_reader()
+                database_url, start, end, dry_run=not args.apply, drive=_drive_reader(args)
             ),
         )
         return 0
@@ -1587,7 +1595,7 @@ def digest_command(args: argparse.Namespace) -> int:
     # would ever correct.
     day = date.fromisoformat(args.date) if args.date else _kst_today() - timedelta(days=1)
     result = digest_module.build_day(
-        database_url, day, dry_run=not args.apply, drive=_drive_reader()
+        database_url, day, dry_run=not args.apply, drive=_drive_reader(args)
     )
     _print_json("digest_build", result.as_dict())
     return 1 if result.errors else 0
