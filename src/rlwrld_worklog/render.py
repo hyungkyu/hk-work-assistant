@@ -91,6 +91,8 @@ white-space:nowrap}
 .msg .say.none{color:var(--dim);font-style:italic}
 .msg .meta{font:400 12px/1.5 var(--ui);color:var(--muted);margin-top:2px}
 .msg .to{font:500 12px/1.5 var(--ui);color:var(--accent);margin-top:3px}
+.ping{font:500 10.5px/1 var(--ui);color:var(--accent-2);border:1px solid #2c4d7a;
+background:#121e2e;border-radius:999px;padding:3px 7px;white-space:nowrap}
 .lock{font:500 10.5px/1 var(--ui);color:var(--warning);border:1px solid #705a2c;
 background:#2b2415;border-radius:999px;padding:3px 7px;white-space:nowrap}
 .conv.closed .ch{color:var(--warning)}
@@ -370,9 +372,13 @@ def _person_day_body(digest: dict[str, Any]) -> str:
         # The place in the source's own words -- "#eng", a document title, a
         # calendar -- falling back to the raw container id only when the
         # collector recorded no name for it.
-        where = event.get("where") or " · ".join(
-            part for part in (event.get("container"), event.get("thread")) if part
-        )
+        where = event.get("where")
+        if where is None and event.get("source") != "google_calendar":
+            where = " · ".join(
+                part for part in (event.get("container"), event.get("thread")) if part
+            )
+        # A meeting groups under one heading rather than under a calendar id.
+        where = where or ("회의" if event.get("source") == "google_calendar" else "")
         if where != last_where:
             # A DM or a private channel is marked, so nobody reads a line out
             # of this page and quotes it somewhere it was never said.
@@ -389,7 +395,14 @@ def _person_day_body(digest: dict[str, Any]) -> str:
         # label snapshot's title is the fallback for records whose payload
         # holds no words (a Slurm job, a renamed channel). Only when neither
         # exists does the line admit it has nothing to say.
-        said = event.get("excerpt") or event.get("title")
+        # A document edited through the day: what changed in it, not just the
+        # first paragraph touched.
+        parts = event.get("parts")
+        said = (
+            " · ".join(part for part in parts if part)
+            if parts
+            else event.get("excerpt") or event.get("title")
+        )
         body = (
             f'<div class="say">{_e(said)}</div>'
             if said
@@ -408,6 +421,9 @@ def _person_day_body(digest: dict[str, Any]) -> str:
             body += f'<div class="to">→ {_e(", ".join(said_to))}</div>'
 
         marks = []
+        if event.get("mentioned"):
+            # Not theirs, but it named them.
+            marks.append('<span class="ping">멘션됨</span>')
         # "10:00–11:00 · 5명" for a meeting, "스레드 답글" for a reply.
         if event.get("detail"):
             marks.append(f'<span class="meta">{_e(event["detail"])}</span>')

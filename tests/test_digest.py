@@ -588,7 +588,7 @@ def test_a_meeting_reaches_every_attendee_not_only_its_organiser(database):
 
     # Other tests share this database and this window; this test is about the
     # calendar rows it inserted.
-    rows = [row for row in rows if row[2] == "google_calendar"]
+    rows = [row for row in rows if row[3] == "google_calendar"]
     people = [str(row[0]) for row in rows]
     assert sorted(people) == sorted([str(organiser), str(attendee)])
     assert people.count(str(organiser)) == 1
@@ -820,7 +820,7 @@ def test_a_block_line_names_its_document_through_the_parent_join(database):
 
     # Other tests share this database and this window; this test is about the
     # Notion rows it inserted.
-    mine = [row for row in rows if row[2] == "notion"]
+    mine = [row for row in rows if row[3] == "notion"]
     assert len(mine) == 1
     event = row_to_event(mine[0])
     assert event["where"] == "주간 회고"
@@ -1056,3 +1056,28 @@ def test_one_message_observed_twice_is_one_line(database):
     assert len(mine) == 1
     # The official capture, not the search supplement.
     assert row_to_event(mine[0])["excerpt"] == "정식 본문"
+
+
+def test_a_document_edited_all_day_summarises_what_changed():
+    """One line per document, carrying what was written in it, not just the first."""
+    from rlwrld_worklog.digest import collapse
+
+    events = [
+        {"source": "notion", "where": "주간 회고", "excerpt": "GPU 재분배",
+         "fold_by": "document", "time": "09:10"},
+        {"source": "notion", "where": "주간 회고", "excerpt": "학생 lab 비교",
+         "fold_by": "document", "time": "09:40"},
+        {"source": "notion", "where": "주간 회고", "excerpt": "GPU 재분배",
+         "fold_by": "document", "time": "10:00"},
+    ]
+    folded = collapse(events)
+    assert len(folded) == 1
+    # Repeats of the same words do not repeat in the summary.
+    assert folded[0]["parts"] == ["GPU 재분배", "학생 lab 비교"]
+
+
+def test_a_meeting_is_not_filed_under_whichever_calendar_it_was_read_from():
+    """HK: 구캘은 캘린더 오너를 알 필요는 없어."""
+    from rlwrld_worklog.digest import _where
+
+    assert _where("google_calendar", "event", {"calendar_summary": "hk@rlwrld.ai"}, {}, "cal-1") is None

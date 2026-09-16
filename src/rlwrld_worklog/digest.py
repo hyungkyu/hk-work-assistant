@@ -229,7 +229,9 @@ def _where(
         )
         return found or container_id
     if source == "google_calendar":
-        return labels.get("calendar_summary") or labels.get("calendar_name") or container_id
+        # HK, 2026-09-16: 구캘은 캘린더 오너를 알 필요는 없어. The title is the
+        # meeting and the calendar it happened to be read from is plumbing.
+        return None
     return container_id
 
 
@@ -406,6 +408,12 @@ def collapse(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen = folded[index[key]]
         seen["repeat"] += 1
         seen["last_time"] = event.get("time")
+        if fold_by == "document":
+            # What changed in the document today, not just the first edit.
+            parts = seen.setdefault("parts", [seen.get("excerpt")])
+            found = event.get("excerpt")
+            if found and found not in parts and len(parts) < 4:
+                parts.append(found)
     return folded
 
 
@@ -452,16 +460,16 @@ class DigestResult:
 # not attendance and is left out; UNION folds the organiser's two matches into
 # one row.
 _EVENTS_SQL = """
-    WITH matched AS (
-        SELECT identity.person_id, event.event_id
+    WITH arms AS (
+        SELECT identity.person_id, event.event_id, false AS mentioned
           FROM timeline_events event
           JOIN org_identity identity
             ON identity.value = event.actor_external_id
            AND identity.kind = ANY(%(kinds)s)
          WHERE event.occurred_at >= %(start)s
            AND event.occurred_at < %(end)s
-        UNION
-        SELECT identity.person_id, event.event_id
+        UNION ALL
+        SELECT identity.person_id, event.event_id, false AS mentioned
           FROM timeline_events event
           JOIN ledger_records ledger
             ON ledger.ledger_id = event.event_id
@@ -475,6 +483,30 @@ _EVENTS_SQL = """
            AND coalesce(attendee->>'responseStatus', '') <> 'declined'
            AND event.occurred_at >= %(start)s
            AND event.occurred_at < %(end)s
+        UNION ALL
+        -- Being named is part of a person's day too. HK, 2026-09-16: 내가
+        -- 생성하지 않았지만, 내가 멘션되었거나 하는 것도 같이 보여줘. Notion
+        -- records the mentions it extracted; Slack does not (its records say
+        -- mentions_extracted: false), so the message text is matched for the
+        -- handle -- a scan, but over one day's rows.
+        SELECT identity.person_id, event.event_id, true AS mentioned
+          FROM timeline_events event
+          JOIN ledger_records ledger
+            ON ledger.ledger_id = event.event_id
+          JOIN org_identity identity
+            ON (identity.kind = 'notion'
+                AND coalesce(ledger.relations->'mentioned_user_ids', '[]'::jsonb)
+                    ? identity.value)
+            OR (identity.kind = 'slack'
+                AND ledger.raw_payload->>'text' LIKE '%%<@' || identity.value || '%%')
+         WHERE event.occurred_at >= %(start)s
+           AND event.occurred_at < %(end)s
+    ),
+    matched AS (
+        -- An event that both quotes the person and was written by them is one
+        -- line, and it is theirs rather than a mention.
+        SELECT person_id, event_id, bool_and(mentioned) AS mentioned
+          FROM arms GROUP BY person_id, event_id
     )
     -- A meeting's identity is its iCalUID, not its row: the same meeting sits
     -- on the organiser's calendar and on every attendee's, and the ledger keys
@@ -487,6 +519,7 @@ _EVENTS_SQL = """
                coalesce(ledger.raw_payload->>'iCalUID', event.external_id)
            )
            matched.person_id,
+           matched.mentioned,
            event.occurred_at,
            event.source,
            event.event_type,
@@ -624,7 +657,10 @@ def build_day(
             cursor.execute(_EVENTS_SQL, {"start": start, "end": end, "kinds": list(_ALL_KINDS)})
             # DISTINCT ON forces its own ordering, so the person-major,
             # time-ascending order the writer depends on is restored here.
-            rows = sorted(cursor.fetchall(), key=lambda row: (str(row[0]), row[1]))
+            # By person, then by time. The columns are positional, so this
+            # names why index 2 is the one that matters: index 1 is the
+            # mention flag, and sorting by it silently shuffled the day.
+            rows = sorted(cursor.fetchall(), key=lambda row: (str(row[0]), row[2]))
 
             # Messages fetched through Slack search carry no permalink, so the
             # workspace prefix is borrowed from one that does rather than
@@ -661,6 +697,7 @@ def _event(
 ) -> dict[str, Any]:
     (
         _person_id,
+        mentioned,
         occurred_at,
         source,
         event_type,
@@ -683,13 +720,23 @@ def _event(
         "container": container_id,
         "thread": thread_id,
         "permalink": permalink
-        or (_slack_permalink(raw_payload, container_id, slack_prefix) if source == "slack" else None),
+        or (_slack_permalink(raw_payload, container_id, slack_prefix) if source == "slack" else None)
+        # A block has no URL of its own and its page id names nothing; the
+        # document's own URL is what a reader wants to open.
+        or (
+            (parent_raw or {}).get("url")
+            if entity_type == "block" and isinstance(parent_raw, dict)
+            else None
+        ),
         # Links the event carries of its own -- a meeting's Gemini notes, its
         # video room. Separate from `permalink`, which is the event itself.
         "links": links(source, raw_payload),
         # Computed here because the timeline row keeps no copy of the payload,
         # and the summary must not re-read the ledger to add up a day.
         "gpu_hours": round(_gpu_hours(raw_payload), 3) if source == "slurm" else None,
+        # Not written by this person, but it named them. Their day includes
+        # being asked something, not only what they said.
+        "mentioned": bool(mentioned),
         # Who it was said to, and whether the place it was said in is closed.
         "to": audience(source, raw_payload, container_id, parent_relations, names, places),
         "private": bool(
