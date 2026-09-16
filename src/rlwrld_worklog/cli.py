@@ -448,6 +448,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Repeatable. Without any, every source is counted",
     )
     reconcile_parser.add_argument(
+        "--no-source-read",
+        action="store_true",
+        help="Skip asking Slack and Calendar; count only the layers inside the database",
+    )
+    reconcile_parser.add_argument(
         "--gaps-only",
         action="store_true",
         help="Print only the rows where a layer lost something",
@@ -1351,7 +1356,9 @@ def reconcile_command(args: argparse.Namespace) -> int:
     from . import digest as digest_module
     from .reconcile import SOURCES, reconcile
 
-    database_url = _database_url(args)
+    database_url = args.database_url or os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise SystemExit("DATABASE_URL or --database-url is required")
     start = date_type.fromisoformat(args.since)
     end = date_type.fromisoformat(args.until)
     if end < start:
@@ -1366,10 +1373,62 @@ def reconcile_command(args: argparse.Namespace) -> int:
         )
     person_id = next(iter(match["resolved"].values()))
 
+    # Reading the sources directly was approved by HK on 2026-09-16 ("해도
+    # 된다"), using the collectors' own credentials and read-only scopes. A
+    # credential that is absent leaves the 원본 column unmeasured; it never
+    # becomes a zero, and a source that refuses is reported rather than
+    # retried, because a failed read that looks like an empty day is the one
+    # outcome this whole command exists to prevent.
+    slack_client = None
+    slack_user_id = None
+    calendar_client = None
+    calendar_ids: list[str] = []
+    if not args.no_source_read:
+        from .daily import load_credentials
+
+        credentials = load_credentials()
+        if credentials.slack_token:
+            from .slack_client import SlackClient
+
+            try:
+                slack_client = SlackClient(credentials.slack_token)
+                slack_user_id = str(slack_client.call("auth.test").get("user_id") or "") or None
+            except Exception as error:
+                print(f"슬랙 원본 조회 불가: {error}")
+                slack_client = None
+        if credentials.google_token_path:
+            from .calendar_client import GoogleCalendarClient
+            from .google_auth import CALENDAR_READONLY_SCOPE
+            from .google_auth import load_credentials as load_google_credentials
+
+            try:
+                google = load_google_credentials(
+                    credentials.google_token_path, [CALENDAR_READONLY_SCOPE]
+                )
+                calendar_client = GoogleCalendarClient(google)
+                page_token = None
+                while True:
+                    body = calendar_client.list_calendars(page_token=page_token)
+                    calendar_ids.extend(
+                        str(entry.get("id"))
+                        for entry in (body.get("items") or [])
+                        if entry.get("id")
+                    )
+                    page_token = body.get("nextPageToken")
+                    if not page_token:
+                        break
+            except Exception as error:
+                print(f"캘린더 원본 조회 불가: {error}")
+                calendar_client = None
+
     result = reconcile(
         database_url,
         person_id,
         days,
+        slack_client=slack_client,
+        slack_user_id=slack_user_id,
+        calendar_client=calendar_client,
+        calendar_ids=calendar_ids,
         sources=tuple(args.source) or SOURCES,
     )
     found = result.as_dict()

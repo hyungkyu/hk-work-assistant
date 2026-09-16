@@ -31,6 +31,36 @@ class GoogleCalendarClient:
             .execute()
         )
 
+    def iter_day_events(self, calendar_id: str, *, time_min: str, time_max: str):
+        """Every occurrence inside a window, for counting one day.
+
+        Deliberately not the collector's `list_events`: that one asks for
+        `singleEvents=False`, so a weekly meeting arrives once as a recurrence
+        rule and cannot be counted per day without expanding it. Here Google
+        does the expansion, which is what makes "how many meetings did I have
+        on Tuesday" answerable at all. Same read-only scope either way.
+        """
+        page_token: str | None = None
+        while True:
+            body = (
+                self.service.events()
+                .list(
+                    calendarId=calendar_id,
+                    pageToken=page_token,
+                    timeMin=time_min,
+                    timeMax=time_max,
+                    singleEvents=True,
+                    showDeleted=False,
+                    maxResults=2500,
+                )
+                .execute()
+            )
+            for item in body.get("items") or []:
+                yield item
+            page_token = body.get("nextPageToken")
+            if not page_token:
+                return
+
     def list_events(
         self,
         calendar_id: str,

@@ -67,7 +67,7 @@ def test_slack_reports_not_measured_rather_than_zero_when_it_answers_oddly():
 
 def test_a_meeting_on_two_calendars_is_counted_once():
     class Fake:
-        def list_events(self, calendar_id, **params):
+        def iter_day_events(self, calendar_id, *, time_min, time_max):
             return [{"id": "evt-1"}, {"id": f"only-{calendar_id}"}]
 
     assert calendar_day_count(Fake(), ["a@x", "b@x"], date(2026, 9, 15)) == 3
@@ -77,10 +77,110 @@ def test_the_calendar_window_is_the_kst_day():
     seen = {}
 
     class Fake:
-        def list_events(self, calendar_id, **params):
-            seen.update(params)
+        def iter_day_events(self, calendar_id, *, time_min, time_max):
+            seen.update({"timeMin": time_min, "timeMax": time_max})
             return []
 
     calendar_day_count(Fake(), ["a@x"], date(2026, 9, 15))
     assert seen["timeMin"].startswith("2026-09-15T00:00:00+09:00")
     assert seen["timeMax"].startswith("2026-09-16T00:00:00+09:00")
+
+
+def test_the_command_runs_end_to_end_without_a_database(monkeypatch, capsys):
+    """The check that was missing: nothing called reconcile_command at all.
+
+    Shipped with `_database_url(args)`, a function that does not exist, and
+    every unit test still passed because none of them invoked the command. So
+    this one does, with the layers faked, and would have caught the NameError.
+    """
+    from datetime import date as date_type
+
+    from rlwrld_worklog import cli, digest, reconcile as reconcile_module
+
+    monkeypatch.setattr(
+        digest, "resolve_people", lambda url, names: {"resolved": {names[0]: "p_1"}, "unresolved": [], "ambiguous": {}}
+    )
+    monkeypatch.setattr(
+        reconcile_module,
+        "reconcile",
+        lambda url, person_id, days, **kwargs: reconcile_module.ReconcileResult(
+            rows=[
+                reconcile_module.Row(
+                    day=days[0].isoformat(),
+                    source="google_calendar",
+                    ledger=124,
+                    timeline=0,
+                    digest=0,
+                )
+            ]
+        ),
+    )
+
+    class Args:
+        person_name = "류형규"
+        since = "2026-09-15"
+        until = "2026-09-15"
+        database_url = "postgresql://fake"
+        source = []
+        gaps_only = False
+        no_source_read = True
+
+    assert cli.reconcile_command(Args()) == 1  # a gap exits non-zero
+    printed = capsys.readouterr().out
+    assert "투영 누락" in printed
+    assert "google_calendar" in printed
+    assert date_type(2026, 9, 15).isoformat() in printed
+
+
+def test_the_command_exits_clean_when_no_layer_lost_anything(monkeypatch, capsys):
+    from rlwrld_worklog import cli, digest, reconcile as reconcile_module
+
+    monkeypatch.setattr(
+        digest, "resolve_people", lambda url, names: {"resolved": {"x": "p_1"}, "unresolved": [], "ambiguous": {}}
+    )
+    monkeypatch.setattr(
+        reconcile_module,
+        "reconcile",
+        lambda url, person_id, days, **kwargs: reconcile_module.ReconcileResult(
+            rows=[
+                reconcile_module.Row(
+                    day="2026-09-15", source="slack", ledger=30, timeline=30, digest=30,
+                    external=30,
+                )
+            ]
+        ),
+    )
+
+    class Args:
+        person_name = "x"
+        since = "2026-09-15"
+        until = "2026-09-15"
+        database_url = "postgresql://fake"
+        source = []
+        gaps_only = False
+        no_source_read = True
+
+    assert cli.reconcile_command(Args()) == 0
+    assert "ok" in capsys.readouterr().out
+
+
+def test_an_unknown_person_is_refused_rather_than_reported_as_empty(monkeypatch):
+    import pytest
+
+    from rlwrld_worklog import cli, digest
+
+    monkeypatch.setattr(
+        digest, "resolve_people", lambda url, names: {"resolved": {}, "unresolved": names, "ambiguous": {}}
+    )
+
+    class Args:
+        person_name = "없는사람"
+        since = "2026-09-15"
+        until = "2026-09-15"
+        database_url = "postgresql://fake"
+        source = []
+        gaps_only = False
+        no_source_read = True
+
+    with pytest.raises(SystemExit):
+        cli.reconcile_command(Args())

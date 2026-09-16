@@ -103,7 +103,7 @@ def slack_day_count(client: SlackSearch, slack_user_id: str, day: date) -> int |
 
 
 class CalendarList(Protocol):
-    def list_events(self, calendar_id: str, **params: Any) -> Any: ...
+    def iter_day_events(self, calendar_id: str, *, time_min: str, time_max: str) -> Any: ...
 
 
 def calendar_day_count(
@@ -118,11 +118,8 @@ def calendar_day_count(
     total = 0
     seen: set[str] = set()
     for calendar_id in calendar_ids:
-        for event in client.list_events(
-            calendar_id,
-            timeMin=start.isoformat(),
-            timeMax=end.isoformat(),
-            singleEvents=True,
+        for event in client.iter_day_events(
+            calendar_id, time_min=start.isoformat(), time_max=end.isoformat()
         ):
             identifier = str((event or {}).get("id") or "")
             if identifier and identifier in seen:
@@ -244,12 +241,14 @@ def reconcile(
                     if external is None and source in {"slack", "google_calendar"}:
                         note = "원본 미조회"
                         result.unmeasured.append(source)
-                    elif source in {"notion", "github", "slurm"}:
-                        # Notion's API cannot be asked "what did this person
-                        # edit on this day" -- blocks are not searchable and the
-                        # editor filter needs a plan this connection does not
-                        # have. Saying so beats a column of zeros.
-                        note = "원본 조회 불가"
+                    elif source == "notion":
+                        # Notion cannot be asked "what did this person edit on
+                        # this day": blocks are not searchable and the editor
+                        # filter needs a plan this connection does not have.
+                        note = "원본 조회 불가 (노션 API 한계)"
+                        result.unmeasured.append(source)
+                    elif source in {"github", "slurm"}:
+                        note = "원본 대조 미구현"
                         result.unmeasured.append(source)
                     result.rows.append(
                         Row(
