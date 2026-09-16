@@ -953,3 +953,106 @@ def test_who_it_was_said_to_is_gathered_from_every_place_it_hides():
     assert audience("slack", {"text": "배포 완료"}, "C1", None, names, {}) == []
     # Only Slack has an audience in this sense.
     assert audience("notion", {"text": "<@U1>"}, "C1", None, names, {}) == []
+
+
+@REQUIRES_DATABASE
+def test_one_message_observed_twice_is_one_line(database):
+    """The Web API and the search supplement both see the same message.
+
+    Two observations, two content hashes, two ledger ids, two timeline rows --
+    and one thing the person actually said. The ledger is right to keep both;
+    a day's reading is not. The official capture wins.
+    """
+    import uuid
+
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    from rlwrld_worklog.digest import _ALL_KINDS, _EVENTS_SQL
+    from rlwrld_worklog.digest import _event as row_to_event
+
+    person = uuid.uuid4()
+    moment = datetime(2026, 9, 12, 11, tzinfo=KST)
+    captures = (
+        ("live-slack-web-api/v1", uuid.uuid4(), "정식 본문"),
+        ("live-slack-search/v1", uuid.uuid4(), "검색 본문"),
+    )
+    with psycopg.connect(os.environ["WORKLOG_TEST_DATABASE_URL"]) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM org_identity WHERE value = 'U_DUP'")
+            cursor.execute(
+                "DELETE FROM person_day_digest WHERE person_id IN "
+                "(SELECT person_id FROM org_person WHERE name = '중복관측')"
+            )
+            cursor.execute("DELETE FROM org_person WHERE name = '중복관측'")
+            cursor.execute("DELETE FROM timeline_events WHERE external_id = 'dup-1'")
+            cursor.execute("DELETE FROM ledger_records WHERE source_entity_id = 'dup-1'")
+            cursor.execute(
+                "INSERT INTO roster_observation (observed_at, source, row_count) "
+                "VALUES (now(), 'roster_seed_2', 1) RETURNING observation_id"
+            )
+            observation = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO org_person (person_id, name, first_seen, last_seen) "
+                "VALUES (%s, '중복관측', %s, %s)",
+                (person, observation, observation),
+            )
+            cursor.execute(
+                "INSERT INTO org_identity (person_id, kind, value, first_seen, last_seen, "
+                "origin) VALUES (%s, 'slack', 'U_DUP', %s, %s, 'roster')",
+                (person, observation, observation),
+            )
+            for profile, ledger_id, text in captures:
+                fields = dict(_CAL_LEDGER_FIELDS)
+                fields.update(
+                    source="slack",
+                    entity_type="message",
+                    capture_profile=profile,
+                    source_entity_id="dup-1",
+                    ledger_id=ledger_id,
+                    scope=Jsonb({"channel_id": "C1"}),
+                    source_entity_key=Jsonb({"id": "dup-1"}),
+                    raw_payload=Jsonb({"text": text}),
+                    relations=Jsonb({"author_user_id": "U_DUP"}),
+                    provenance=Jsonb({}),
+                    coverage=Jsonb({}),
+                    observation_window=Jsonb({}),
+                    capture_completeness=Jsonb({}),
+                    supplement_provenance=Jsonb({}),
+                    visibility_routing=Jsonb({}),
+                    denormalized_label_snapshot=Jsonb({"channel_name": "eng"}),
+                    source_created_at=moment,
+                    collected_at=moment,
+                    content_hash=profile,
+                )
+                cursor.execute(
+                    f"INSERT INTO ledger_records ({','.join(fields)}) "
+                    f"VALUES ({','.join('%s' for _ in fields)})",
+                    list(fields.values()),
+                )
+                cursor.execute(
+                    "INSERT INTO timeline_events (event_id, source, event_type, external_id, "
+                    "actor_external_id, occurred_at, ingested_at, container_id, payload) "
+                    "VALUES (%s, 'slack', 'message', 'dup-1', 'U_DUP', %s, now(), 'C1', %s)",
+                    (ledger_id, moment, Jsonb({"labels": {}})),
+                )
+        connection.commit()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                _EVENTS_SQL,
+                {
+                    "start": datetime(2026, 9, 12, tzinfo=KST),
+                    "end": datetime(2026, 9, 13, tzinfo=KST),
+                    "kinds": list(_ALL_KINDS),
+                },
+            )
+            rows = cursor.fetchall()
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM timeline_events WHERE external_id = 'dup-1'")
+            cursor.execute("DELETE FROM ledger_records WHERE source_entity_id = 'dup-1'")
+        connection.commit()
+
+    mine = [row for row in rows if str(row[0]) == str(person)]
+    assert len(mine) == 1
+    # The official capture, not the search supplement.
+    assert row_to_event(mine[0])["excerpt"] == "정식 본문"

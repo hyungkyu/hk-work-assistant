@@ -162,8 +162,12 @@ def calendar_day_count(
     return total
 
 
+# Distinct objects, not observations. The same Slack message is legitimately
+# recorded twice -- once by the Web API capture and once by the search
+# supplement -- and counting rows made a correct ledger look like it was
+# inflating by 2-3x against the source.
 _LEDGER_SQL = """
-    SELECT count(*) FROM ledger_records
+    SELECT count(DISTINCT source_entity_id) FROM ledger_records
      WHERE source = %(source)s
        AND source_created_at >= %(start)s AND source_created_at < %(end)s
 """

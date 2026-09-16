@@ -476,7 +476,8 @@ _EVENTS_SQL = """
            AND event.occurred_at >= %(start)s
            AND event.occurred_at < %(end)s
     )
-    SELECT matched.person_id,
+    SELECT DISTINCT ON (matched.person_id, event.source, event.external_id)
+           matched.person_id,
            event.occurred_at,
            event.source,
            event.event_type,
@@ -511,7 +512,16 @@ _EVENTS_SQL = """
                   AND origin.source_entity_id = ledger.relations->>'thread_id')
            LIMIT 1
       ) AS parent ON ledger.source IN ('notion', 'slack')
-     ORDER BY matched.person_id, event.occurred_at, event.event_type
+     -- One row per real message, not per observation of it. The same Slack
+     -- message arrives twice -- once from the Web API and once from the search
+     -- supplement -- with different content hashes and therefore different
+     -- ledger ids, so the timeline holds two rows for one thing a person said.
+     -- The ledger is right to keep both: it records observations. A day's
+     -- reading is not, so the official capture wins and the supplement is the
+     -- fallback, which is the same priority order the head store already uses.
+     ORDER BY matched.person_id, event.source, event.external_id,
+              CASE WHEN ledger.capture_profile LIKE '%%search%%' THEN 1 ELSE 0 END,
+              event.occurred_at
 """
 
 # Which identity kinds an actor handle can match, by the `actor_kind` the
@@ -602,7 +612,9 @@ def build_day(
             }
 
             cursor.execute(_EVENTS_SQL, {"start": start, "end": end, "kinds": list(_ALL_KINDS)})
-            rows = cursor.fetchall()
+            # DISTINCT ON forces its own ordering, so the person-major,
+            # time-ascending order the writer depends on is restored here.
+            rows = sorted(cursor.fetchall(), key=lambda row: (str(row[0]), row[1]))
 
             # Messages fetched through Slack search carry no permalink, so the
             # workspace prefix is borrowed from one that does rather than
