@@ -1349,6 +1349,28 @@ def _digest_days(args: argparse.Namespace) -> list[date]:
     return [date.fromisoformat(args.date) if args.date else _kst_today() - timedelta(days=1)]
 
 
+def _drive_reader():
+    """A Drive reader for meeting notes, or None when there is no token.
+
+    None rather than a raising stub: a digest built without Drive is a digest
+    with no meeting notes, which is a smaller loss than a digest that does not
+    get built. The count of notes attached is reported either way, so a silent
+    drop to zero is visible.
+    """
+    try:
+        from .daily import load_credentials
+        from .google_auth import DRIVE_READONLY_SCOPE
+        from .google_auth import load_credentials as load_google
+        from .legacy_drive import GoogleDriveFiles
+
+        credentials = load_credentials()
+        if not credentials.google_token_path:
+            return None
+        return GoogleDriveFiles(load_google(credentials.google_token_path, [DRIVE_READONLY_SCOPE]))
+    except Exception:
+        return None
+
+
 def reconcile_command(args: argparse.Namespace) -> int:
     """Where did this person's day go? Counted layer by layer, one line each."""
     from datetime import date as date_type
@@ -1540,7 +1562,12 @@ def digest_command(args: argparse.Namespace) -> int:
     if args.catch_up:
         _print_json(
             "digest_catch_up",
-            digest_module.catch_up(database_url, days=args.catch_up, dry_run=not args.apply),
+            digest_module.catch_up(
+                database_url,
+                days=args.catch_up,
+                dry_run=not args.apply,
+                drive=_drive_reader(),
+            ),
         )
         return 0
 
@@ -1549,7 +1576,9 @@ def digest_command(args: argparse.Namespace) -> int:
         end = date.fromisoformat(args.until) if args.until else _kst_today() - timedelta(days=1)
         _print_json(
             "digest_backfill",
-            digest_module.build_range(database_url, start, end, dry_run=not args.apply),
+            digest_module.build_range(
+                database_url, start, end, dry_run=not args.apply, drive=_drive_reader()
+            ),
         )
         return 0
 
@@ -1557,7 +1586,9 @@ def digest_command(args: argparse.Namespace) -> int:
     # is not over, so "today" would be a digest of a partial day that nothing
     # would ever correct.
     day = date.fromisoformat(args.date) if args.date else _kst_today() - timedelta(days=1)
-    result = digest_module.build_day(database_url, day, dry_run=not args.apply)
+    result = digest_module.build_day(
+        database_url, day, dry_run=not args.apply, drive=_drive_reader()
+    )
     _print_json("digest_build", result.as_dict())
     return 1 if result.errors else 0
 

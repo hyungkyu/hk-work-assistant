@@ -317,6 +317,67 @@ def slack_place(raw: Any, relations: Any, names: dict[str, str]) -> dict[str, An
     return {"label": f"#{name}", "private": bool(raw.get("is_private"))}
 
 
+_DRIVE_FILE_ID = re.compile(r"/d/([A-Za-z0-9_-]{10,})")
+
+# How much of a meeting note to carry. Enough to see what the meeting decided,
+# short enough that a day of meetings is still a page.
+NOTE_CHARS = 400
+
+
+def note_head(text: str | None) -> str | None:
+    """The front of a Gemini meeting note, as prose.
+
+    The export opens with the meeting's own title and attendee list, which the
+    line already shows, so those are dropped and the summary itself is what
+    survives. Nothing is rewritten: this is the note's own words, cut.
+    """
+    if not isinstance(text, str):
+        return None
+    lines = [line.strip() for line in text.splitlines()]
+    body: list[str] = []
+    for line in lines:
+        if not line:
+            continue
+        # The export's own scaffolding, not the summary.
+        if line.endswith("에서 참석") or line.startswith("참석자:"):
+            continue
+        if line in {"요약", "Summary", "회의 기록", "Meeting notes"}:
+            continue
+        body.append(line)
+    joined = " ".join(body)
+    if not joined:
+        return None
+    return joined if len(joined) <= NOTE_CHARS else joined[: NOTE_CHARS - 1].rstrip() + "…"
+
+
+def attach_notes(events: list[dict[str, Any]], drive) -> int:
+    """Read each meeting's attached notes once, and put them on the line.
+
+    Once per document per build, cached: the same weekly meeting's note is
+    linked from every copy of the event. A meeting with no note, or one the
+    token cannot read, simply has none -- never an invented summary.
+    """
+    if drive is None:
+        return 0
+    cache: dict[str, str | None] = {}
+    filled = 0
+    for event in events:
+        if event.get("source") != "google_calendar":
+            continue
+        for link in event.get("links") or []:
+            found = _DRIVE_FILE_ID.search(str(link.get("url") or ""))
+            if not found:
+                continue
+            file_id = found.group(1)
+            if file_id not in cache:
+                cache[file_id] = note_head(drive.export_text(file_id))
+            if cache[file_id]:
+                event["note"] = cache[file_id]
+                filled += 1
+            break
+    return filled
+
+
 def _slack_prefix(rows) -> str | None:
     """The workspace's archive URL prefix, learned from the day's own rows."""
     for row in rows:
@@ -432,6 +493,9 @@ class DigestResult:
     events: int = 0
     truncated_people: list[str] = field(default_factory=list)
     unattributed_events: int = 0
+    # Meeting lines that carry their notes. Reported because a drop to zero
+    # means the Drive read stopped working, which is otherwise invisible.
+    notes_attached: int = 0
     errors: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -446,6 +510,7 @@ class DigestResult:
             # hidden: it is the size of what the org chart cannot account
             # for, and it belongs next to the number it is missing from.
             "unattributed_events": self.unattributed_events,
+            "notes_attached": self.notes_attached,
             "errors": self.errors[:20],
             "generator": GENERATOR,
         }
@@ -597,6 +662,7 @@ def build_day(
     day: date,
     *,
     dry_run: bool = False,
+    drive=None,
 ) -> DigestResult:
     """Build (or rebuild) every person's digest for one KST day."""
     import psycopg
@@ -672,14 +738,18 @@ def build_day(
             for row in rows:
                 person_id = row[0]
                 if current is not None and person_id != current:
-                    _write(cursor, current, day, collapse(events), result, Jsonb)
+                    folded = collapse(events)
+                    result.notes_attached += attach_notes(folded, drive)
+                    _write(cursor, current, day, folded, result, Jsonb)
                     events = []
                 current = person_id
                 events.append(
                     _event(row, names=names, slack_prefix=slack_prefix, places=places)
                 )
             if current is not None:
-                _write(cursor, current, day, collapse(events), result, Jsonb)
+                folded = collapse(events)
+                result.notes_attached += attach_notes(folded, drive)
+                _write(cursor, current, day, folded, result, Jsonb)
 
             if dry_run:
                 connection.rollback()
@@ -934,13 +1004,13 @@ def _write(cursor, person_id: str, day: date, events: list[dict], result: Digest
 
 
 def build_range(
-    database_url: str, start: date, end: date, *, dry_run: bool = False
+    database_url: str, start: date, end: date, *, dry_run: bool = False, drive=None
 ) -> list[dict[str, Any]]:
     """Every day in [start, end], oldest first. The backfill path."""
     out = []
     day = start
     while day <= end:
-        out.append(build_day(database_url, day, dry_run=dry_run).as_dict())
+        out.append(build_day(database_url, day, dry_run=dry_run, drive=drive).as_dict())
         day += timedelta(days=1)
     return out
 
@@ -973,7 +1043,12 @@ def missing_days(database_url: str, *, days: int, today: date | None = None) -> 
 
 
 def catch_up(
-    database_url: str, *, days: int = 7, dry_run: bool = False, today: date | None = None
+    database_url: str,
+    *,
+    days: int = 7,
+    dry_run: bool = False,
+    today: date | None = None,
+    drive=None,
 ) -> dict[str, Any]:
     """Build any of the last `days` KST days that has no digest at all.
 
@@ -987,7 +1062,10 @@ def catch_up(
     `--date`, which is the deliberate act.
     """
     gaps = missing_days(database_url, days=days, today=today)
-    built = [build_day(database_url, day, dry_run=dry_run).as_dict() for day in gaps]
+    built = [
+        build_day(database_url, day, dry_run=dry_run, drive=drive).as_dict()
+        for day in gaps
+    ]
     return {
         "window_days": days,
         "missing": [day.isoformat() for day in gaps],

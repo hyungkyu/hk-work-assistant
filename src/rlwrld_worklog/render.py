@@ -91,6 +91,8 @@ white-space:nowrap}
 .msg .say.none{color:var(--dim);font-style:italic}
 .msg .meta{font:400 12px/1.5 var(--ui);color:var(--muted);margin-top:2px}
 .msg .to{font:500 12px/1.5 var(--ui);color:var(--accent);margin-top:3px}
+.msg .note{font:400 13px/1.6 var(--ui);color:var(--muted);margin-top:5px;
+border-left:2px solid var(--line);padding-left:10px}
 .ping{font:500 10.5px/1 var(--ui);color:var(--accent-2);border:1px solid #2c4d7a;
 background:#121e2e;border-radius:999px;padding:3px 7px;white-space:nowrap}
 .lock{font:500 10.5px/1 var(--ui);color:var(--warning);border:1px solid #705a2c;
@@ -413,6 +415,10 @@ def _person_day_body(digest: dict[str, Any]) -> str:
         title = event.get("title")
         if title and event.get("excerpt") and title not in str(event.get("excerpt")):
             body += f'<div class="meta">{_e(title)}</div>'
+
+        # What the meeting actually decided, in the note's own words.
+        if event.get("note"):
+            body += f'<div class="note">{_e(event["note"])}</div>'
 
         # Who it was said to leads the metadata: HK, 2026-09-16, 내가 한말이
         # 중요한게 아니라, 내가 누구에게 무슨 이야기를 했느냐가 중요해.

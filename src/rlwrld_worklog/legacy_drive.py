@@ -18,6 +18,34 @@ DATE_FOLDER = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 class DriveFiles(Protocol):
+    def export_text(self, file_id: str, *, limit: int = 4000) -> str | None:
+        """A Google Doc as plain text, for reading rather than archiving.
+
+        Gemini writes a meeting's notes into a Doc and attaches it to the
+        event, so the one thing a person wants after a meeting is not in the
+        calendar payload at all. `files.export` is the only way to the words;
+        the binary download path returns the Doc's packaging, not its text.
+
+        A file that cannot be exported -- a PDF, a slide deck, something the
+        token cannot see -- returns None rather than an error, because a
+        meeting with an unreadable attachment is still a meeting.
+        """
+        from googleapiclient.errors import HttpError
+
+        try:
+            data = (
+                self.service.files()
+                .export(fileId=file_id, mimeType="text/plain")
+                .execute()
+            )
+        except HttpError:
+            return None
+        if isinstance(data, bytes):
+            data = data.decode("utf-8", errors="replace")
+        if not isinstance(data, str):
+            return None
+        return data[:limit] or None
+
     def list_children(self, folder_id: str) -> list[dict[str, Any]]: ...
     def download(self, file_id: str, destination: Path) -> None: ...
 

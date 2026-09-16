@@ -1081,3 +1081,55 @@ def test_a_meeting_is_not_filed_under_whichever_calendar_it_was_read_from():
     from rlwrld_worklog.digest import _where
 
     assert _where("google_calendar", "event", {"calendar_summary": "hk@rlwrld.ai"}, {}, "cal-1") is None
+
+
+def test_a_meeting_note_is_read_once_and_put_on_the_line():
+    """The thing a person wants after a meeting is not in the calendar payload."""
+    from rlwrld_worklog.digest import attach_notes
+
+    calls = []
+
+    class Drive:
+        def export_text(self, file_id, limit=4000):
+            calls.append(file_id)
+            return "요약\n참석자: 류형규, 김재우\nGPU 재분배 초안을 9월 말까지 잡기로 했다."
+
+    events = [
+        {"source": "google_calendar",
+         "links": [{"url": "https://docs.google.com/document/d/1AbC_defGHIjk/edit"}]},
+        # The same weekly meeting, linked from another copy: read once.
+        {"source": "google_calendar",
+         "links": [{"url": "https://docs.google.com/document/d/1AbC_defGHIjk/edit"}]},
+        {"source": "slack", "links": [{"url": "https://docs.google.com/document/d/other/edit"}]},
+    ]
+    assert attach_notes(events, Drive()) == 2
+    assert calls == ["1AbC_defGHIjk"]
+    # The note's own words, with the export's scaffolding dropped.
+    assert events[0]["note"] == "GPU 재분배 초안을 9월 말까지 잡기로 했다."
+    # Slack lines are not meetings.
+    assert "note" not in events[2]
+
+
+def test_no_drive_means_no_note_rather_than_an_invented_one():
+    from rlwrld_worklog.digest import attach_notes, note_head
+
+    events = [{"source": "google_calendar", "links": [{"url": "https://docs.google.com/d/x1234567890"}]}]
+    assert attach_notes(events, None) == 0
+    assert "note" not in events[0]
+
+    class Silent:
+        def export_text(self, file_id, limit=4000):
+            return None
+
+    assert attach_notes(events, Silent()) == 0
+    assert "note" not in events[0]
+    assert note_head(None) is None
+    assert note_head("요약\n참석자: 아무개") is None
+
+
+def test_a_long_note_is_cut_rather_than_rewritten():
+    from rlwrld_worklog.digest import NOTE_CHARS, note_head
+
+    found = note_head("가" * 900)
+    assert len(found) == NOTE_CHARS
+    assert found.endswith("…")
