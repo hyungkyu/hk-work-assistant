@@ -520,6 +520,46 @@ def attach_notes(events: list[dict[str, Any]], drive, cache: NoteCache | None = 
     return filled
 
 
+def attach_meeting_pages(events: list[dict[str, Any]], pages: dict, day: str) -> int:
+    """Put a link to the Notion page that recorded the meeting on its line.
+
+    HK: "회의는 제미나이 노트도 있지만, 해당 일자의 미팅 노트가 남는 경우가 많아."
+    The two are different things -- Gemini writes what was said, a person writes
+    what was decided -- so a meeting can carry both links.
+
+    A meeting whose note cannot be identified with confidence gets nothing. See
+    meeting_notes.match_note: the wrong meeting's decisions on a line is a
+    worse report than a line with no link.
+    """
+    from .meeting_notes import match_note
+
+    candidates = {
+        key: entry.get("raw") or {}
+        for key, entry in (pages or {}).items()
+        if isinstance(entry, dict)
+    }
+    if not candidates:
+        return 0
+
+    filled = 0
+    for event in events:
+        if event.get("source") != "google_calendar":
+            continue
+        title = (event.get("where") or "").removeprefix("회의: ")
+        found = match_note(title, day, candidates)
+        if not found:
+            continue
+        entry = pages.get(found) or {}
+        url = entry.get("url") or notion_link(found)
+        if not url:
+            continue
+        event.setdefault("links", []).append(
+            {"url": url, "title": entry.get("title") or "회의 노트"}
+        )
+        filled += 1
+    return filled
+
+
 def _slack_prefix(rows) -> str | None:
     """The workspace's archive URL prefix, learned from the day's own rows."""
     for row in rows:
@@ -638,6 +678,10 @@ class DigestResult:
     # Meeting lines that carry their notes. Reported because a drop to zero
     # means the Drive read stopped working, which is otherwise invisible.
     notes_attached: int = 0
+    # Meeting lines matched to the Notion page that recorded them. Separate
+    # from notes_attached: one is what Gemini heard, the other what a person
+    # wrote down, and a meeting can have either, both or neither.
+    meeting_pages: int = 0
     seconds: float = 0.0
     errors: list[str] = field(default_factory=list)
 
@@ -654,6 +698,7 @@ class DigestResult:
             # for, and it belongs next to the number it is missing from.
             "unattributed_events": self.unattributed_events,
             "notes_attached": self.notes_attached,
+            "meeting_pages": self.meeting_pages,
             "seconds": self.seconds,
             "errors": self.errors[:20],
             "generator": GENERATOR,
@@ -917,6 +962,10 @@ def build_day(
                 pages[key] = {
                     "title": _plain_notion_title(raw),
                     "url": raw.get("url") or notion_link(page_id),
+                    # Kept so a meeting can be matched to the page that
+                    # recorded it; `properties` is where the meeting date and
+                    # the real title live.
+                    "raw": raw,
                 }
 
             cursor.execute(_EVENTS_SQL, {"start": start, "end": end, "kinds": list(_ALL_KINDS)})
@@ -939,6 +988,7 @@ def build_day(
                 if current is not None and person_id != current:
                     folded = collapse(events)
                     result.notes_attached += attach_notes(folded, drive, note_cache)
+                    result.meeting_pages += attach_meeting_pages(folded, pages, day.isoformat())
                     _write(cursor, current, day, folded, result, Jsonb)
                     events = []
                 current = person_id
@@ -954,6 +1004,7 @@ def build_day(
             if current is not None:
                 folded = collapse(events)
                 result.notes_attached += attach_notes(folded, drive, note_cache)
+                result.meeting_pages += attach_meeting_pages(folded, pages, day.isoformat())
                 _write(cursor, current, day, folded, result, Jsonb)
 
             if dry_run:
