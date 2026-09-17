@@ -297,3 +297,75 @@ def test_rerunning_the_same_window_is_idempotent(tmp_path: Path) -> None:
     _, first = collect(tmp_path, FakeCalendarClient(), run_id="run-1")
     _, second = collect(tmp_path, FakeCalendarClient(), run_id="run-2")
     assert [item.event_id for item in first.events] == [item.event_id for item in second.events]
+
+
+class ExpandingCalendarClient(FakeCalendarClient):
+    """Google as it actually answers: masters from the sync, occurrences from
+    singleEvents=true."""
+
+    def __init__(self, *, occurrences: dict[str, list[dict[str, Any]]], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.occurrences = occurrences
+        self.expansion_calls: list[dict[str, Any]] = []
+
+    def iter_day_events(self, calendar_id, *, time_min, time_max):
+        self.expansion_calls.append(
+            {"calendar_id": calendar_id, "time_min": time_min, "time_max": time_max}
+        )
+        return list(self.occurrences.get(calendar_id, []))
+
+
+def test_a_weekly_meeting_reaches_the_ledger_once_per_occurrence(tmp_path: Path):
+    """The last remaining data difference, measured on 2026-09-17.
+
+    The sync returns a recurring meeting as one master carrying an RRULE, so
+    the calendar held 8, 10 and 9 meetings on three days where the ledger held
+    5, 7 and 8. Google is asked to expand it; this system never expands a rule
+    itself, because the rule alone does not say which instances were cancelled
+    or moved.
+    """
+    master = event("weekly", recurrence=["RRULE:FREQ=WEEKLY;BYDAY=TH"])
+    client = ExpandingCalendarClient(
+        events={TEAM: [master]},
+        occurrences={
+            TEAM: [
+                event(
+                    "weekly_20260820T020000Z",
+                    recurringEventId="weekly",
+                    start={"dateTime": "2026-08-20T02:00:00Z"},
+                ),
+                event(
+                    "weekly_20260827T020000Z",
+                    recurringEventId="weekly",
+                    start={"dateTime": "2026-08-27T02:00:00Z"},
+                ),
+            ]
+        },
+    )
+    _archive, result = collect(tmp_path, client)
+
+    identifiers = {event_.event_id for event_ in result.events}
+    assert len(identifiers) == 3  # the master and its two occurrences
+    assert result.counters["recurring_occurrences"] == 2
+    # Asked once per calendar, over the window the digest can build.
+    assert [call["calendar_id"] for call in client.expansion_calls] == [TEAM]
+
+
+def test_a_single_event_is_not_duplicated_by_the_sweep(tmp_path: Path):
+    """An ordinary event comes back from both reads under the same id."""
+    client = ExpandingCalendarClient(
+        events={TEAM: [event("once")]},
+        occurrences={TEAM: [event("once")]},
+    )
+    _archive, result = collect(tmp_path, client)
+    assert len(result.events) == 1
+    assert result.counters["recurring_occurrences"] == 0
+
+
+def test_a_sweep_that_cannot_run_says_so_rather_than_reporting_nothing(tmp_path: Path):
+    """A client with no expansion is a recorded skip, not a silent zero."""
+    archive, result = collect(tmp_path, FakeCalendarClient())
+    assert result.counters["recurring_occurrences"] == 0
+    assert "occurrence_sweep_unavailable" in json.dumps(
+        archive.coverage_notes, ensure_ascii=False
+    )

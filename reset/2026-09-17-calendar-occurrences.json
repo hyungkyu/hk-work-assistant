@@ -1,0 +1,18 @@
+{
+  "name": "2026-09-17-calendar-occurrences",
+  "note": "구캘 반복 일정 발생 수집. 결정은 '원장에 규칙만 두고 읽는 쪽에서 펼친다'가 아니라 '구글이 펼친 것을 받는다' — EXDATE·이동된 회차·회차별 참석자는 규칙만으로 알 수 없고, 우리가 추측하면 아무도 참석하지 않은 회의를 원장에 쓰게 된다. 수집 규칙 V10으로 공표.",
+  "entries": [
+    {
+      "work_id": "wi_a6a54cd128046eeb",
+      "expected_revision": 1,
+      "status": "ready",
+      "next_action": "다음 수집 실행 후 reconcile에서 9/11·9/14·9/16 캘린더 수집 누락이 사라지는지 확인"
+    },
+    {
+      "work_id": "wi_8647f167ed287cb7",
+      "expected_revision": 3,
+      "status": "ready",
+      "next_action": "같은 확인 한 번으로 닫힘 — counters.recurring_occurrences가 0보다 큰지도 같이 본다"
+    }
+  ]
+}

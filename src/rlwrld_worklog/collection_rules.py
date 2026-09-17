@@ -1453,7 +1453,7 @@ V9 = CollectionRule(
     title="공식 API 원본 원장 + 창 앞 부모 탐색 (slice recovers pre-window parents)",
     # Active from the day the bounded pre-window discovery pass landed. The
     # earlier pending draft stamped no manifest and pinned no digest.
-    status="active",
+    status="superseded",
     effective=EffectivePeriod(
         start="2026-09-09",
         end=None,
@@ -1494,11 +1494,98 @@ V9 = CollectionRule(
 )
 
 
+# --------------------------------------------------------------------- V10
+
+# The calendar's last measured data difference. Until now the collector asked
+# for events with singleEvents=false only, so a recurring meeting existed as
+# one master carrying an RRULE: on 2026-09-17 the calendar held 8, 10 and 9
+# meetings on three days where the ledger held 5, 7 and 8. The expansion is
+# asked of Google rather than computed here, because the rule alone does not
+# say which instances were cancelled, moved, or given their own attendees.
+CALENDAR_V10 = SourceRule(
+    source="google_calendar",
+    scope=(
+        "calendarList.list walked in full on every run with showDeleted and showHidden; "
+        "events per calendar through one nextSyncToken each with showDeleted=true and "
+        "singleEvents=false; and, additionally, one singleEvents=true listing per calendar "
+        "over the collection window so each occurrence of a recurring meeting is recorded "
+        "as the source expands it."
+    ),
+    density=(
+        "연속 증분 + 발생 스윕 (incremental continuous, plus an occurrence sweep): "
+        "캘린더별 syncToken 기준에 더해, 창 단위로 반복 일정의 각 발생을 구글이 "
+        "펼친 그대로 받는다. 규칙을 우리가 펼치지 않는다."
+    ),
+    density_kind="incremental_continuous",
+    includes=V9.source_rule("google_calendar").includes
+    + (
+        "Each occurrence of a recurring meeting, as Google expands it, keyed by its own "
+        "occurrence id and carrying recurringEventId",
+    ),
+    excludes=V9.source_rule("google_calendar").excludes
+    + (
+        "Occurrences beyond the sweep horizon: the sweep reaches a short way past today, "
+        "because the digest only ever builds days that have already happened",
+    ),
+    known_limitations=V9.source_rule("google_calendar").known_limitations
+    + (
+        "google_calendar.occurrences_are_read_from_the_source: recurring meetings are "
+        "expanded by Google, never by this system; an occurrence exists in the ledger "
+        "only if the source returned it.",
+        "google_calendar.occurrence_sweep_unavailable: a run whose client cannot expand "
+        "records the fact and keeps the rule-only master, rather than reporting zero.",
+    ),
+    evidence=V9.source_rule("google_calendar").evidence
+    + ("counters.recurring_occurrences in the calendar manifest",),
+    unknowns=V9.source_rule("google_calendar").unknowns
+    + (
+        "Whether an occurrence that fell outside every sweep window -- a meeting that "
+        "recurred before the first sweep ran -- is in the ledger. It is not, and a "
+        "backfill is the only way to find out how many.",
+    ),
+)
+
+V10 = CollectionRule(
+    version="V10",
+    title="공식 API 원본 원장 + 구캘 반복 일정 발생 수집 (calendar occurrences)",
+    status="active",
+    effective=EffectivePeriod(
+        start="2026-09-17",
+        end=None,
+        basis=(
+            "observed: calendar_collector gained an occurrence sweep after reconcile "
+            "measured the calendar holding more meetings than the ledger on three of "
+            "seven days."
+        ),
+    ),
+    summary=(
+        "V9 with the calendar's recurring meetings collected per occurrence. Everything "
+        "else is unchanged. The sweep is additive: the recurrence master keeps its rule, "
+        "and a non-recurring event returns under the same id from both reads and stays "
+        "one row."
+    ),
+    manifest_schema_version=2,
+    ledger_schema_version="1.0",
+    source_schema_version=None,
+    capture_profiles=V9.capture_profiles,
+    storage_layout=V9.storage_layout,
+    unknowns=V9.unknowns,
+    sources=(
+        V9.source_rule("slack"),
+        V9.source_rule("notion"),
+        CALENDAR_V10,
+        V9.source_rule("github"),
+        V9.source_rule("slurm"),
+    ),
+    supersedes="V9",
+)
+
+
 # --------------------------------------------------------------- registry
 
-RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3, V4, V5, V6, V7, V8, V9)
+RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3, V4, V5, V6, V7, V8, V9, V10)
 
-ACTIVE_RULE_VERSION = "V9"
+ACTIVE_RULE_VERSION = "V10"
 
 # Content digests of every published version. A published rule is frozen: if
 # editing one changes its meaning, the digest moves and import fails here,
@@ -1572,6 +1659,7 @@ PUBLISHED_DIGESTS: dict[str, str] = {
     "V7": "sha256:09b4586496cc1f2a403b112e30e6b3ff81409ff325cb72391dc35dccc43b78fc",
     "V8": "sha256:0c44b9e1e3c3abe12801f3543f5a7b4ccf4adcc5ddba1bc4dd47021cd3e89aaa",
     "V9": "sha256:df78b1d883f31568093d35e36ac5ed587b6b10a2dfadb16a6dd15cb4bed6a293",
+    "V10": "sha256:221cb9252406d2b72e6fad5bea5012d10b978214835c84894dc14284c56356b9",
 }
 
 

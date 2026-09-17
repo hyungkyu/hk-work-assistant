@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -39,6 +39,12 @@ from .models import TimelineEvent
 from .normalizers import normalize_calendar
 
 CALENDAR_CAPTURE_PROFILE = "live-google-calendar-api/v1"
+
+# How far past today the occurrence sweep reaches. The digest only ever builds
+# days that have already happened, so this is small on purpose -- it exists so
+# a meeting that recurs is already in the ledger when its day arrives, not to
+# mirror the calendar's future.
+OCCURRENCE_HORIZON_DAYS = 14
 CHECKPOINT_SCHEMA_VERSION = 2
 
 COVERAGE_NOTES = (
@@ -50,11 +56,17 @@ COVERAGE_NOTES = (
     "preserved with deleted=true instead of being dropped.",
     "google_calendar.attachments_are_metadata_only: event attachments are preserved as the "
     "fileId/fileUrl/title metadata the API returns; no file body is downloaded.",
+    "google_calendar.occurrences_are_read_from_the_source: a recurring meeting is also read "
+    "with singleEvents=true over the window, so each occurrence is recorded as Google "
+    "expands it -- including cancelled and moved instances. The recurrence rule is never "
+    "expanded by this system.",
 )
 
 
 class CalendarClient(Protocol):
     def list_calendars(self, *, page_token: str | None = None) -> dict[str, Any]: ...
+
+    def iter_day_events(self, calendar_id: str, *, time_min: str, time_max: str) -> Any: ...
 
     def list_events(
         self,
@@ -101,6 +113,7 @@ class GoogleCalendarCollector:
         calendar_ids: set[str] | None = None,
         max_calendars: int | None = None,
         advance_checkpoint: bool = True,
+        expand_recurring: bool = True,
     ) -> CalendarCollectionResult:
         archive = self.archive
         checkpoint = _load_checkpoint(archive)
@@ -238,6 +251,49 @@ class GoogleCalendarCollector:
                 "sync_token_advanced": bool(next_sync_token),
             }
 
+        # A recurring meeting arrives from the sync as one master carrying an
+        # RRULE, so a weekly meeting existed in the ledger once and the report
+        # showed it once. Measured on 2026-09-17: the calendar held 8, 10 and 9
+        # meetings on three days where the ledger held 5, 7 and 8.
+        #
+        # The expansion is asked of Google rather than computed here. EXDATE,
+        # a single moved instance, an instance with its own attendee list --
+        # the rule alone does not say what actually happened, and a system that
+        # guessed would be writing meetings nobody attended. Non-recurring
+        # events come back from this sweep under their own id and collapse into
+        # the rows the sync already produced.
+        occurrences = 0
+        # A client that cannot expand is a client that says so, not one that
+        # silently returns nothing.
+        if expand_recurring and not hasattr(self.client, "iter_day_events"):
+            archive.note_coverage(
+                "google_calendar.occurrence_sweep_unavailable: this run's client cannot ask "
+                "Google to expand recurrences, so recurring meetings are present as their "
+                "rule only and no occurrence rows were written."
+            )
+            expand_recurring = False
+        if expand_recurring:
+            horizon = datetime.now(timezone.utc) + timedelta(days=OCCURRENCE_HORIZON_DAYS)
+            for calendar_id in ordered_ids:
+                if per_calendar.get(calendar_id, {}).get("status") == "failed":
+                    continue
+                try:
+                    found = self._occurrences(calendar_id, since=since, until=horizon)
+                except CalendarApiError as error:
+                    archive.note_skip(
+                        "occurrence_sweep_failed",
+                        calendar_id=calendar_id,
+                        error=str(error),
+                        code=error.code,
+                    )
+                    continue
+                for event in found:
+                    if event.event_id in events_by_id:
+                        continue
+                    events_by_id[event.event_id] = event
+                    occurrences += 1
+                per_calendar.setdefault(calendar_id, {})["occurrences"] = len(found)
+
         events = tuple(sorted(events_by_id.values(), key=lambda item: (item.occurred_at, item.event_id)))
         counters = {
             "calendars_listed": len(calendar_entries),
@@ -246,6 +302,10 @@ class GoogleCalendarCollector:
             "events_archived": events_archived,
             "cancelled_events": cancelled_events,
             "notion_urls_found": len(notion_urls),
+            # Occurrences the sync could not have produced. A drop to zero on
+            # an account that holds weekly meetings is the sweep failing
+            # quietly, which is the shape of defect this project keeps finding.
+            "recurring_occurrences": occurrences,
             "per_calendar": per_calendar,
         }
         status = "success_with_skips" if skipped or archive.skips else "success"
@@ -293,6 +353,49 @@ class GoogleCalendarCollector:
             cancelled_events=cancelled_events,
             counters=counters,
         )
+
+    def _occurrences(
+        self, calendar_id: str, *, since: datetime, until: datetime
+    ) -> list[TimelineEvent]:
+        """Every occurrence Google expands inside the window, as events.
+
+        Read-only and additive: this never replaces the master row, which stays
+        in the ledger with its rule intact.
+        """
+        time_min = since.astimezone(timezone.utc).isoformat()
+        time_max = until.astimezone(timezone.utc).isoformat()
+        found: list[TimelineEvent] = []
+        raw_items: list[dict[str, Any]] = []
+        for item in self.client.iter_day_events(
+            calendar_id, time_min=time_min, time_max=time_max
+        ):
+            if not isinstance(item, dict) or not item.get("recurringEventId"):
+                continue
+            raw_items.append(item)
+            record = dict(item)
+            record["calendar_id"] = calendar_id
+            try:
+                found.append(normalize_calendar(record))
+            except (KeyError, TypeError, ValueError) as error:
+                self.archive.note_error(
+                    "normalize_failed",
+                    calendar_id=calendar_id,
+                    event_id=str(item.get("id")),
+                    error=type(error).__name__,
+                )
+        self.archive.write_page(
+            f"occurrences-{calendar_id}",
+            {"items": raw_items},
+            endpoint="events.list",
+            request={
+                "calendarId": calendar_id,
+                "timeMin": time_min,
+                "timeMax": time_max,
+                "singleEvents": True,
+            },
+            item_count=len(raw_items),
+        )
+        return found
 
     def _event_pages(
         self, calendar_id: str, *, since: datetime, sync_token: str | None
