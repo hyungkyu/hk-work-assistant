@@ -418,3 +418,113 @@ def reconcile(
                         )
                     )
     return result
+
+
+# --------------------------------------------------------------- explain
+
+_EXPLAIN_SQL = """
+    SELECT source_entity_id,
+           raw_payload->>'iCalUID' AS ical_uid,
+           raw_payload->>'summary' AS summary,
+           coalesce(raw_payload->'start'->>'dateTime', raw_payload->'start'->>'date') AS starts,
+           capture_profile,
+           raw_payload->>'recurringEventId' AS recurring_of
+      FROM ledger_records
+     WHERE source = 'google_calendar'
+       AND {window}
+       AND {predicate}
+     ORDER BY 4, 1
+"""
+
+
+def explain_calendar_day(
+    database_url: str,
+    person_id: str,
+    day: date,
+    *,
+    calendar_client: CalendarList | None = None,
+    calendar_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Every meeting each side of the comparison is actually counting.
+
+    A count that disagrees says only that it disagrees. After the occurrence
+    sweep landed, the calendar column read 12 against 9 and neither number
+    could say which three meetings the difference was -- so the next step was
+    a guess, and a guess is the expensive thing here. This lists both sides by
+    key, title and time, and says which keys are on one side only.
+    """
+    import psycopg
+
+    start, end = day_bounds(day)
+    ledger: list[dict[str, Any]] = []
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT lower(value) FROM org_identity WHERE person_id = %s "
+                "AND kind LIKE 'email%%'",
+                (person_id,),
+            )
+            emails = {str(row[0]) for row in cursor.fetchall()}
+            handles = person_handles(cursor, person_id)
+            window = _WINDOW_BY_SOURCE["google_calendar"]
+            cursor.execute(
+                _EXPLAIN_SQL.format(
+                    window=f"({window})",
+                    predicate=_LEDGER_BY_PERSON["google_calendar"],
+                ),
+                {
+                    "start": start,
+                    "end": end,
+                    "day": day.isoformat(),
+                    "handles": handles,
+                },
+            )
+            for row in cursor.fetchall():
+                ledger.append(
+                    {
+                        "entity_id": row[0],
+                        "ical_uid": row[1],
+                        "summary": row[2],
+                        "starts": row[3],
+                        "capture_profile": row[4],
+                        "recurring_of": row[5],
+                        "key": row[1] or row[0],
+                    }
+                )
+
+    source: list[dict[str, Any]] = []
+    if calendar_client and calendar_ids:
+        seen: set[str] = set()
+        for calendar_id in calendar_ids:
+            for event in calendar_client.iter_day_events(
+                calendar_id, time_min=start.isoformat(), time_max=end.isoformat()
+            ):
+                if emails and not event_involves(event, emails):
+                    continue
+                identifier = str((event or {}).get("id") or "")
+                if identifier in seen:
+                    continue
+                seen.add(identifier)
+                source.append(
+                    {
+                        "id": identifier,
+                        "ical_uid": (event or {}).get("iCalUID"),
+                        "summary": (event or {}).get("summary"),
+                        "starts": ((event or {}).get("start") or {}).get("dateTime")
+                        or ((event or {}).get("start") or {}).get("date"),
+                        "recurring_of": (event or {}).get("recurringEventId"),
+                    }
+                )
+
+    ledger_keys = {row["key"] for row in ledger}
+    source_keys = {row["ical_uid"] or row["id"] for row in source}
+    return {
+        "day": day.isoformat(),
+        "ledger": ledger,
+        "source": source,
+        # What each count is counting that the other is not. The answer to
+        # "which three" rather than "three".
+        "ledger_only": sorted(ledger_keys - source_keys),
+        "source_only": sorted(source_keys - ledger_keys),
+        "source_measured": bool(calendar_client and calendar_ids),
+    }

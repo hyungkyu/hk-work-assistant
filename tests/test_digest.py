@@ -1473,3 +1473,58 @@ def test_the_middle_column_counts_what_was_projected_not_who_organised_it(databa
     # The row exists in the timeline. Before this fix the column said 0 and
     # the table called it 투영 누락.
     assert timeline == 1
+
+
+@REQUIRES_DATABASE
+def test_explain_names_the_meetings_each_side_is_counting(database):
+    """A count that disagrees says only that it disagrees.
+
+    After the occurrence sweep landed the calendar column read 12 against 9,
+    and neither number could say which three meetings the difference was, so
+    the next step would have been a guess. This lists both sides.
+    """
+    from rlwrld_worklog.reconcile import explain_calendar_day
+
+    url = os.environ["WORKLOG_TEST_DATABASE_URL"]
+    # The row this file inserted for the attendee case, reused deliberately:
+    # it is a meeting somebody else organises, which is the shape the sweep
+    # produces most of.
+    import psycopg
+
+    with psycopg.connect(url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT person_id FROM org_person WHERE name = '참석만'")
+            row = cursor.fetchone()
+    if not row:
+        pytest.skip("the attendee fixture has not run in this session")
+    person = str(row[0])
+
+    class Both:
+        def iter_day_events(self, calendar_id, *, time_min, time_max):
+            return [
+                {
+                    "id": "evt-attend",
+                    "summary": "설계 리뷰",
+                    "start": {"dateTime": "2026-09-18T10:00:00+09:00"},
+                    "attendees": [
+                        {"email": "only-attends@rlwrld.ai", "responseStatus": "accepted"}
+                    ],
+                }
+            ]
+
+    found = explain_calendar_day(
+        url, person, date(2026, 9, 18), calendar_client=Both(), calendar_ids=["cal"]
+    )
+    assert [row["summary"] for row in found["ledger"]] == ["설계 리뷰"]
+    assert found["ledger_only"] == [] and found["source_only"] == []
+
+    class Neither:
+        def iter_day_events(self, calendar_id, *, time_min, time_max):
+            return []
+
+    found = explain_calendar_day(
+        url, person, date(2026, 9, 18), calendar_client=Neither(), calendar_ids=["cal"]
+    )
+    # The answer is a name and a time, not the number 1.
+    assert found["ledger_only"] == ["evt-attend"]
+    assert found["ledger"][0]["starts"].startswith("2026-09-18")
