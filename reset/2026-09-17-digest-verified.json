@@ -1,0 +1,53 @@
+{
+  "name": "2026-09-17-digest-verified",
+  "note": "9/17 reconcile 실측으로 닫는다. 원장·타임라인·다이제스트 세 칸이 7일 전부 일치했고, 남은 불일치는 원본 칸 두 가지뿐 — 캘린더 RRULE 미전개(기능 미구현)와 슬랙 ±1(9/10, 9/15). 증거는 커밋 d7d2ea2 시점의 reconcile 표. 실측 없이 닫는 항목은 없다.",
+  "entries": [
+    {
+      "work_id": "wi_2f522d4943ec9c71",
+      "expected_revision": 1,
+      "status": "done",
+      "evidence": "reconcile 2026-09-10..16: 원장=타임라인=다이제스트 35행 전부 일치. 투영 누락 0건."
+    },
+    {
+      "work_id": "wi_dc21042b9f87dfeb",
+      "expected_revision": 1,
+      "status": "done",
+      "evidence": "reconcile: 캘린더가 7일 모두 사람에게 붙음(9/10 9, 9/15 15 등). 이전에는 전부 0."
+    },
+    {
+      "work_id": "wi_67d3e7e56827976d",
+      "expected_revision": 1,
+      "status": "done",
+      "evidence": "원장 캘린더 카운트가 주최+참석 기준으로 세 칸 모두 동일. 참석만 한 회의 케이스는 실 Postgres 테스트로 고정."
+    },
+    {
+      "work_id": "wi_5115698ade70d39e",
+      "expected_revision": 1,
+      "status": "done",
+      "evidence": "멘션 갈래가 세 층과 원본 조회에서 동일하게 계산됨 — 슬랙 5일이 원본과 정확히 일치(9/11 74, 9/12 11, 9/13 10, 9/14 66, 9/16 61)."
+    },
+    {
+      "work_id": "wi_fba517b0663917a5",
+      "expected_revision": 1,
+      "status": "done",
+      "evidence": "실측 49.9초 → 병렬 10.6초 → 캐시 1.5초. --date 경로의 캐시 미저장도 같이 수정."
+    },
+    {
+      "work_id": "wi_816291543189be00",
+      "expected_revision": 1,
+      "status": "done",
+      "evidence": "HK가 stash@{0} drop. 남은 .claude/ reports/ 는 untracked라 큐를 막지 않음. 같은 상황이 다시 조용히 생기지 않도록 거부 사유에 파일명과 경과 시간을 싣는 변경(6f545eb) 배포됨."
+    },
+    {
+      "work_id": "wi_68f79015601b290a",
+      "expected_revision": 1,
+      "status": "doing",
+      "next_action": "깃헙·슬럼 원본 대조 추가. 슬랙·캘린더 원본 대조는 동작 확인됨"
+    },
+    {
+      "work_id": "wi_9b93378c2d490be6",
+      "expected_revision": 1,
+      "next_action": "digest --apply 출력의 notes_attached가 0보다 큰지 확인 (아직 미확인)"
+    }
+  ]
+}
