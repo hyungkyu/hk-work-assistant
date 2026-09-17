@@ -1,0 +1,27 @@
+{
+  "name": "2026-09-17-queue-visibility",
+  "note": "HK: '주인업는 작업은 킬 하자. 네가 모르는 작업은 없어야해'. stash 하나 지우는 건 그 요구의 절반이고, 나머지 절반은 막힌 큐가 조용하지 않게 만드는 것이다. 이번엔 착수하면서 올린다.",
+  "entries": [
+    {
+      "op": "create",
+      "title": "막힌 패치 큐가 무엇에 막혔는지 말하게",
+      "detail": "9/16 캐리어가 네 시간 동안 'worktree is dirty' 한 줄만 쓰며 거부했다. 파일도 시각도 없어 세 번째로 읽어도 첫 번째와 같아 보였고, 그 사이 HK는 아침 코드를 돌렸다. 이제 더러운 파일 목록과 막힌 시각·경과 분을 함께 적고, incoming/.blocked-since로 시계를 틱 사이에 유지하다가 트리가 깨끗해지면 지운다. 테스트는 셸 문자열이 아니라 임시 git 저장소에 실제로 스크립트를 돌린다.",
+      "next_action": "0058 적용 후 incoming/last-run.json에 파일명과 경과가 찍히는지 확인",
+      "assigned_to": "mori",
+      "priority": "high",
+      "phase": "P0",
+      "status": "ready",
+      "source_ref": "0058"
+    },
+    {
+      "op": "create",
+      "title": "주인 없는 stash 정리",
+      "detail": "backoffice-ui-wip stash는 내가 만든 것도, 내가 아는 작업도 아니다. HK가 drop 하기로 함. git reflog에 약 90일 남으니 완전한 삭제는 아니다.",
+      "next_action": "HK가 git stash drop stash@{0} 실행 후 git status가 비었는지 확인",
+      "assigned_to": "hk",
+      "priority": "high",
+      "phase": "P0",
+      "status": "ready"
+    }
+  ]
+}
