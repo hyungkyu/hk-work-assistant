@@ -43,18 +43,36 @@ def test_an_empty_day_is_not_a_gap():
     )
 
 
-def test_slack_is_asked_the_same_question_a_person_would_type():
+def _match(channel: str, ts: str):
+    return {"channel": {"id": channel}, "ts": ts}
+
+
+def test_slack_is_asked_both_questions_the_digest_answers():
+    """Written by him and naming him -- the column counts what the day holds."""
     calls = []
 
     class Fake:
         def call(self, method, **params):
             calls.append((method, params))
-            return {"messages": {"total": 30, "matches": []}}
+            if params["query"].startswith("from:"):
+                return {"messages": {"matches": [_match("C1", "1"), _match("C1", "2")]}}
+            return {"messages": {"matches": [_match("C2", "9")]}}
 
-    assert slack_day_count(Fake(), "U07EKRU6F7H", date(2026, 9, 15)) == 30
-    method, params = calls[0]
-    assert method == "search.messages"
-    assert params["query"] == "from:<@U07EKRU6F7H> on:2026-09-15"
+    assert slack_day_count(Fake(), "U07EKRU6F7H", date(2026, 9, 15)) == 3
+    assert [params["query"] for _, params in calls] == [
+        "from:<@U07EKRU6F7H> on:2026-09-15",
+        "<@U07EKRU6F7H> on:2026-09-15",
+    ]
+
+
+def test_a_message_he_wrote_that_names_him_is_counted_once():
+    """Totals would say two. It is one message, so the arms are unioned."""
+
+    class Fake:
+        def call(self, method, **params):
+            return {"messages": {"matches": [_match("C1", "1")]}}
+
+    assert slack_day_count(Fake(), "U1", date(2026, 9, 15)) == 1
 
 
 def test_slack_reports_not_measured_rather_than_zero_when_it_answers_oddly():
@@ -63,6 +81,36 @@ def test_slack_reports_not_measured_rather_than_zero_when_it_answers_oddly():
             return {"ok": False}
 
     assert slack_day_count(Fake(), "U1", date(2026, 9, 15)) is None
+
+
+def test_a_day_too_long_to_page_through_is_not_measured_rather_than_undercounted():
+    class Fake:
+        def call(self, method, **params):
+            return {
+                "messages": {
+                    "matches": [_match("C1", str(params["page"]))],
+                    "paging": {"pages": 999},
+                }
+            }
+
+    assert slack_day_count(Fake(), "U1", date(2026, 9, 15)) is None
+
+
+def test_every_page_of_a_long_day_is_read():
+    seen = []
+
+    class Fake:
+        def call(self, method, **params):
+            seen.append(params["page"])
+            return {
+                "messages": {
+                    "matches": [_match("C1", f"{params['query'][:4]}-{params['page']}")],
+                    "paging": {"pages": 3},
+                }
+            }
+
+    assert slack_day_count(Fake(), "U1", date(2026, 9, 15)) == 6
+    assert seen == [1, 2, 3, 1, 2, 3]
 
 
 def test_a_meeting_on_two_calendars_is_counted_once():

@@ -111,22 +111,58 @@ class SlackSearch(Protocol):
     def call(self, method: str, **params: Any) -> dict[str, Any]: ...
 
 
-def slack_day_count(client: SlackSearch, slack_user_id: str, day: date) -> int | None:
-    """How many messages Slack itself says this person sent that day.
+def _search_keys(client: SlackSearch, query: str) -> set[tuple[str, str]] | None:
+    """Every message Slack returns for one query, identified by channel and ts.
 
-    The same query a person would type: `from:<@U…> on:2026-09-15`. Slack
-    reports the total in the paging block, so this costs one call per day.
+    Totals alone cannot be added: a message he wrote that also names him is one
+    message and two totals. Identities can be, so the two arms are unioned
+    rather than summed. A result too large to page through returns None --
+    "nobody counted" -- instead of a number that is quietly short.
     """
-    body = client.call(
-        "search.messages",
-        query=f"from:<@{slack_user_id}> on:{day.isoformat()}",
-        count=1,
-    )
-    messages = body.get("messages")
-    if not isinstance(messages, dict):
+    found: set[tuple[str, str]] = set()
+    page = 1
+    while page <= SEARCH_PAGES:
+        body = client.call("search.messages", query=query, count=100, page=page)
+        messages = body.get("messages")
+        if not isinstance(messages, dict):
+            return None
+        for match in messages.get("matches") or []:
+            if not isinstance(match, dict):
+                continue
+            channel = match.get("channel")
+            channel_id = channel.get("id") if isinstance(channel, dict) else channel
+            found.add((str(channel_id), str(match.get("ts"))))
+        paging = messages.get("paging")
+        pages = paging.get("pages") if isinstance(paging, dict) else 1
+        if not isinstance(pages, int) or page >= pages:
+            return found
+        page += 1
+    return None
+
+
+# A day this long is not a day this check can measure honestly.
+SEARCH_PAGES = 10
+
+
+def slack_day_count(client: SlackSearch, slack_user_id: str, day: date) -> int | None:
+    """How many of that day's messages Slack itself says are this person's.
+
+    Two queries, because the digest counts two things and so must this column:
+    what he wrote (`from:<@U…> on:…`) and what named him (`<@U…> on:…`). HK,
+    2026-09-16: 내가 생성하지 않았지만, 내가 멘션되었거나 하는 것도 같이 보여줘.
+
+    With only the first arm this column read 95 against a correct ledger of
+    113 and called it 원장이 더 많음 -- the same defect as the calendar's 72
+    against 18, on the other side of the table.
+    """
+    handle = f"<@{slack_user_id}>"
+    written = _search_keys(client, f"from:{handle} on:{day.isoformat()}")
+    if written is None:
         return None
-    total = messages.get("total")
-    return int(total) if isinstance(total, int) else None
+    named = _search_keys(client, f"{handle} on:{day.isoformat()}")
+    if named is None:
+        return None
+    return len(written | named)
 
 
 class CalendarList(Protocol):
