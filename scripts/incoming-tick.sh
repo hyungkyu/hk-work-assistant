@@ -49,11 +49,25 @@ if [ ${#patches[@]} -eq 0 ]; then
   finish
 fi
 
-if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+# A dirty worktree stops the carrier. On 2026-09-16 it stopped it for four
+# hours and the reason read "worktree is dirty" every tick, which named
+# neither the files nor how long, so it looked like the same harmless line
+# each time. Say which files, and say since when.
+dirty=$(git status --porcelain --untracked-files=no)
+blocked_marker="incoming/.blocked-since"
+if [ -n "$dirty" ]; then
+  [ -f "$blocked_marker" ] || date -u +%Y-%m-%dT%H:%M:%SZ > "$blocked_marker"
+  since=$(cat "$blocked_marker" 2>/dev/null || echo unknown)
+  minutes="?"
+  if [ "$since" != "unknown" ]; then
+    minutes=$(( ( $(date -u +%s) - $(date -u -d "$since" +%s 2>/dev/null || date -u +%s) ) / 60 ))
+  fi
+  files=$(printf '%s\n' "$dirty" | awk '{print $NF}' | paste -sd' ' -)
   outcome="refused"
-  detail="worktree is dirty; not applying $(printf '%s\n' "${patches[@]}" | wc -l) patch(es)"
+  detail="worktree is dirty since $since (${minutes}m); ${#patches[@]} patch(es) waiting; files: $files"
   finish
 fi
+rm -f "$blocked_marker"
 
 branch=$(git rev-parse --abbrev-ref HEAD)
 if [ "$branch" != "main" ]; then
