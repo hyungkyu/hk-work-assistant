@@ -220,10 +220,23 @@ _LEDGER_BY_PERSON = {
     # How each source says "this record is that person's", in the ledger's own
     # relations. Mirrors what `_projection` reads, so a mismatch between these
     # two is itself a finding.
-    "slack": "relations->>'author_user_id' = ANY(%(handles)s)",
+    # Authored by them, or naming them. The digest counts both -- HK:
+    # 내가 생성하지 않았지만, 내가 멘션되었거나 하는 것도 같이 보여줘 -- so a
+    # ledger column that counted only authorship was comparing a narrower
+    # question with the two columns beside it and reporting the difference as
+    # a defect.
+    "slack": (
+        "(relations->>'author_user_id' = ANY(%(handles)s)"
+        " OR EXISTS (SELECT 1 FROM regexp_matches("
+        "     coalesce(raw_payload->>'text', ''), '<@([A-Z0-9]+)', 'g') AS found"
+        "  WHERE found[1] = ANY(%(handles)s)))"
+    ),
     "notion": (
-        "coalesce(relations->>'last_edited_by_user_id', relations->>'created_by_user_id') "
+        "(coalesce(relations->>'last_edited_by_user_id', relations->>'created_by_user_id') "
         "= ANY(%(handles)s)"
+        " OR EXISTS (SELECT 1 FROM jsonb_array_elements_text("
+        "     coalesce(relations->'mentioned_user_ids', '[]'::jsonb)) AS named"
+        "  WHERE named = ANY(%(handles)s)))"
     ),
     "google_calendar": (
         "(lower(relations->>'organizer_email') = ANY(%(handles)s) OR EXISTS ("
@@ -263,16 +276,23 @@ def count_layers(cursor, person_id: str, source: str, day: date) -> tuple[int, i
     cursor.execute(f"{ledger_sql} AND {predicate}" if predicate else ledger_sql, params)
     ledger = int(cursor.fetchone()[0])
 
+    # Projected, by the same definition of "this person's" the other two
+    # columns use. Matching on `actor_external_id` alone asked a third
+    # question: a meeting the person attends but does not organise has
+    # somebody else's actor, so 2026-09-11 read "투영 누락, 5 -> 0" for events
+    # that were projected, attributed correctly and shown in the report. The
+    # column exists to say whether projection ran, so it is matched through
+    # the ledger record rather than through the actor.
     cursor.execute(
-        """
+        f"""
         SELECT count(DISTINCT coalesce(ledger.raw_payload->>'iCalUID', event.external_id))
           FROM timeline_events event
-          LEFT JOIN ledger_records ledger ON ledger.ledger_id = event.event_id
-          JOIN org_identity identity ON identity.value = event.actor_external_id
-         WHERE event.source = %(source)s AND identity.person_id = %(person)s
+          JOIN ledger_records ledger ON ledger.ledger_id = event.event_id
+         WHERE event.source = %(source)s
            AND event.occurred_at >= %(start)s AND event.occurred_at < %(end)s
+           {"AND " + predicate if predicate else ""}
         """,
-        {"source": source, "person": person_id, "start": start, "end": end},
+        params,
     )
     timeline = int(cursor.fetchone()[0])
 

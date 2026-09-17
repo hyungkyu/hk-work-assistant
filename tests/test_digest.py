@@ -1377,3 +1377,99 @@ def test_a_dm_with_no_conversation_row_is_named_from_its_messages():
     assert "LIKE 'D%%'" in _DM_MEMBERS_SQL
     assert "source_created_at >= %(start)s" in _DM_MEMBERS_SQL
     assert "array_agg(DISTINCT relations->>'author_user_id')" in _DM_MEMBERS_SQL
+
+
+@REQUIRES_DATABASE
+def test_the_middle_column_counts_what_was_projected_not_who_organised_it(database):
+    """2026-09-11 read "투영 누락, 5 -> 0" for meetings that were projected.
+
+    reconcile's timeline column matched `actor_external_id` against the
+    person, but a meeting the person attends carries the organiser's actor.
+    So the ledger column counted attendance, the digest column counted
+    attendance, and the column between them counted organising -- three
+    columns, two questions, and a defect reported where there was none. This
+    is the same mistake as the 72-against-18 calendar reading, one layer over.
+    """
+    import uuid
+
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    from rlwrld_worklog.reconcile import count_layers
+
+    attendee, event_id = uuid.uuid4(), uuid.uuid4()
+    moment = datetime(2026, 9, 18, 10, tzinfo=KST)
+    with psycopg.connect(os.environ["WORKLOG_TEST_DATABASE_URL"]) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM org_identity WHERE value = 'only-attends@rlwrld.ai'")
+            cursor.execute("DELETE FROM org_person WHERE name = '참석만'")
+            cursor.execute("DELETE FROM timeline_events WHERE external_id = 'evt-attend'")
+            cursor.execute("DELETE FROM ledger_records WHERE source_entity_id = 'evt-attend'")
+            cursor.execute(
+                "INSERT INTO roster_observation (observed_at, source, row_count) "
+                "VALUES (now(), 'roster_seed_2', 1) RETURNING observation_id"
+            )
+            observation = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO org_person (person_id, name, first_seen, last_seen) "
+                "VALUES (%s, '참석만', %s, %s)",
+                (attendee, observation, observation),
+            )
+            cursor.execute(
+                "INSERT INTO org_identity (person_id, kind, value, first_seen, last_seen, "
+                "origin) VALUES (%s, 'email_official', 'only-attends@rlwrld.ai', %s, %s, "
+                "'roster')",
+                (attendee, observation, observation),
+            )
+            fields = dict(_CAL_LEDGER_FIELDS)
+            fields.update(
+                source_entity_id="evt-attend",
+                ledger_id=event_id,
+                scope=Jsonb({"calendar_id": "cal"}),
+                source_entity_key=Jsonb({"id": "evt-attend"}),
+                raw_payload=Jsonb(
+                    {"summary": "설계 리뷰", "start": {"dateTime": moment.isoformat()}}
+                ),
+                relations=Jsonb(
+                    {
+                        "organizer_email": "somebody-else@rlwrld.ai",
+                        "attendee_responses": [
+                            {
+                                "email": "only-attends@rlwrld.ai",
+                                "responseStatus": "accepted",
+                            }
+                        ],
+                    }
+                ),
+                provenance=Jsonb({}),
+                coverage=Jsonb({}),
+                observation_window=Jsonb({}),
+                capture_completeness=Jsonb({}),
+                supplement_provenance=Jsonb({}),
+                visibility_routing=Jsonb({}),
+                denormalized_label_snapshot=Jsonb({}),
+                source_created_at=moment,
+                collected_at=moment,
+            )
+            cursor.execute(
+                f"INSERT INTO ledger_records ({','.join(fields)}) "
+                f"VALUES ({','.join('%s' for _ in fields)})",
+                list(fields.values()),
+            )
+            cursor.execute(
+                "INSERT INTO timeline_events (event_id, source, event_type, external_id, "
+                "actor_external_id, occurred_at, ingested_at, container_id, thread_id, "
+                "payload) VALUES (%s, 'google_calendar', 'calendar_event', 'evt-attend', "
+                "'somebody-else@rlwrld.ai', %s, now(), 'cal', 'evt-attend', %s)",
+                (event_id, moment, Jsonb({"labels": {}})),
+            )
+        connection.commit()
+        with connection.cursor() as cursor:
+            ledger, timeline, _digest = count_layers(
+                cursor, str(attendee), "google_calendar", date(2026, 9, 18)
+            )
+
+    assert ledger == 1
+    # The row exists in the timeline. Before this fix the column said 0 and
+    # the table called it 투영 누락.
+    assert timeline == 1
