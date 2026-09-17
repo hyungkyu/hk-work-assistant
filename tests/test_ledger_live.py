@@ -24,6 +24,7 @@ from test_calendar_collector import (  # noqa: E402
     event as calendar_event,
 )
 from test_calendar_collector import collect as collect_calendar  # noqa: E402
+from test_calendar_collector import ExpandingCalendarClient  # noqa: E402
 from test_notion_collector import (  # noqa: E402
     DATA_SOURCE_ID,
     FakeNotionClient,
@@ -547,3 +548,56 @@ def test_an_untampered_run_verifies_cleanly(tmp_path: Path, slack_run) -> None:
     converted = convert(tmp_path, slack_run.manifest_path, "slack")
     assert converted.records_written > 0
     assert converted.schema_errors == 0
+
+
+def test_occurrence_pages_reach_the_ledger(tmp_path: Path) -> None:
+    """The sweep wrote 845 occurrences to the archive and none to the ledger.
+
+    The collector's new page kind had no branch in the converter, so every
+    occurrence page counted as an unhandled kind and stopped there. Visible
+    only because the converter counts what it cannot handle rather than
+    dropping it quietly -- the one habit that turned a silent loss into a
+    twenty-minute fix.
+    """
+    client = ExpandingCalendarClient(
+        calendars=[{"id": PRIMARY, "primary": True, "accessRole": "owner", "summary": "owner"}],
+        events={PRIMARY: [calendar_event("weekly", recurrence=["RRULE:FREQ=WEEKLY"])]},
+        occurrences={
+            PRIMARY: [
+                calendar_event(
+                    "weekly_20260820T020000Z",
+                    recurringEventId="weekly",
+                    start={"dateTime": "2026-08-20T02:00:00Z"},
+                ),
+                calendar_event(
+                    "weekly_20260827T020000Z",
+                    recurringEventId="weekly",
+                    start={"dateTime": "2026-08-27T02:00:00Z"},
+                ),
+            ]
+        },
+    )
+    _, run = collect_calendar(tmp_path, client)
+    converted = convert(tmp_path, run.manifest_path, "google_calendar")
+
+    assert converted.schema_errors == 0
+    assert not [kind for kind in converted.unhandled_kinds if kind.startswith("occurrences-")]
+    records = rows(converted)
+    assert all(validate_record(record) == [] for record in records)
+
+    events = {record["source_entity_id"] for record in by_type(records, "event")}
+    assert f"{PRIMARY}:weekly" in events, "the master keeps its rule"
+    assert f"{PRIMARY}:weekly_20260820T020000Z" in events
+    assert f"{PRIMARY}:weekly_20260827T020000Z" in events
+
+    occurrence = next(
+        record
+        for record in by_type(records, "event")
+        if record["source_entity_id"].endswith("20260820T020000Z")
+    )
+    assert occurrence["scope"]["calendar_id"] == PRIMARY, (
+        "the calendar comes from the page kind, and 'occurrences-' is a different prefix"
+    )
+    assert occurrence["capture_profile"] == "live-google-calendar-occurrences/v1", (
+        "two questions asked of Google are two observations, not one"
+    )

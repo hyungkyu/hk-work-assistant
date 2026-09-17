@@ -786,13 +786,25 @@ def _calendar_records(
             objects = body.get("items") or []
             entity_type, endpoint = "event", "events.list"
             profile = "live-google-calendar-events/v1"
+        elif kind.startswith("occurrences-"):
+            # The occurrence sweep's pages. The collector wrote them from the
+            # first run and this branch did not exist, so 845 occurrences
+            # reached the archive and none reached the ledger -- visible only
+            # because the converter counts what it cannot handle instead of
+            # dropping it. They are events; the capture profile differs
+            # because the question asked of Google differs.
+            objects = body.get("items") or []
+            entity_type, endpoint = "event", "events.list"
+            profile = "live-google-calendar-occurrences/v1"
         else:
             if kind:
                 result.unhandled_kinds[kind] = result.unhandled_kinds.get(kind, 0) + 1
             continue
         if not isinstance(objects, list):
             continue
-        calendar_id = kind.removeprefix("events-") if entity_type == "event" else ""
+        calendar_id = ""
+        if entity_type == "event":
+            calendar_id = kind.removeprefix("events-").removeprefix("occurrences-")
         for index, original in enumerate(objects):
             if not isinstance(original, dict) or not original.get("id"):
                 continue
