@@ -88,6 +88,42 @@ echo "=== unmapped accounts"
 "$worklog" org unmapped --apply || status=1
 
 echo
+echo "=== slack thread sweep (replies whose parent predates every window)"
+# The 622 orphaned replies, a bounded slice per night. They are replies that
+# exist in the ledger with no parent row, so the situation they answer is
+# missing -- which matters twice over now that HK wants an agent trained on
+# (what people said -> what he asked). One-time by nature: a parent this
+# recovers stops being an orphan, so the number falls to zero and the step
+# becomes a no-op that costs one query.
+#
+# Capped because this is network-heavy and unattended. 150 threads a night
+# clears the backlog inside a week without a run long enough to collide with
+# the collection that follows it.
+sweep_max="${WORKLOG_SWEEP_MAX:-150}"
+if [ "$sweep_max" != "0" ]; then
+  sweep_out=$("$worklog" slack-thread-sweep --apply --max-parents "$sweep_max" 2>&1)     || status=1
+  printf '%s\n' "$sweep_out"
+  # Left where the cloud side can read it without anyone relaying a terminal.
+  mkdir -p incoming
+  SWEEP="$sweep_out" python3 - > incoming/last-sweep.json <<'SWEEPSTATE' || true
+import json, os, datetime
+output = os.environ.get("SWEEP", "")
+found = {
+    "finished_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "tail": output.splitlines()[-12:],
+}
+for line in reversed(output.splitlines()):
+    if line.startswith("slack_thread_sweep="):
+        try:
+            found["summary"] = json.loads(line.split("=", 1)[1])
+        except ValueError:
+            pass
+        break
+print(json.dumps(found, ensure_ascii=False, indent=2))
+SWEEPSTATE
+fi
+
+echo
 echo "=== digest (yesterday, and any gap in the last week)"
 # `--catch-up` rather than yesterday alone: a night the machine was off, or a
 # run that died, would otherwise leave a hole that only a person typing a

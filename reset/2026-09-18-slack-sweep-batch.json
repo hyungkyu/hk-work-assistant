@@ -1,0 +1,28 @@
+{
+  "name": "2026-09-18-slack-sweep-batch",
+  "note": "슬랙 고아 답글 622건을 사람이 명령을 치는 대신 야간 배치가 하루 150건씩 회수한다. 우선순위를 올린 이유: HK가 '어떤 글에 뭐라고 댓글을 달았는지'로 에이전트를 만들고 싶어하고, 부모 없는 답글 622개는 그 용도에서 상황 없는 답변이라 쓸 수 없다.",
+  "entries": [
+    {
+      "work_id": "wi_fbdf7d6615b61fa7",
+      "expected_revision": 1,
+      "status": "in_progress",
+      "next_action": "야간 배치가 하루 150건씩 회수. incoming/last-sweep.json의 parents가 0이 되면 done"
+    },
+    {
+      "work_id": "wi_fadf1b595f97a008",
+      "expected_revision": 13,
+      "status": "in_progress",
+      "next_action": "같은 배치가 처리. conversations.replies로 부모 ts를 직접 요청하는 경로가 유일한 도달 방법이고 이미 구현돼 있음"
+    },
+    {
+      "op": "create",
+      "title": "HK 개입 패턴 에이전트 — 스레드 부모와 HK 답글 쌍으로",
+      "detail": "HK: '내가 어떤 상황에서 어떤 질문을 하는지, 사람들이 놓치고 있는 것에 개입하고, 챙겨야 할 요소가 뭐가 빠졌는지를 내 에이전트가 묻고 답하게. 자상한 버전의 나로.' 데이터는 이미 있다 — 슬랙 답글은 부모 메시지(상황)와 HK의 답(개입)이 thread_id로 짝지어져 있어 라벨링된 학습·평가 쌍이 그대로 존재한다. 파인튜닝이 아니라 검색 + 실제 문장 예시로 시작한다. 평가는 지난달 스레드를 held-out으로 두고 HK가 실제로 한 질문을 맞히는지로 센다 — 그럴듯함이 아니라 적중으로.",
+      "next_action": "고아 답글 회수가 끝난 뒤 착수. 그 전에 HK와 경계 합의 두 가지: (1) DM·프라이빗 채널을 읽는 에이전트를 본인만 쓸지 팀에 줄지 (2) '자상한 버전'이 말투만인지 기준까지인지 — 말투는 낮추고 기준은 유지가 모리 제안",
+      "assigned_to": "mori",
+      "priority": "normal",
+      "phase": "P2",
+      "status": "todo"
+    }
+  ]
+}
