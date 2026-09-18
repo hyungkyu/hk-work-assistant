@@ -1,0 +1,44 @@
+{
+  "name": "2026-09-18-calendar-closeout",
+  "note": "구캘 줄기 마무리. 발생 수집 → 변환 분기 → 취소 제외 → 같은 분·같은 제목 한 줄까지 네 단계였고, 각 단계의 원인은 전부 --explain 출력으로 확인했다. 남은 차이(원장이 원본보다 하루 1~2건)는 별도 항목으로 새로 올린다 — 닫은 것처럼 두지 않는다.",
+  "entries": [
+    {
+      "work_id": "wi_a6a54cd128046eeb",
+      "expected_revision": 2,
+      "status": "done",
+      "evidence": "발생 수집 배포 후 reconcile: 9/11 8/8/8, 9/12 2/2/2 원본과 정확히 일치. 9/10 다이제스트 9 = 원본 9. 규칙은 우리가 펼치지 않고 구글이 펼친 것을 받는다(V10)."
+    },
+    {
+      "work_id": "wi_8647f167ed287cb7",
+      "expected_revision": 4,
+      "status": "done",
+      "evidence": "같은 확인. 원장에 반복 회의 발생분이 들어왔고 counters.recurring_occurrences로 스윕 정지가 보이게 됨."
+    },
+    {
+      "work_id": "wi_9b93378c2d490be6",
+      "expected_revision": 2,
+      "status": "done",
+      "evidence": "digest --apply 실측: notes_attached 11~20/일, meeting_pages 7~81/일. 제미나이 노트와 노션 미팅노트 매핑 둘 다 살아 있음."
+    },
+    {
+      "op": "create",
+      "title": "구캘 원장이 원본보다 하루 1~2건 많다 — 옮겨진 회의의 옛 관측",
+      "detail": "취소 제외와 같은 분·같은 제목 병합 뒤에도 9/10 10대9, 9/13 4대3, 9/14 12대10, 9/16 11대9로 남는다. --explain에서 본 모양은 회의가 옮겨졌을 때 옛 시각의 관측이 원장에 그대로 남아 별도 키가 되는 것. 원장 입장에서는 옳다(관측 저장소). 다이제스트는 이미 원본과 거의 맞아(9/10 9대9) 사람이 읽는 화면의 문제는 아니다. 그래서 급하지 않지만, 모르는 채로 두지 않는다.",
+      "next_action": "--explain으로 9/14 하루를 보고, 옮겨진 회의의 옛 관측이 맞는지 확인. 맞으면 원장 카운트에서 상위 관측이 있는 옛 키를 제외할지 결정",
+      "assigned_to": "mori",
+      "priority": "normal",
+      "phase": "P2",
+      "status": "todo"
+    },
+    {
+      "op": "create",
+      "title": "슬랙 원본과 원장이 이틀만 1건 어긋난다",
+      "detail": "9/10 114대113, 9/15 46대47 — 양방향 1건이고 나머지 닷새는 정확히 일치. 후보는 검색 인덱스 지연, 삭제된 메시지, 봇 메시지. 추측으로 덮지 않고 남겨둔다.",
+      "next_action": "슬랙에도 --explain 같은 나열을 붙여 어느 메시지인지 보고 판단",
+      "assigned_to": "mori",
+      "priority": "low",
+      "phase": "P2",
+      "status": "todo"
+    }
+  ]
+}
