@@ -1496,6 +1496,14 @@ def reconcile_command(args: argparse.Namespace) -> int:
                 f"  [원본에만] {match_row.get('starts') or '?':<24}"
                 f"{(match_row.get('summary') or '제목 없음')[:34]}"
             )
+        if found["digest"]:
+            print(f"-- 다이제스트 {len(found['digest'])}줄")
+            for line in found["digest"]:
+                repeated = line["where"] in found["digest_repeats"]
+                print(
+                    f"  [{'중복' if repeated else '  '}] {line['at'] or '?':<26}"
+                    f"{(line['where'] or '')[:40]}"
+                )
         _print_json(
             "explain",
             {
@@ -1504,6 +1512,8 @@ def reconcile_command(args: argparse.Namespace) -> int:
                 "source": len(found["source"]) if found["source_measured"] else None,
                 "ledger_only": len(found["ledger_only"]),
                 "source_only": len(found["source_only"]),
+                "digest": len(found["digest"]),
+                "digest_repeats": found["digest_repeats"],
             },
         )
         return 0

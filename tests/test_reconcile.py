@@ -325,6 +325,11 @@ def test_explain_does_not_demand_a_range_it_does_not_use(monkeypatch, capsys):
             "source": [],
             "ledger_only": ["k1"],
             "source_only": [],
+            "digest": [
+                {"at": "10:00", "where": "회의: 주간 리뷰", "permalink": None},
+                {"at": "10:00", "where": "회의: 주간 리뷰", "permalink": None},
+            ],
+            "digest_repeats": ["회의: 주간 리뷰"],
             "source_measured": True,
         },
     )
@@ -344,6 +349,9 @@ def test_explain_does_not_demand_a_range_it_does_not_use(monkeypatch, capsys):
     assert "주간 리뷰" in printed
     assert "원장에만" in printed
     assert "live-google-calendar-occurrences/v1" in printed
+    # The third side, and which line is doubled on it.
+    assert "다이제스트 2줄" in printed
+    assert "중복" in printed
 
 
 def test_the_table_still_insists_on_a_range():

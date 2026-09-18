@@ -530,6 +530,29 @@ def explain_calendar_day(
                     }
                 )
 
+    # The third side. The table has three columns for a reason, and after the
+    # cancellations came out the disagreement moved here: the digest showed 12
+    # meetings where the ledger counted 10, which can only mean a meeting is
+    # on the page more than once.
+    digest_lines: list[dict[str, Any]] = []
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT event->>'at', event->>'where', event->>'permalink'
+                  FROM person_day_digest,
+                       LATERAL jsonb_array_elements(events) AS event
+                 WHERE person_id = %s AND day = %s
+                   AND event->>'source' = 'google_calendar'
+                 ORDER BY 1
+                """,
+                (person_id, day),
+            )
+            digest_lines = [
+                {"at": row[0], "where": row[1], "permalink": row[2]}
+                for row in cursor.fetchall()
+            ]
+
     ledger_keys = {row["key"] for row in ledger if row["status"] != "cancelled"}
     source_keys = {row["ical_uid"] or row["id"] for row in source}
     return {
@@ -540,5 +563,15 @@ def explain_calendar_day(
         # "which three" rather than "three".
         "ledger_only": sorted(ledger_keys - source_keys),
         "source_only": sorted(source_keys - ledger_keys),
+        "digest": digest_lines,
+        # A title that appears twice in one day's page. Written out rather
+        # than counted, because "which meeting is doubled" is the question.
+        "digest_repeats": sorted(
+            {
+                str(line["where"])
+                for line in digest_lines
+                if [other["where"] for other in digest_lines].count(line["where"]) > 1
+            }
+        ),
         "source_measured": bool(calendar_client and calendar_ids),
     }
