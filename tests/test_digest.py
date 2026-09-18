@@ -1528,3 +1528,107 @@ def test_explain_names_the_meetings_each_side_is_counting(database):
     # The answer is a name and a time, not the number 1.
     assert found["ledger_only"] == ["evt-attend"]
     assert found["ledger"][0]["starts"].startswith("2026-09-18")
+
+
+@REQUIRES_DATABASE
+def test_a_cancelled_meeting_is_not_part_of_the_day(database):
+    """2026-09-15: four of eighteen calendar rows were cancellations.
+
+    Each was a line saying he sat in a meeting nobody held. The ledger keeps
+    them -- a cancellation is an observation, and dropping it would make a
+    removed meeting look like one that was never collected -- but a day a
+    person reads is not the ledger.
+    """
+    import uuid
+
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    from rlwrld_worklog.digest import _ALL_KINDS, _EVENTS_SQL
+
+    person = uuid.uuid4()
+    held, dropped = uuid.uuid4(), uuid.uuid4()
+    moment = datetime(2026, 9, 19, 10, tzinfo=KST)
+    with psycopg.connect(os.environ["WORKLOG_TEST_DATABASE_URL"]) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM org_identity WHERE value = 'cal-test@rlwrld.ai'")
+            cursor.execute("DELETE FROM org_person WHERE name = '취소테스트'")
+            cursor.execute(
+                "DELETE FROM timeline_events WHERE external_id IN ('evt-held', 'evt-dropped')"
+            )
+            cursor.execute(
+                "DELETE FROM ledger_records WHERE source_entity_id IN "
+                "('evt-held', 'evt-dropped')"
+            )
+            cursor.execute(
+                "INSERT INTO roster_observation (observed_at, source, row_count) "
+                "VALUES (now(), 'roster_seed_2', 1) RETURNING observation_id"
+            )
+            observation = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO org_person (person_id, name, first_seen, last_seen) "
+                "VALUES (%s, '취소테스트', %s, %s)",
+                (person, observation, observation),
+            )
+            cursor.execute(
+                "INSERT INTO org_identity (person_id, kind, value, first_seen, last_seen, "
+                "origin) VALUES (%s, 'email_official', 'cal-test@rlwrld.ai', %s, %s, 'roster')",
+                (person, observation, observation),
+            )
+            for ledger_id, external, status in (
+                (held, "evt-held", "confirmed"),
+                (dropped, "evt-dropped", "cancelled"),
+            ):
+                fields = dict(_CAL_LEDGER_FIELDS)
+                fields.update(
+                    source_entity_id=external,
+                    ledger_id=ledger_id,
+                    scope=Jsonb({"calendar_id": "cal"}),
+                    source_entity_key=Jsonb({"id": external}),
+                    raw_payload=Jsonb(
+                        {
+                            "summary": f"회의 {external}",
+                            "status": status,
+                            "start": {"dateTime": moment.isoformat()},
+                        }
+                    ),
+                    relations=Jsonb({"organizer_email": "cal-test@rlwrld.ai"}),
+                    provenance=Jsonb({}),
+                    coverage=Jsonb({}),
+                    observation_window=Jsonb({}),
+                    capture_completeness=Jsonb({}),
+                    supplement_provenance=Jsonb({}),
+                    visibility_routing=Jsonb({}),
+                    denormalized_label_snapshot=Jsonb({}),
+                    source_created_at=moment,
+                    collected_at=moment,
+                )
+                cursor.execute(
+                    f"INSERT INTO ledger_records ({','.join(fields)}) "
+                    f"VALUES ({','.join('%s' for _ in fields)})",
+                    list(fields.values()),
+                )
+                cursor.execute(
+                    "INSERT INTO timeline_events (event_id, source, event_type, external_id, "
+                    "actor_external_id, occurred_at, ingested_at, container_id, thread_id, "
+                    "payload) VALUES (%s, 'google_calendar', 'calendar_event', %s, "
+                    "'cal-test@rlwrld.ai', %s, now(), 'cal', %s, %s)",
+                    (ledger_id, external, moment, external, Jsonb({"labels": {}})),
+                )
+        connection.commit()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                _EVENTS_SQL,
+                {
+                    "start": datetime(2026, 9, 19, tzinfo=KST),
+                    "end": datetime(2026, 9, 20, tzinfo=KST),
+                    "kinds": list(_ALL_KINDS),
+                },
+            )
+            titles = [
+                row[11].get("summary")
+                for row in cursor.fetchall()
+                if str(row[0]) == str(person)
+            ]
+
+    assert titles == ["회의 evt-held"]

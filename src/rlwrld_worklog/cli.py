@@ -1480,7 +1480,9 @@ def reconcile_command(args: argparse.Namespace) -> int:
         print(f"== {found['day']} 캘린더: 원장 {len(found['ledger'])}건, 원본 "
               + (f"{len(found['source'])}건" if found["source_measured"] else "미조회"))
         for row in found["ledger"]:
-            mark = "원장에만" if row["key"] in found["ledger_only"] else "양쪽"
+            mark = "취소됨" if row.get("status") == "cancelled" else (
+                "원장에만" if row["key"] in found["ledger_only"] else "양쪽"
+            )
             print(
                 f"  [{mark}] {row['starts'] or '?':<26}{(row['summary'] or '제목 없음')[:34]:<36}"
                 f"{row['capture_profile']}"

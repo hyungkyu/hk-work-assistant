@@ -361,3 +361,15 @@ def test_the_table_still_insists_on_a_range():
 
     with pytest.raises(SystemExit):
         cli.reconcile_command(Args())
+
+
+def test_the_calendar_count_leaves_out_meetings_that_were_cancelled():
+    """A ledger that keeps cancellations is right; a day count that does is not.
+
+    On 2026-09-15 the ledger held eighteen calendar keys against the calendar's
+    fourteen, and --explain showed the four: cancelled instances of a weekly
+    meeting, still on the ledger because the ledger records observations.
+    """
+    from rlwrld_worklog.reconcile import _LEDGER_BY_PERSON
+
+    assert "'cancelled'" in _LEDGER_BY_PERSON["google_calendar"]

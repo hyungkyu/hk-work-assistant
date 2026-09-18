@@ -274,7 +274,13 @@ _LEDGER_BY_PERSON = {
         "     coalesce(relations->'mentioned_user_ids', '[]'::jsonb)) AS named"
         "  WHERE named = ANY(%(handles)s)))"
     ),
+    # A cancelled meeting is not part of anybody's day. The ledger keeps it --
+    # it is an observation store and the cancellation is itself an observation
+    # -- but a count of "what did this person do on Tuesday" that includes
+    # meetings that did not happen is not a count of anything. Measured on
+    # 2026-09-15: four of the eighteen.
     "google_calendar": (
+        "coalesce(raw_payload->>'status', '') <> 'cancelled' AND "
         "(lower(relations->>'organizer_email') = ANY(%(handles)s) OR EXISTS ("
         " SELECT 1 FROM jsonb_array_elements("
         "   coalesce(relations->'attendee_responses', '[]'::jsonb)) attendee"
@@ -428,7 +434,8 @@ _EXPLAIN_SQL = """
            raw_payload->>'summary' AS summary,
            coalesce(raw_payload->'start'->>'dateTime', raw_payload->'start'->>'date') AS starts,
            capture_profile,
-           raw_payload->>'recurringEventId' AS recurring_of
+           raw_payload->>'recurringEventId' AS recurring_of,
+           raw_payload->>'status' AS status
       FROM ledger_records
      WHERE source = 'google_calendar'
        AND {window}
@@ -470,7 +477,13 @@ def explain_calendar_day(
             cursor.execute(
                 _EXPLAIN_SQL.format(
                     window=f"({window})",
-                    predicate=_LEDGER_BY_PERSON["google_calendar"],
+                    # Deliberately without the cancelled filter the count
+                    # applies: this listing exists to show what the count
+                    # leaves out, and a filter in both places would hide the
+                    # very rows a reader came here to find.
+                    predicate=_LEDGER_BY_PERSON["google_calendar"].replace(
+                        "coalesce(raw_payload->>'status', '') <> 'cancelled' AND ", ""
+                    ),
                 ),
                 {
                     "start": start,
@@ -488,6 +501,7 @@ def explain_calendar_day(
                         "starts": row[3],
                         "capture_profile": row[4],
                         "recurring_of": row[5],
+                        "status": row[6],
                         "key": row[1] or row[0],
                     }
                 )
@@ -516,7 +530,7 @@ def explain_calendar_day(
                     }
                 )
 
-    ledger_keys = {row["key"] for row in ledger}
+    ledger_keys = {row["key"] for row in ledger if row["status"] != "cancelled"}
     source_keys = {row["ical_uid"] or row["id"] for row in source}
     return {
         "day": day.isoformat(),

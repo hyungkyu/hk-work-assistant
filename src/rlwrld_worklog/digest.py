@@ -828,6 +828,13 @@ _EVENTS_SQL = """
                   AND origin.source_entity_id = ledger.relations->>'thread_id')
            LIMIT 1
       ) AS parent ON ledger.source IN ('notion', 'slack')
+     -- A cancelled meeting did not happen. The ledger keeps it, because the
+     -- cancellation is an observation and losing it would make a removed
+     -- meeting indistinguishable from one that was never collected. A day a
+     -- person reads is not the ledger: on 2026-09-15 four of eighteen
+     -- calendar rows were cancellations, and each one was a line claiming he
+     -- sat in a meeting that nobody held.
+     WHERE coalesce(ledger.raw_payload->>'status', '') <> 'cancelled' 
      -- One row per real message, not per observation of it. The same Slack
      -- message arrives twice -- once from the Web API and once from the search
      -- supplement -- with different content hashes and therefore different
