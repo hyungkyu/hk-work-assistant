@@ -581,3 +581,74 @@ def explain_calendar_day(
         ),
         "source_measured": bool(calendar_client and calendar_ids),
     }
+
+
+_EXPLAIN_SLACK_SQL = """
+    SELECT DISTINCT ON (scope->>'channel_id', source_entity_id)
+           scope->>'channel_id' AS channel,
+           source_entity_id AS ts,
+           left(coalesce(raw_payload->>'text', ''), 60) AS text,
+           capture_profile
+      FROM ledger_records
+     WHERE source = 'slack' AND entity_type = 'message'
+       AND source_created_at >= %(start)s AND source_created_at < %(end)s
+       AND {predicate}
+     ORDER BY 1, 2
+"""
+
+
+def explain_slack_day(
+    database_url: str,
+    person_id: str,
+    day: date,
+    *,
+    slack_client: SlackSearch | None = None,
+    slack_user_id: str | None = None,
+) -> dict[str, Any]:
+    """Which messages each side of the Slack comparison is counting.
+
+    Five of seven days match exactly and two disagree by one, in opposite
+    directions. One message is not worth a theory, and it is worth a listing:
+    the candidates (a search index that lags, a deleted message, a bot post)
+    are distinguishable by looking at the message, and by nothing else.
+    """
+    import psycopg
+
+    start, end = day_bounds(day)
+    ledger: list[dict[str, Any]] = []
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            handles = person_handles(cursor, person_id)
+            cursor.execute(
+                _EXPLAIN_SLACK_SQL.format(predicate=_LEDGER_BY_PERSON["slack"]),
+                {"start": start, "end": end, "handles": handles},
+            )
+            ledger = [
+                {
+                    "channel": row[0],
+                    "ts": row[1],
+                    "text": row[2],
+                    "capture_profile": row[3],
+                    "key": (str(row[0]), str(row[1])),
+                }
+                for row in cursor.fetchall()
+            ]
+
+    source_keys: set[tuple[str, str]] | None = None
+    if slack_client and slack_user_id:
+        handle = f"<@{slack_user_id}>"
+        written = _search_keys(slack_client, f"from:{handle} on:{day.isoformat()}")
+        named = _search_keys(slack_client, f"{handle} on:{day.isoformat()}")
+        if written is not None and named is not None:
+            source_keys = written | named
+
+    ledger_keys = {row["key"] for row in ledger}
+    return {
+        "day": day.isoformat(),
+        "ledger": ledger,
+        "source_measured": source_keys is not None,
+        "ledger_only": sorted(ledger_keys - source_keys) if source_keys else [],
+        # Present in Slack's own search and absent from the ledger: the half of
+        # the difference that is actually a collection gap.
+        "source_only": sorted(source_keys - ledger_keys) if source_keys else [],
+    }

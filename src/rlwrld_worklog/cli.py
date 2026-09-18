@@ -467,7 +467,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--explain",
         default=None,
         metavar="DATE",
-        help="One KST day's calendar, meeting by meeting, on both sides. Use it "
+        help="One KST day, item by item, on both sides. The calendar by "
+        "default; --source slack explains that day's messages instead. Use it "
         "when a count disagrees and the next step would otherwise be a guess",
     )
     slack_sweep.add_argument("--database-url", default=None)
@@ -1465,6 +1466,40 @@ def reconcile_command(args: argparse.Namespace) -> int:
             except Exception as error:
                 print(f"캘린더 원본 조회 불가: {error}")
                 calendar_client = None
+
+    if getattr(args, "explain", None) and args.source == ["slack"]:
+        from .reconcile import explain_slack_day
+
+        found = explain_slack_day(
+            database_url,
+            person_id,
+            date_type.fromisoformat(args.explain),
+            slack_client=slack_client,
+            slack_user_id=slack_user_id,
+        )
+        print(f"코드: {running_code()}")
+        print(
+            f"== {found['day']} 슬랙: 원장 {len(found['ledger'])}건, 원본 "
+            + ("측정됨" if found["source_measured"] else "미조회")
+        )
+        for row in found["ledger"]:
+            mark = "원장에만" if list(row["key"]) in [
+                list(key) for key in found["ledger_only"]
+            ] else "양쪽"
+            print(f"  [{mark}] {row['channel']:<14}{row['ts']:<18}{row['text']}")
+        for channel, ts in found["source_only"]:
+            print(f"  [원본에만] {channel:<12}{ts}")
+        _print_json(
+            "explain",
+            {
+                "day": found["day"],
+                "source": "slack",
+                "ledger": len(found["ledger"]),
+                "ledger_only": len(found["ledger_only"]),
+                "source_only": len(found["source_only"]),
+            },
+        )
+        return 0
 
     if getattr(args, "explain", None):
         from .reconcile import explain_calendar_day

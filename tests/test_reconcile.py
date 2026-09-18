@@ -381,3 +381,52 @@ def test_the_calendar_count_leaves_out_meetings_that_were_cancelled():
     from rlwrld_worklog.reconcile import _LEDGER_BY_PERSON
 
     assert "'cancelled'" in _LEDGER_BY_PERSON["google_calendar"]
+
+
+def test_explain_can_be_pointed_at_slack(monkeypatch, capsys):
+    """Two of seven days disagree by one message, in opposite directions.
+
+    One message is not worth a theory and is worth a listing: a lagging search
+    index, a deleted message and a bot post look different when you read them,
+    and identical when you count them.
+    """
+    from rlwrld_worklog import cli, digest, reconcile as reconcile_module
+
+    monkeypatch.setattr(
+        digest, "resolve_people", lambda url, names: {"resolved": {"x": "p_1"}, "unresolved": [], "ambiguous": {}}
+    )
+    monkeypatch.setattr(
+        reconcile_module,
+        "explain_slack_day",
+        lambda url, person, day, **kwargs: {
+            "day": day.isoformat(),
+            "ledger": [
+                {
+                    "channel": "C1",
+                    "ts": "1.0",
+                    "text": "안녕",
+                    "capture_profile": "live-slack-web-api/v1",
+                    "key": ("C1", "1.0"),
+                }
+            ],
+            "source_measured": True,
+            "ledger_only": [("C1", "1.0")],
+            "source_only": [("C2", "9.9")],
+        },
+    )
+
+    class Args:
+        person_name = "x"
+        since = None
+        until = None
+        explain = "2026-09-15"
+        database_url = "postgresql://fake"
+        source = ["slack"]
+        gaps_only = False
+        no_source_read = True
+
+    assert cli.reconcile_command(Args()) == 0
+    printed = capsys.readouterr().out
+    assert "슬랙" in printed
+    assert "원장에만" in printed and "안녕" in printed
+    assert "원본에만" in printed and "9.9" in printed
