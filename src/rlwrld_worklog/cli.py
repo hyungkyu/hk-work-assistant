@@ -487,6 +487,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Cap the number of parent threads swept in one run (default: all)",
     )
 
+    precedent = subparsers.add_parser(
+        "precedents",
+        help="What HK actually said last time something like this came up",
+    )
+    precedent.add_argument("situation", nargs="?", default=None)
+    precedent.add_argument("--person-name", required=True)
+    precedent.add_argument("--database-url", default=None)
+    precedent.add_argument("--limit", type=_positive_int, default=8)
+
     ledger_verify = subparsers.add_parser(
         "ledger-verify", help="Verify counts, duplicates, and provenance"
     )
@@ -1817,6 +1826,56 @@ def slack_thread_sweep(args: argparse.Namespace) -> int:
     return int(summary.get("exit_code", 0))
 
 
+def precedents_command(args: argparse.Namespace) -> int:
+    """Retrieval for an agent that answers the way he does.
+
+    It prints his own sentences and the messages they answered. Nothing here
+    writes in his voice: the agent reading this output does that, from
+    evidence it can show, which is the only version of "나처럼" that can be
+    checked.
+    """
+    from . import digest as digest_module
+    from .voice import precedents
+
+    database_url = args.database_url or os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise SystemExit("DATABASE_URL or --database-url is required")
+    if not args.situation:
+        raise SystemExit("give the situation to match, in quotes")
+
+    match = digest_module.resolve_people(database_url, [args.person_name])
+    if not match["resolved"]:
+        raise SystemExit(f"찾지 못함: {args.person_name}")
+    person_id = next(iter(match["resolved"].values()))
+
+    result = precedents(database_url, person_id, args.situation, limit=args.limit)
+    for item in result.found:
+        when = (
+            item.said_at.astimezone(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M")
+            if item.said_at
+            else "?"
+        )
+        print(f"— {when} KST · {item.channel or '?'}")
+        if item.situation:
+            who = item.situation_author or "누군가"
+            print(f"    상황 [{who}] {' '.join(item.situation.split())[:200]}")
+        else:
+            # Said plainly. Half a precedent is not a precedent.
+            print("    상황 (부모 메시지가 원장에 없음 — 스윕 대기)")
+        print(f"    HK   {' '.join(item.said.split())[:300]}")
+        if item.permalink:
+            print(f"    {item.permalink}")
+    _print_json(
+        "precedents",
+        {
+            "query": result.query,
+            "found": len(result.found),
+            "without_situation": result.without_situation,
+        },
+    )
+    return 0 if result.found else 1
+
+
 def ledger_verify(args: argparse.Namespace) -> int:
     from .ledger.verify import verify_ledger, write_report
 
@@ -2037,6 +2096,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return digest_command(args)
     if args.command == "reconcile":
         return reconcile_command(args)
+    if args.command == "precedents":
+        return precedents_command(args)
     if args.command == "slack-thread-sweep":
         return slack_thread_sweep(args)
     if args.command == "ledger-verify":
