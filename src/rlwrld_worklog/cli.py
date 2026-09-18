@@ -487,6 +487,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Cap the number of parent threads swept in one run (default: all)",
     )
 
+    embed_parser = subparsers.add_parser(
+        "embed",
+        help="Fill the embedding column so retrieval matches meaning, not characters",
+    )
+    embed_parser.add_argument("--database-url", default=None)
+    embed_parser.add_argument(
+        "--apply", action="store_true", help="Write the vectors. Without it, count only"
+    )
+    embed_parser.add_argument("--limit", type=_positive_int, default=2000)
+    embed_parser.add_argument(
+        "--source",
+        action="append",
+        default=[],
+        choices=["slack", "notion", "google_calendar", "github", "slurm"],
+        help="Repeatable. Without any, every source is embedded",
+    )
+    embed_parser.add_argument(
+        "--model",
+        default=None,
+        help="Local model name. Default: $WORKLOG_EMBED_MODEL, else BAAI/bge-m3",
+    )
+
     precedent = subparsers.add_parser(
         "precedents",
         help="What HK actually said last time something like this came up",
@@ -495,6 +517,11 @@ def build_parser() -> argparse.ArgumentParser:
     precedent.add_argument("--person-name", required=True)
     precedent.add_argument("--database-url", default=None)
     precedent.add_argument("--limit", type=_positive_int, default=8)
+    precedent.add_argument(
+        "--no-embedding",
+        action="store_true",
+        help="Match characters instead of meaning, for comparing the two",
+    )
 
     ledger_verify = subparsers.add_parser(
         "ledger-verify", help="Verify counts, duplicates, and provenance"
@@ -1826,6 +1853,25 @@ def slack_thread_sweep(args: argparse.Namespace) -> int:
     return int(summary.get("exit_code", 0))
 
 
+def embed_command(args: argparse.Namespace) -> int:
+    """Give the searchable text its vectors, on this machine."""
+    from .embedding import DEFAULT_MODEL, LocalEmbedder, embed_corpus
+
+    database_url = args.database_url or os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise SystemExit("DATABASE_URL or --database-url is required")
+    embedder = LocalEmbedder(args.model or DEFAULT_MODEL)
+    result = embed_corpus(
+        database_url,
+        embedder,
+        limit=args.limit,
+        sources=args.source,
+        apply=args.apply,
+    )
+    _print_json("embed", result.as_dict())
+    return 1 if result.errors else 0
+
+
 def precedents_command(args: argparse.Namespace) -> int:
     """Retrieval for an agent that answers the way he does.
 
@@ -1848,7 +1894,22 @@ def precedents_command(args: argparse.Namespace) -> int:
         raise SystemExit(f"찾지 못함: {args.person_name}")
     person_id = next(iter(match["resolved"].values()))
 
-    result = precedents(database_url, person_id, args.situation, limit=args.limit)
+    embedder = None
+    if not args.no_embedding:
+        from .embedding import LocalEmbedder
+
+        try:
+            embedder = LocalEmbedder()
+            embedder.embed(["준비"])
+        except Exception as error:
+            # The model not being installed is a fact about the machine, not a
+            # failure of the question. Say it once and match characters.
+            print(f"임베딩 모델 없음 ({error}); 문자 기준으로 검색함")
+            embedder = None
+    result = precedents(
+        database_url, person_id, args.situation, limit=args.limit, embedder=embedder
+    )
+    print(f"매칭: {result.matcher}")
     for item in result.found:
         when = (
             item.said_at.astimezone(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M")
@@ -2096,6 +2157,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return digest_command(args)
     if args.command == "reconcile":
         return reconcile_command(args)
+    if args.command == "embed":
+        return embed_command(args)
     if args.command == "precedents":
         return precedents_command(args)
     if args.command == "slack-thread-sweep":

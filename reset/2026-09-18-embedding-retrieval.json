@@ -1,0 +1,36 @@
+{
+  "name": "2026-09-18-embedding-retrieval",
+  "note": "'나처럼 대답하는 에이전트'의 검색 부분. HK 지적대로 생성이 숙제이고 검색은 재료지만, 한국어 문자 검색으로는 재료가 안 나온다 — '배포'로 '배포는'이 안 걸리고 말이 다르면 트라이그램도 끝이다. 임베딩은 PC에서 돌린다: 코퍼스에 DM·프라이빗이 섞여 있어 밖으로 내보내지 않는다.",
+  "entries": [
+    {
+      "op": "create",
+      "title": "검색을 의미 기준으로 — search_documents.embedding 채우기",
+      "detail": "0006 마이그레이션이 vector(1024) 컬럼과 미임베딩 인덱스까지 만들어두고 비워둔 상태였다. worklog embed 가 bge-m3(로컬)로 배치 채움. 폭이 다른 모델은 자르지 않고 거부한다 — 잘린 벡터도 삽입되고 비교되며 나중에 알아챌 방법이 없다. 모델명을 행마다 기록해 모델 교체가 보이게 한다. 배치 단위 커밋으로 중단 시 한 것만 남는다.",
+      "next_action": "HK PC에 sentence-transformers 설치 후 worklog embed --apply 실행, candidates 가 줄어드는지 확인",
+      "assigned_to": "hk",
+      "priority": "high",
+      "phase": "P2",
+      "status": "ready"
+    },
+    {
+      "op": "create",
+      "title": "선례 검색 — HK의 답과 그 답이 답한 상황을 쌍으로",
+      "detail": "worklog precedents. 슬랙 답글의 부모 메시지가 상황, HK의 답글이 개입. 임베딩이 있으면 의미로, 없으면 문자로 찾고 어느 쪽이 답했는지 출력에 찍는다 — '선례 없음'과 '아직 임베딩 안 됨'은 다른 답이다. 부모가 원장에 없는 답글은 버리지 않고 표시한다(스윕 대기 622건).",
+      "next_action": "임베딩 채운 뒤 실제 상황 3~4개로 돌려보고 HK가 '이게 나다' 판정",
+      "assigned_to": "mori",
+      "priority": "normal",
+      "phase": "P2",
+      "status": "ready"
+    },
+    {
+      "op": "create",
+      "title": "파인튜닝은 평가 뒤에 결정",
+      "detail": "말투는 파인튜닝이 강하고 사실은 RAG가 강하다. 지금은 프롬프트+RAG로 먼저 돌려 평가(지난달 스레드 held-out, HK가 실제로 한 질문과 비교)를 통과하는지 본다. 통과하면 GPU를 태울 이유가 없고, 말투가 모자라면 그때 7B~14B LoRA. 근거 없이 학습부터 시작하지 않는다.",
+      "next_action": "평가셋 분리와 페어 코퍼스 JSONL export 먼저",
+      "assigned_to": "mori",
+      "priority": "low",
+      "phase": "P3",
+      "status": "todo"
+    }
+  ]
+}

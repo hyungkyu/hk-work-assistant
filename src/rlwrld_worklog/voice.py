@@ -83,6 +83,55 @@ _PRECEDENT_SQL = """
 # The same reasoning search.py already arrived at for its fallback matcher.
 MATCH_FLOOR = 0.3
 
+# The same query, ranked by meaning instead of by characters. Requires the
+# embedding batch to have run; when it has not, `precedents` falls back to the
+# trigram query above and says which matcher answered, because "no precedent"
+# and "no embedding yet" are different answers.
+#
+# `<=>` is cosine distance, so smaller is closer; the score is flipped to
+# 1 - distance to keep "higher is better" true for both matchers.
+_PRECEDENT_VECTOR_SQL = """
+    WITH mine AS (
+        SELECT reply.ledger_id,
+               reply.source_created_at AS said_at,
+               coalesce(reply.scope->>'channel_id', reply.scope->>'container') AS channel,
+               reply.raw_payload->>'text' AS said,
+               reply.raw_payload->>'permalink' AS permalink,
+               coalesce(
+                   reply.relations->>'thread_id', reply.relations->>'parent_ts'
+               ) AS parent_ts,
+               1 - (text.embedding <=> %(vector)s::vector) AS score
+          FROM ledger_records reply
+          JOIN search_documents text ON text.ledger_id = reply.ledger_id
+         WHERE reply.source = 'slack'
+           AND reply.entity_type = 'message'
+           AND reply.relations->>'author_user_id' = ANY(%(handles)s)
+           AND text.embedding IS NOT NULL
+         ORDER BY text.embedding <=> %(vector)s::vector
+         LIMIT %(pool)s
+    )
+    SELECT DISTINCT ON (mine.said, mine.parent_ts)
+           mine.said_at,
+           mine.channel,
+           mine.said,
+           mine.permalink,
+           mine.parent_ts,
+           parent.raw_payload->>'text' AS situation,
+           parent.relations->>'author_user_id' AS situation_author,
+           mine.score
+      FROM mine
+      LEFT JOIN ledger_records parent
+        ON parent.source = 'slack'
+       AND parent.entity_type = 'message'
+       AND parent.source_entity_id = mine.parent_ts
+     ORDER BY mine.said, mine.parent_ts, mine.score DESC
+"""
+
+# How many nearest messages to pull before folding duplicates and ranking.
+# Larger than the limit because one sentence he repeats often collapses to a
+# single precedent.
+VECTOR_POOL = 60
+
 
 
 @dataclass
@@ -125,6 +174,10 @@ class PrecedentResult:
     found: list[Precedent] = field(default_factory=list)
     without_situation: int = 0
     person_id: str = ""
+    # "embedding" or "trigram". Printed, because a thin result means something
+    # different in each case: with trigrams it usually means the words differ,
+    # and the fix is to run the embedding batch.
+    matcher: str = "trigram"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -135,6 +188,7 @@ class PrecedentResult:
             # situation is a run whose evidence is half missing, and the reader
             # has to know that before leaning on it.
             "without_situation": self.without_situation,
+            "matcher": self.matcher,
         }
 
 
@@ -145,8 +199,13 @@ def precedents(
     *,
     limit: int = 8,
     names: dict[str, str] | None = None,
+    embedder: Any = None,
 ) -> PrecedentResult:
-    """The closest things he has actually said, with what he was answering."""
+    """The closest things he has actually said, with what he was answering.
+
+    With an embedder, matched by meaning; without one, by characters. The
+    result says which, so a thin answer can be read correctly.
+    """
     import psycopg
 
     text = (query or "").strip()
@@ -159,17 +218,34 @@ def precedents(
     with psycopg.connect(database_url) as connection:
         with connection.cursor() as cursor:
             handles = person_handles(cursor, person_id)
-            # Transaction-local so a loose threshold here never leaks into
-            # the next query in this session.
-            cursor.execute(
-                "SELECT set_config('pg_trgm.similarity_threshold', %s, true)",
-                (str(MATCH_FLOOR),),
-            )
-            cursor.execute(
-                _PRECEDENT_SQL,
-                {"query": text, "handles": handles, "floor": MATCH_FLOOR},
-            )
-            rows = cursor.fetchall()
+            rows = []
+            if embedder is not None:
+                vector = embedder.embed([text])[0]
+                cursor.execute(
+                    _PRECEDENT_VECTOR_SQL,
+                    {
+                        "vector": "[" + ",".join(repr(value) for value in vector) + "]",
+                        "handles": handles,
+                        "pool": VECTOR_POOL,
+                    },
+                )
+                rows = cursor.fetchall()
+                result.matcher = "embedding"
+            if not rows:
+                # No embedder, or nothing embedded yet. Characters, and the
+                # result says so.
+                result.matcher = "trigram"
+                # Transaction-local so a loose threshold here never leaks into
+                # the next query in this session.
+                cursor.execute(
+                    "SELECT set_config('pg_trgm.similarity_threshold', %s, true)",
+                    (str(MATCH_FLOOR),),
+                )
+                cursor.execute(
+                    _PRECEDENT_SQL,
+                    {"query": text, "handles": handles, "floor": MATCH_FLOOR},
+                )
+                rows = cursor.fetchall()
 
     lookup = names or {}
     found = [
