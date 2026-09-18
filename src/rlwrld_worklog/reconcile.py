@@ -566,11 +566,17 @@ def explain_calendar_day(
         "digest": digest_lines,
         # A title that appears twice in one day's page. Written out rather
         # than counted, because "which meeting is doubled" is the question.
+        # Same title AND same minute. Titled by itself flagged "회의: Block"
+        # at 09:00 and at 18:00 as a repeat, which is two meetings that share
+        # a name -- a false alarm in a tool whose whole job is to stop me
+        # guessing.
         "digest_repeats": sorted(
             {
-                str(line["where"])
+                f"{line['at']} {line['where']}"
                 for line in digest_lines
-                if [other["where"] for other in digest_lines].count(line["where"]) > 1
+                if [
+                    (other["at"], other["where"]) for other in digest_lines
+                ].count((line["at"], line["where"])) > 1
             }
         ),
         "source_measured": bool(calendar_client and calendar_ids),

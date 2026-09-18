@@ -790,7 +790,19 @@ _EVENTS_SQL = """
     SELECT DISTINCT ON (
                matched.person_id,
                event.source,
-               coalesce(ledger.raw_payload->>'iCalUID', event.external_id)
+               CASE
+                   WHEN event.source = 'google_calendar'
+                   -- A meeting at one minute with one title is one meeting.
+                   -- iCalUID alone was not enough: a recurring instance and a
+                   -- separately created event of the same meeting carry
+                   -- different uids, so 2026-09-15 showed "1on1: simon x hk"
+                   -- and "커피챗: 이세현" twice at the same time. occurred_at
+                   -- is used rather than the payload's own start because the
+                   -- same instant arrives written in three timezones.
+                   THEN event.occurred_at::text
+                        || '|' || coalesce(ledger.raw_payload->>'summary', '')
+                   ELSE coalesce(ledger.raw_payload->>'iCalUID', event.external_id)
+               END
            )
            matched.person_id,
            matched.mentioned,
@@ -843,7 +855,12 @@ _EVENTS_SQL = """
      -- reading is not, so the official capture wins and the supplement is the
      -- fallback, which is the same priority order the head store already uses.
      ORDER BY matched.person_id, event.source,
-              coalesce(ledger.raw_payload->>'iCalUID', event.external_id),
+              CASE
+                  WHEN event.source = 'google_calendar'
+                  THEN event.occurred_at::text
+                       || '|' || coalesce(ledger.raw_payload->>'summary', '')
+                  ELSE coalesce(ledger.raw_payload->>'iCalUID', event.external_id)
+              END,
               CASE WHEN ledger.capture_profile LIKE '%%search%%' THEN 1 ELSE 0 END,
               event.occurred_at
 """

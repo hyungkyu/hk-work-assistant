@@ -1632,3 +1632,104 @@ def test_a_cancelled_meeting_is_not_part_of_the_day(database):
             ]
 
     assert titles == ["회의 evt-held"]
+
+
+@REQUIRES_DATABASE
+def test_one_meeting_at_one_minute_is_one_line(database):
+    """2026-09-15: "1on1: simon x hk" and "커피챗: 이세현" each appeared twice.
+
+    Two ledger rows, same title, same minute, different iCalUID -- a recurring
+    instance and a separately created event for the same meeting. iCalUID
+    collapsed the twelve calendar copies but not this, so the page said he sat
+    in the same 1on1 twice. Two meetings that really are different keep their
+    own lines: same title at another time is another meeting.
+    """
+    import uuid
+
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    from rlwrld_worklog.digest import _ALL_KINDS, _EVENTS_SQL
+
+    person = uuid.uuid4()
+    moment = datetime(2026, 9, 21, 14, 30, tzinfo=KST)
+    later = datetime(2026, 9, 21, 18, 0, tzinfo=KST)
+    with psycopg.connect(os.environ["WORKLOG_TEST_DATABASE_URL"]) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM org_identity WHERE value = 'dup-test@rlwrld.ai'")
+            cursor.execute("DELETE FROM org_person WHERE name = '중복테스트'")
+            cursor.execute("DELETE FROM timeline_events WHERE external_id LIKE 'evt-dup%'")
+            cursor.execute("DELETE FROM ledger_records WHERE source_entity_id LIKE 'evt-dup%'")
+            cursor.execute(
+                "INSERT INTO roster_observation (observed_at, source, row_count) "
+                "VALUES (now(), 'roster_seed_2', 1) RETURNING observation_id"
+            )
+            observation = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO org_person (person_id, name, first_seen, last_seen) "
+                "VALUES (%s, '중복테스트', %s, %s)",
+                (person, observation, observation),
+            )
+            cursor.execute(
+                "INSERT INTO org_identity (person_id, kind, value, first_seen, last_seen, "
+                "origin) VALUES (%s, 'email_official', 'dup-test@rlwrld.ai', %s, %s, 'roster')",
+                (person, observation, observation),
+            )
+            rows = (
+                ("evt-dup-a", "1on1: simon x hk", moment, "uid-recurring@google.com"),
+                ("evt-dup-b", "1on1: simon x hk", moment, "uid-oneoff@google.com"),
+                ("evt-dup-c", "1on1: simon x hk", later, "uid-evening@google.com"),
+            )
+            for external, summary, when, uid in rows:
+                ledger_id = uuid.uuid4()
+                fields = dict(_CAL_LEDGER_FIELDS)
+                fields.update(
+                    source_entity_id=external,
+                    ledger_id=ledger_id,
+                    scope=Jsonb({"calendar_id": "cal"}),
+                    source_entity_key=Jsonb({"id": external}),
+                    raw_payload=Jsonb(
+                        {
+                            "summary": summary,
+                            "iCalUID": uid,
+                            "start": {"dateTime": when.isoformat()},
+                        }
+                    ),
+                    relations=Jsonb({"organizer_email": "dup-test@rlwrld.ai"}),
+                    provenance=Jsonb({}),
+                    coverage=Jsonb({}),
+                    observation_window=Jsonb({}),
+                    capture_completeness=Jsonb({}),
+                    supplement_provenance=Jsonb({}),
+                    visibility_routing=Jsonb({}),
+                    denormalized_label_snapshot=Jsonb({}),
+                    source_created_at=when,
+                    collected_at=when,
+                )
+                cursor.execute(
+                    f"INSERT INTO ledger_records ({','.join(fields)}) "
+                    f"VALUES ({','.join('%s' for _ in fields)})",
+                    list(fields.values()),
+                )
+                cursor.execute(
+                    "INSERT INTO timeline_events (event_id, source, event_type, external_id, "
+                    "actor_external_id, occurred_at, ingested_at, container_id, thread_id, "
+                    "payload) VALUES (%s, 'google_calendar', 'calendar_event', %s, "
+                    "'dup-test@rlwrld.ai', %s, now(), 'cal', %s, %s)",
+                    (ledger_id, external, when, external, Jsonb({"labels": {}})),
+                )
+        connection.commit()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                _EVENTS_SQL,
+                {
+                    "start": datetime(2026, 9, 21, tzinfo=KST),
+                    "end": datetime(2026, 9, 22, tzinfo=KST),
+                    "kinds": list(_ALL_KINDS),
+                },
+            )
+            times = sorted(
+                row[2] for row in cursor.fetchall() if str(row[0]) == str(person)
+            )
+
+    assert [when.astimezone(KST).strftime("%H:%M") for when in times] == ["14:30", "18:00"]

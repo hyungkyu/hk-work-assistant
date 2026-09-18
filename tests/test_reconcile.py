@@ -329,7 +329,7 @@ def test_explain_does_not_demand_a_range_it_does_not_use(monkeypatch, capsys):
                 {"at": "10:00", "where": "회의: 주간 리뷰", "permalink": None},
                 {"at": "10:00", "where": "회의: 주간 리뷰", "permalink": None},
             ],
-            "digest_repeats": ["회의: 주간 리뷰"],
+            "digest_repeats": ["10:00 회의: 주간 리뷰"],
             "source_measured": True,
         },
     )

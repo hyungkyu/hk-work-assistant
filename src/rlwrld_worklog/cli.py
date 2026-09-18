@@ -1499,7 +1499,7 @@ def reconcile_command(args: argparse.Namespace) -> int:
         if found["digest"]:
             print(f"-- 다이제스트 {len(found['digest'])}줄")
             for line in found["digest"]:
-                repeated = line["where"] in found["digest_repeats"]
+                repeated = f"{line['at']} {line['where']}" in found["digest_repeats"]
                 print(
                     f"  [{'중복' if repeated else '  '}] {line['at'] or '?':<26}"
                     f"{(line['where'] or '')[:40]}"
