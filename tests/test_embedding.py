@@ -237,3 +237,128 @@ def test_a_precedent_is_found_when_the_words_differ():
                     "DELETE FROM search_documents WHERE ledger_id = %s", (reply_id,)
                 )
             connection.commit()
+
+
+@REQUIRES_DATABASE
+def test_scoping_to_one_person_covers_their_replies_and_what_they_answered():
+    """581,315 documents on the real database, against a few thousand here.
+
+    The precedent search reads his messages and the ones they answered, and
+    nothing else. Embedding the whole archive first is ten hours of CPU for
+    text this path never opens.
+    """
+    import uuid
+    from datetime import datetime, timezone
+
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    from rlwrld_worklog.embedding import embed_corpus
+    from rlwrld_worklog.ledger.load import apply_migrations
+
+    url = os.environ["WORKLOG_TEST_DATABASE_URL"]
+    apply_migrations(
+        database_url=url,
+        migrations_dir=__import__("pathlib").Path(__file__).resolve().parents[1]
+        / "sql"
+        / "migrations",
+        dry_run=False,
+    )
+    person = uuid.uuid4()
+    moment = datetime(2026, 9, 17, 2, 0, tzinfo=timezone.utc)
+    rows = {
+        "scope-parent": ("UOTHER", None, "부모 메시지"),
+        "scope-mine": ("USCOPE", "scope-parent", "내 답글"),
+        "scope-theirs": ("UOTHER", None, "남의 메시지"),
+    }
+    ids = {name: uuid.uuid5(uuid.NAMESPACE_URL, f"scope:{name}") for name in rows}
+
+    with psycopg.connect(url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM search_documents WHERE doc_id = ANY(%s)", (list(ids.values()),)
+            )
+            cursor.execute("DELETE FROM ledger_records WHERE source_entity_id LIKE 'scope-%'")
+            cursor.execute("DELETE FROM org_identity WHERE value = 'USCOPE'")
+            cursor.execute("DELETE FROM org_person WHERE name = '범위테스트'")
+            cursor.execute(
+                "INSERT INTO roster_observation (observed_at, source, row_count) "
+                "VALUES (now(), 'roster_seed_2', 1) RETURNING observation_id"
+            )
+            observation = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO org_person (person_id, name, first_seen, last_seen) "
+                "VALUES (%s, '범위테스트', %s, %s)",
+                (person, observation, observation),
+            )
+            cursor.execute(
+                "INSERT INTO org_identity (person_id, kind, value, first_seen, last_seen, "
+                "origin) VALUES (%s, 'slack', 'USCOPE', %s, %s, 'roster')",
+                (person, observation, observation),
+            )
+            for name, (author, parent, text) in rows.items():
+                fields = {
+                    "ledger_id": ids[name],
+                    "schema_version": "v1",
+                    "capture_profile": "live-slack-web-api/v1",
+                    "source": "slack",
+                    "entity_type": "message",
+                    "tenant_workspace_id": "T",
+                    "tenant_status": "observed",
+                    "scope": Jsonb({"channel_id": "C8"}),
+                    "source_entity_id": name,
+                    "source_updated_at_status": "observed",
+                    "deleted_status": "observed",
+                    "raw_payload": Jsonb({"text": text}),
+                    "content_hash": name,
+                    "relations": Jsonb({"author_user_id": author, "thread_id": parent}),
+                    "source_file": "f",
+                    "source_file_sha256": "h",
+                    "record_pointer": "p",
+                    "legacy_layout_version": "v",
+                    "converter_version": "v",
+                    "observation_role": "current_head",
+                    "capture_completeness_status": "recorded",
+                    "source_created_at": moment,
+                    "collected_at": moment,
+                }
+                cursor.execute(
+                    f"INSERT INTO ledger_records ({','.join(fields)}) "
+                    f"VALUES ({','.join('%s' for _ in fields)})",
+                    list(fields.values()),
+                )
+                cursor.execute(
+                    "INSERT INTO search_documents (doc_id, ledger_id, source, entity_type, "
+                    "text_content, text_sha256, extractor) "
+                    "VALUES (%s, %s, 'slack', 'message', %s, %s, 'test')",
+                    (ids[name], ids[name], text, f"sha-{name}"),
+                )
+        connection.commit()
+
+    embedder = FakeEmbedder()
+    try:
+        embed_corpus(url, embedder, apply=True, person_id=str(person))
+        embedded = set()
+        with psycopg.connect(url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT doc_id FROM search_documents WHERE doc_id = ANY(%s) "
+                    "AND embedding IS NOT NULL",
+                    (list(ids.values()),),
+                )
+                embedded = {row[0] for row in cursor.fetchall()}
+
+        assert ids["scope-mine"] in embedded, "his own reply"
+        assert ids["scope-parent"] in embedded, "and the message it answered"
+        assert ids["scope-theirs"] not in embedded, "not the rest of the workspace"
+    finally:
+        with psycopg.connect(url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM search_documents WHERE doc_id = ANY(%s)",
+                    (list(ids.values()),),
+                )
+                cursor.execute(
+                    "DELETE FROM ledger_records WHERE source_entity_id LIKE 'scope-%'"
+                )
+            connection.commit()

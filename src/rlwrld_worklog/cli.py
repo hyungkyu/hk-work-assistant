@@ -504,6 +504,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Repeatable. Without any, every source is embedded",
     )
     embed_parser.add_argument(
+        "--person-name",
+        default=None,
+        help="Embed only this person's messages and the ones they replied to. "
+        "The corpus the precedent search reads, and a few thousand rows "
+        "instead of half a million",
+    )
+    embed_parser.add_argument(
         "--model",
         default=None,
         help="Local model name. Default: $WORKLOG_EMBED_MODEL, else BAAI/bge-m3",
@@ -1860,12 +1867,22 @@ def embed_command(args: argparse.Namespace) -> int:
     database_url = args.database_url or os.environ.get("DATABASE_URL")
     if not database_url:
         raise SystemExit("DATABASE_URL or --database-url is required")
+    person_id = None
+    if args.person_name:
+        from . import digest as digest_module
+
+        match = digest_module.resolve_people(database_url, [args.person_name])
+        if not match["resolved"]:
+            raise SystemExit(f"찾지 못함: {args.person_name}")
+        person_id = next(iter(match["resolved"].values()))
+
     embedder = LocalEmbedder(args.model or DEFAULT_MODEL)
     result = embed_corpus(
         database_url,
         embedder,
         limit=args.limit,
         sources=args.source,
+        person_id=person_id,
         apply=args.apply,
     )
     _print_json("embed", result.as_dict())

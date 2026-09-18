@@ -118,6 +118,7 @@ def check_width(vectors: Sequence[Sequence[float]], *, model: str) -> None:
 class EmbedResult:
     dry_run: bool = True
     model: str = ""
+    scope: str = "everything"
     candidates: int = 0
     embedded: int = 0
     batches: int = 0
@@ -129,6 +130,7 @@ class EmbedResult:
         return {
             "dry_run": self.dry_run,
             "model": self.model,
+            "scope": self.scope,
             # Rows with no embedding for this model, before anything ran. The
             # number a second run should report lower.
             "candidates": self.candidates,
@@ -140,25 +142,55 @@ class EmbedResult:
         }
 
 
+# One person's own messages, and the messages those replied to. This is the
+# corpus the precedent search actually reads, and it is three orders of
+# magnitude smaller than everything: 581,315 documents on 2026-09-18, against a
+# few thousand here. Embedding the whole archive is hours of CPU for text no
+# question in this path ever looks at; this is minutes, and the rest can follow
+# whenever it is worth it.
+_PERSON_FILTER = """
+       AND (
+           doc.ledger_id IN (
+               SELECT mine.ledger_id
+                 FROM ledger_records mine
+                WHERE mine.source = 'slack'
+                  AND mine.relations->>'author_user_id' = ANY(%(handles)s)
+           )
+           OR doc.ledger_id IN (
+               SELECT parent.ledger_id
+                 FROM ledger_records parent
+                 JOIN ledger_records reply
+                   ON reply.source = 'slack'
+                  AND reply.relations->>'author_user_id' = ANY(%(handles)s)
+                  AND parent.source_entity_id = coalesce(
+                      reply.relations->>'thread_id', reply.relations->>'parent_ts'
+                  )
+                WHERE parent.source = 'slack'
+           )
+       )
+"""
+
 # Rows that have no embedding from this model yet. Ordered newest first: a
 # bounded first run should cover the text most likely to be searched, not the
 # oldest rows in the archive.
 _CANDIDATES_SQL = """
     SELECT doc_id, text_content
-      FROM search_documents
+      FROM search_documents doc
      WHERE text_content <> ''
        AND (embedding IS NULL OR embedding_model IS DISTINCT FROM %(model)s)
        {source_filter}
+       {person_filter}
      ORDER BY occurred_at DESC NULLS LAST
      LIMIT %(limit)s
 """
 
 _COUNT_SQL = """
     SELECT count(*)
-      FROM search_documents
+      FROM search_documents doc
      WHERE text_content <> ''
        AND (embedding IS NULL OR embedding_model IS DISTINCT FROM %(model)s)
        {source_filter}
+       {person_filter}
 """
 
 _WRITE_SQL = """
@@ -176,6 +208,7 @@ def embed_corpus(
     *,
     limit: int = 2000,
     sources: Sequence[str] = (),
+    person_id: str | None = None,
     apply: bool = False,
 ) -> EmbedResult:
     """Give the searchable text its vectors, in batches, resumably.
@@ -188,7 +221,11 @@ def embed_corpus(
     import psycopg
 
     began = datetime.now(timezone.utc)
-    result = EmbedResult(dry_run=not apply, model=embedder.name)
+    result = EmbedResult(
+        dry_run=not apply,
+        model=embedder.name,
+        scope="one person and the messages they answered" if person_id else "everything",
+    )
     source_filter = "AND source = ANY(%(sources)s)" if sources else ""
     parameters: dict[str, Any] = {
         "model": embedder.name,
@@ -197,13 +234,28 @@ def embed_corpus(
     }
 
     with psycopg.connect(database_url) as connection:
+        person_filter = ""
+        if person_id:
+            from .reconcile import person_handles
+
+            with connection.cursor() as cursor:
+                parameters["handles"] = person_handles(cursor, person_id)
+            person_filter = _PERSON_FILTER
         with connection.cursor() as cursor:
-            cursor.execute(_COUNT_SQL.format(source_filter=source_filter), parameters)
+            cursor.execute(
+                _COUNT_SQL.format(
+                    source_filter=source_filter, person_filter=person_filter
+                ),
+                parameters,
+            )
             result.candidates = int(cursor.fetchone()[0])
             if not apply:
                 return result
             cursor.execute(
-                _CANDIDATES_SQL.format(source_filter=source_filter), parameters
+                _CANDIDATES_SQL.format(
+                    source_filter=source_filter, person_filter=person_filter
+                ),
+                parameters,
             )
             rows = cursor.fetchall()
 
