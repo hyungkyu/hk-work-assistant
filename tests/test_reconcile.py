@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from datetime import date
 
 from rlwrld_worklog.reconcile import (
@@ -291,3 +292,72 @@ def test_the_table_says_which_build_produced_it():
 
     found = running_code()
     assert isinstance(found, str) and found
+
+
+def test_explain_does_not_demand_a_range_it_does_not_use(monkeypatch, capsys):
+    """The flag's first real use died in the argument parser.
+
+    `--explain DATE` names its day; requiring --since and --until beside it
+    made a tool built to stop a guess cost a round trip instead. Shipped
+    without a single test calling the command with the flag set -- the same
+    hole as the reconcile NameError, three days apart.
+    """
+    from rlwrld_worklog import cli, digest, reconcile as reconcile_module
+
+    monkeypatch.setattr(
+        digest, "resolve_people", lambda url, names: {"resolved": {"x": "p_1"}, "unresolved": [], "ambiguous": {}}
+    )
+    monkeypatch.setattr(
+        reconcile_module,
+        "explain_calendar_day",
+        lambda url, person, day, **kwargs: {
+            "day": day.isoformat(),
+            "ledger": [
+                {
+                    "key": "k1",
+                    "entity_id": "k1",
+                    "summary": "주간 리뷰",
+                    "starts": "2026-09-15T10:00:00+09:00",
+                    "capture_profile": "live-google-calendar-occurrences/v1",
+                    "recurring_of": "weekly",
+                }
+            ],
+            "source": [],
+            "ledger_only": ["k1"],
+            "source_only": [],
+            "source_measured": True,
+        },
+    )
+
+    class Args:
+        person_name = "x"
+        since = None
+        until = None
+        explain = "2026-09-15"
+        database_url = "postgresql://fake"
+        source = []
+        gaps_only = False
+        no_source_read = True
+
+    assert cli.reconcile_command(Args()) == 0
+    printed = capsys.readouterr().out
+    assert "주간 리뷰" in printed
+    assert "원장에만" in printed
+    assert "live-google-calendar-occurrences/v1" in printed
+
+
+def test_the_table_still_insists_on_a_range():
+    from rlwrld_worklog import cli
+
+    class Args:
+        person_name = "x"
+        since = None
+        until = None
+        explain = None
+        database_url = "postgresql://fake"
+        source = []
+        gaps_only = False
+        no_source_read = True
+
+    with pytest.raises(SystemExit):
+        cli.reconcile_command(Args())

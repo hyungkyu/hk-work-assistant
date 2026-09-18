@@ -443,8 +443,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Count one person's day in every layer (source → 원장 → 타임라인 → 다이제스트)",
     )
     reconcile_parser.add_argument("--person-name", required=True)
-    reconcile_parser.add_argument("--since", required=True)
-    reconcile_parser.add_argument("--until", required=True)
+    reconcile_parser.add_argument("--since", default=None)
+    reconcile_parser.add_argument("--until", default=None)
     reconcile_parser.add_argument("--database-url", default=None)
     reconcile_parser.add_argument(
         "--source",
@@ -1396,11 +1396,19 @@ def reconcile_command(args: argparse.Namespace) -> int:
     database_url = args.database_url or os.environ.get("DATABASE_URL")
     if not database_url:
         raise SystemExit("DATABASE_URL or --database-url is required")
-    start = date_type.fromisoformat(args.since)
-    end = date_type.fromisoformat(args.until)
-    if end < start:
-        raise SystemExit("--until is before --since")
-    days = [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
+    # --explain names its own day, so requiring a range alongside it made the
+    # first real use of the flag fail on the argument parser. A range is
+    # required for the table and meaningless for the explanation.
+    if getattr(args, "explain", None):
+        days = [date_type.fromisoformat(args.explain)]
+    else:
+        if not args.since or not args.until:
+            raise SystemExit("--since and --until are required (or use --explain DATE)")
+        start = date_type.fromisoformat(args.since)
+        end = date_type.fromisoformat(args.until)
+        if end < start:
+            raise SystemExit("--until is before --since")
+        days = [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
 
     match = digest_module.resolve_people(database_url, [args.person_name])
     if not match["resolved"]:
