@@ -1,0 +1,12 @@
+{
+  "name": "2026-09-18-suite-green",
+  "note": "스위트에 하나 남아 있던 빨강을 없앴다. 제품 버그가 아니라 테스트가 오래된 것이었지만, 상시 빨강 하나는 다음 빨강을 배경 소음으로 만든다.",
+  "entries": [
+    {
+      "work_id": "wi_fdfb698a86469128",
+      "expected_revision": 1,
+      "status": "done",
+      "evidence": "ledger_id가 uuid가 된 뒤로 테스트가 슬랙 ts를 그대로 넣고 있었다. 실 Postgres 기준 1394 passed, 2회 연속 재현. 뒷정리도 추가 — 이 테스트가 남긴 행이 timeline-project·ledger-load 테스트를 같이 빨갛게 만들고 있었다."
+    }
+  ]
+}

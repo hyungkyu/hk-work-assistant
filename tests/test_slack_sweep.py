@@ -42,24 +42,34 @@ def test_only_replies_whose_parent_is_absent_are_returned() -> None:
         with connection.cursor() as cursor:
             cursor.execute("DELETE FROM ledger_records WHERE source = 'slack'")
 
+            # `ledger_id` is a uuid column; this test predates that and passed
+            # the Slack ts straight into it, so it has been failing on every
+            # run with a real database since -- the only red in the suite, and
+            # long enough that it started reading as background noise. The id
+            # is derived from the ts so the rows stay recognisable.
+            import uuid
+
+            def ledger_id_of(entity_id: str) -> uuid.UUID:
+                return uuid.uuid5(uuid.NAMESPACE_URL, f"slack-sweep-test:{entity_id}")
+
             def insert(entity_id, *, is_reply, parent_ts=None, channel="C1"):
                 cursor.execute(
                     """
                     INSERT INTO ledger_records (
-                      ledger_id, capture_profile, source, entity_type,
+                      ledger_id, schema_version, capture_profile, source, entity_type,
                       tenant_workspace_id, tenant_status, scope, source_entity_id,
                       source_updated_at_status, deleted_status, raw_payload,
                       content_hash, relations, source_file, source_file_sha256,
                       record_pointer, legacy_layout_version, converter_version,
-                      observation_role
+                      observation_role, capture_completeness_status
                     ) VALUES (
-                      %s, 'p', 'slack', 'message', 'T', 'observed',
+                      %s, 'v1', 'p', 'slack', 'message', 'T', 'observed',
                       %s, %s, 'observed', 'observed', '{}'::jsonb, %s,
-                      %s, 'f', 'h', 'p', 'v', 'v', 'historical_observation'
+                      %s, 'f', 'h', 'p', 'v', 'v', 'historical_observation', 'recorded'
                     )
                     """,
                     (
-                        entity_id,
+                        ledger_id_of(entity_id),
                         psycopg.types.json.Jsonb({"container": channel}),
                         entity_id,
                         entity_id,
@@ -76,5 +86,18 @@ def test_only_replies_whose_parent_is_absent_are_returned() -> None:
             insert("200.1", is_reply=True, parent_ts="2.0")
             connection.commit()
 
-    parents = orphan_thread_parents(url)
-    assert parents == {"C1": {"1.0"}}
+    try:
+        parents = orphan_thread_parents(url)
+        assert parents == {"C1": {"1.0"}}
+    finally:
+        # These rows have no source_created_at, which is fine for this query
+        # and fatal for the projection suite that shares the database: leaving
+        # them behind turned one red test into three. A test cleans up what it
+        # inserted.
+        with psycopg.connect(url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM ledger_records WHERE source_entity_id IN "
+                    "('100.1', '2.0', '200.1')"
+                )
+            connection.commit()
