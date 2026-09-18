@@ -1307,26 +1307,41 @@ def test_the_drive_client_gives_each_thread_its_own_connection():
     time. Built with a fake credential so nothing is dialled: what is checked is
     that two threads are handed two different service objects.
     """
+    import threading
     from concurrent.futures import ThreadPoolExecutor
     from unittest.mock import patch
 
     from rlwrld_worklog.legacy_drive import GoogleDriveFiles
 
     built = []
+    lock = threading.Lock()
 
     def fake_build(*args, **kwargs):
         made = object()
-        built.append(made)
+        with lock:
+            built.append(made)
         return made
+
+    # A barrier, not four quick tasks. `pool.map` over four items can finish on
+    # one worker before the others start, and then this test fails on a client
+    # that is perfectly correct -- which is what it did on 2026-09-18, blocking
+    # a push for an unrelated change. Holding every thread until all four have
+    # arrived is what "each thread" actually means here.
+    threads = 4
+    ready = threading.Barrier(threads, timeout=10)
+
+    def service_id(_):
+        ready.wait()
+        return id(client.service)
 
     with patch("googleapiclient.discovery.build", fake_build):
         client = GoogleDriveFiles(credentials=object())
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            services = list(pool.map(lambda _: id(client.service), range(4)))
+        with ThreadPoolExecutor(max_workers=threads) as pool:
+            services = list(pool.map(service_id, range(threads)))
 
     # One per worker thread, plus the one built eagerly in __init__.
-    assert len(set(services)) > 1
-    assert len(built) > 1
+    assert len(set(services)) == threads
+    assert len(built) == threads + 1
 
 
 def test_a_note_that_times_out_is_a_meeting_without_a_note():
