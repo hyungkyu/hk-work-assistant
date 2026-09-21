@@ -182,50 +182,37 @@ class EmbedResult:
         }
 
 
-# The corpus the precedent search reads, which is not only his own words.
+# The corpus the precedent search reads: the conversations he is part of.
 #
-# The first version of this filter embedded his messages and their thread
-# parents, and then the search was inverted to match *situations* -- what other
-# people said -- against the query. The index was left pointing the other way,
-# so on 2026-09-21 every question fell back to character matching and found
-# nothing. Changing the question without changing what is indexed is half a
-# change, and it fails silently.
+# Two earlier shapes were wrong in opposite directions. The first embedded only
+# his own messages, and then the search was inverted to match what *other*
+# people said -- so every question fell back to characters and found nothing.
+# The second fixed the scope with a correlated "did he speak here within ten
+# minutes" test per row, which is exact and, against 581,315 documents with no
+# index to support it, slower than embedding would have been. Narrowing cost
+# more than it saved.
 #
-# So: his own messages, and the messages he could have been answering. The
-# second group is what other people said in a channel shortly before he spoke
-# there, plus the parents of threads he replied in. Still far smaller than the
-# archive -- everything else is conversations he never joined.
+# So the scope is the channels he has spoken in at all. Wider than the minutes
+# around his messages and far narrower than the archive, and it is two cheap
+# queries: the channel list, then a plain IN. What it lets in is other people's
+# conversation in rooms he is part of, which is exactly the material a
+# situation comes from.
+_CHANNELS_SQL = """
+    SELECT DISTINCT coalesce(scope->>'channel_id', scope->>'container') AS channel
+      FROM ledger_records
+     WHERE source = 'slack'
+       AND relations->>'author_user_id' = ANY(%(handles)s)
+       AND coalesce(scope->>'channel_id', scope->>'container') IS NOT NULL
+"""
+
 _PERSON_FILTER = """
        AND EXISTS (
            SELECT 1
              FROM ledger_records rec
             WHERE rec.ledger_id = doc.ledger_id
               AND rec.source = 'slack'
-              AND (
-                  rec.relations->>'author_user_id' = ANY(%(handles)s)
-                  OR EXISTS (
-                      SELECT 1
-                        FROM ledger_records mine
-                       WHERE mine.source = 'slack'
-                         AND mine.entity_type = 'message'
-                         AND mine.relations->>'author_user_id' = ANY(%(handles)s)
-                         AND coalesce(mine.scope->>'channel_id',
-                                      mine.scope->>'container')
-                             = coalesce(rec.scope->>'channel_id',
-                                        rec.scope->>'container')
-                         AND (
-                             coalesce(mine.relations->>'thread_id',
-                                      mine.relations->>'parent_ts')
-                                 = rec.source_entity_id
-                             OR (
-                                 mine.source_created_at > rec.source_created_at
-                                 AND mine.source_created_at
-                                     < rec.source_created_at
-                                       + make_interval(mins => %(window)s)
-                             )
-                         )
-                  )
-              )
+              AND coalesce(rec.scope->>'channel_id', rec.scope->>'container')
+                  = ANY(%(channels)s)
        )
 """
 
@@ -280,11 +267,7 @@ def embed_corpus(
     import psycopg
 
     began = datetime.now(timezone.utc)
-    result = EmbedResult(
-        dry_run=not apply,
-        model=embedder.name,
-        scope="one person and the messages they answered" if person_id else "everything",
-    )
+    result = EmbedResult(dry_run=not apply, model=embedder.name)
     source_filter = "AND source = ANY(%(sources)s)" if sources else ""
     parameters: dict[str, Any] = {
         "model": embedder.name,
@@ -303,7 +286,12 @@ def embed_corpus(
             from .reconcile import person_handles
 
             with connection.cursor() as cursor:
-                parameters["handles"] = person_handles(cursor, person_id)
+                handles = person_handles(cursor, person_id)
+                cursor.execute(_CHANNELS_SQL, {"handles": handles})
+                channels = [str(row[0]) for row in cursor.fetchall()]
+            parameters["handles"] = handles
+            parameters["channels"] = channels
+            result.scope = f"{len(channels)} conversations he takes part in"
             person_filter = _PERSON_FILTER
         with connection.cursor() as cursor:
             cursor.execute(
@@ -352,6 +340,14 @@ def embed_corpus(
             connection.commit()
             result.batches += 1
             result.embedded += len(chunk)
+            # Printed to stderr as it goes. A run with no output is a run
+            # nobody can tell from a hang, and this one takes minutes.
+            if result.batches % 10 == 0:
+                print(
+                    f"embedding… {result.embedded}/{len(rows)}",
+                    file=__import__("sys").stderr,
+                    flush=True,
+                )
 
     result.seconds = round((datetime.now(timezone.utc) - began).total_seconds(), 1)
     return result

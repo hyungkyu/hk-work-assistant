@@ -1,0 +1,183 @@
+"""Cost measured here, not on HK's machine.
+
+HK, 2026-09-21: "이런거, 너무 빈번한거 같아. 미리 성능 테스트 해보고 실행하라고
+하면 안돼?" Fair, and it had happened four times in a day: meeting notes at
+49.9s, a mention join that cross-multiplied the roster, a first embedding scope
+that meant ten hours of CPU, and a candidate query so exact it took longer than
+the work it was narrowing.
+
+Every one of those was discovered by him running it. This file is where that
+moves: a corpus large enough for the shape of a query to matter, and a ceiling
+that fails the suite rather than his evening.
+
+The numbers are deliberately loose. The point is not to measure this machine,
+which is not his machine; it is to catch a query whose cost grows with the
+archive -- those miss by a factor of hundreds, not by 20%.
+"""
+
+from __future__ import annotations
+
+import os
+import time
+import uuid
+
+import pytest
+
+REQUIRES_DATABASE = pytest.mark.skipif(
+    not os.environ.get("WORKLOG_TEST_DATABASE_URL"),
+    reason="set WORKLOG_TEST_DATABASE_URL to a throwaway database",
+)
+
+# Enough rows that a per-row correlated subquery separates from a set-based
+# one. The real table held 581,315 documents on 2026-09-21; this is a fiftieth
+# of that, and the difference it exposes is already seconds against minutes.
+CORPUS = 12000
+
+# What the batch is allowed to spend deciding *what* to embed, before it
+# embeds anything. A scoping query is preparation; when preparation costs more
+# than the work, the narrowing is not worth having.
+SCOPE_BUDGET_SECONDS = 5.0
+
+
+@pytest.fixture()
+def corpus():
+    import psycopg
+
+    from rlwrld_worklog.ledger.load import apply_migrations
+
+    url = os.environ["WORKLOG_TEST_DATABASE_URL"]
+    apply_migrations(
+        database_url=url,
+        migrations_dir=__import__("pathlib").Path(__file__).resolve().parents[1]
+        / "sql"
+        / "migrations",
+        dry_run=False,
+    )
+    person = uuid.uuid4()
+    with psycopg.connect(url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM search_documents WHERE extractor = 'perf'")
+            cursor.execute("DELETE FROM ledger_records WHERE source_file = 'perf'")
+            cursor.execute("DELETE FROM org_identity WHERE value = 'UPERF'")
+            cursor.execute("DELETE FROM org_person WHERE name = '성능테스트'")
+            cursor.execute(
+                "INSERT INTO roster_observation (observed_at, source, row_count) "
+                "VALUES (now(), 'roster_seed_2', 1) RETURNING observation_id"
+            )
+            observation = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO org_person (person_id, name, first_seen, last_seen) "
+                "VALUES (%s, '성능테스트', %s, %s)",
+                (person, observation, observation),
+            )
+            cursor.execute(
+                "INSERT INTO org_identity (person_id, kind, value, first_seen, last_seen, "
+                "origin) VALUES (%s, 'slack', 'UPERF', %s, %s, 'roster')",
+                (person, observation, observation),
+            )
+            # One message in 37 is his. 37 and the 100 channels are coprime on
+            # purpose: a stride that divides the channel count would put all
+            # his messages in two rooms and make the scope look far narrower
+            # than it is -- which is what the first version of this fixture
+            # did, and the test caught it.
+            cursor.execute(
+                """
+                INSERT INTO ledger_records (
+                    ledger_id, schema_version, capture_profile, source, entity_type,
+                    tenant_workspace_id, tenant_status, scope, source_entity_id,
+                    source_updated_at_status, deleted_status, raw_payload,
+                    content_hash, relations, source_file, source_file_sha256,
+                    record_pointer, legacy_layout_version, converter_version,
+                    observation_role, capture_completeness_status,
+                    source_created_at, collected_at
+                )
+                SELECT gen_random_uuid(), 'v1', 'p', 'slack', 'message', 'T',
+                       'observed',
+                       jsonb_build_object('channel_id', 'C' || (index %% 100)),
+                       'perf-' || index, 'observed', 'observed',
+                       jsonb_build_object('text', '메시지 ' || index),
+                       'perf-' || index,
+                       jsonb_build_object(
+                           'author_user_id',
+                           CASE WHEN index %% 37 = 0 THEN 'UPERF'
+                                ELSE 'U' || (index %% 37) END
+                       ),
+                       'perf', 'h', 'p', 'v', 'v', 'current_head', 'recorded',
+                       now() - make_interval(mins => index),
+                       now()
+                  FROM generate_series(1, %s) AS index
+                """,
+                (CORPUS,),
+            )
+            cursor.execute(
+                """
+                INSERT INTO search_documents
+                    (doc_id, ledger_id, source, entity_type, text_content,
+                     text_sha256, extractor)
+                SELECT gen_random_uuid(), ledger_id, 'slack', 'message',
+                       raw_payload->>'text', content_hash, 'perf'
+                  FROM ledger_records WHERE source_file = 'perf'
+                """
+            )
+        connection.commit()
+    yield url, str(person)
+    with psycopg.connect(url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM search_documents WHERE extractor = 'perf'")
+            cursor.execute("DELETE FROM ledger_records WHERE source_file = 'perf'")
+        connection.commit()
+
+
+@REQUIRES_DATABASE
+def test_choosing_what_to_embed_costs_less_than_embedding_it(corpus):
+    """The dry run is a count. It must answer in seconds, at any size.
+
+    The version this replaced asked, for every document, whether he had spoken
+    in that channel within ten minutes. Correct, unindexable, and the reason a
+    command that should report a number instead looked like a hang.
+    """
+    url, person = corpus
+
+    class NeverCalled:
+        name = "perf/none"
+
+        def embed(self, texts):  # pragma: no cover - must not run
+            raise AssertionError("a dry run must not reach the model")
+
+    from rlwrld_worklog.embedding import embed_corpus
+
+    started = time.monotonic()
+    result = embed_corpus(url, NeverCalled(), person_id=person, apply=False)
+    took = time.monotonic() - started
+
+    assert result.candidates > 0, "the scope found the conversations he is in"
+    assert took < SCOPE_BUDGET_SECONDS, (
+        f"deciding what to embed took {took:.1f}s over {CORPUS} documents. "
+        "At the real archive's size that is minutes of waiting before any "
+        "work starts -- narrow it differently, or do not narrow it"
+    )
+
+
+@REQUIRES_DATABASE
+def test_the_scope_is_smaller_than_the_archive_and_larger_than_his_own_words(corpus):
+    """Both failure modes, measured rather than argued.
+
+    Too wide and the run is hours of text nothing will search; too narrow and
+    the search has nothing to compare a situation against, which is how every
+    question came back empty.
+    """
+    from rlwrld_worklog.embedding import embed_corpus
+
+    url, person = corpus
+
+    class NeverCalled:
+        name = "perf/none"
+
+        def embed(self, texts):  # pragma: no cover
+            raise AssertionError("a dry run must not reach the model")
+
+    scoped = embed_corpus(url, NeverCalled(), person_id=person, apply=False)
+    his_own = CORPUS // 37
+
+    assert scoped.candidates > his_own * 2, "situations, not only his replies"
+    assert scoped.candidates <= CORPUS, "never more than the corpus"

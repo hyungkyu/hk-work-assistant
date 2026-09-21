@@ -255,11 +255,12 @@ def test_the_situation_is_what_gets_matched_and_his_answer_is_what_comes_back():
 
 @REQUIRES_DATABASE
 def test_scoping_to_one_person_covers_their_replies_and_what_they_answered():
-    """581,315 documents on the real database, against a few thousand here.
+    """The scope is the conversations he takes part in.
 
-    The precedent search reads his messages and the ones they answered, and
-    nothing else. Embedding the whole archive first is ten hours of CPU for
-    text this path never opens.
+    Narrower than 581,315 documents and wider than his own words. An earlier
+    version tested "did he speak within ten minutes" per row, which is exact,
+    unindexable and slower than the embedding itself -- HK, 2026-09-21: 이거
+    디게 오래걸리네?
     """
     import uuid
     from datetime import datetime, timezone
@@ -283,6 +284,8 @@ def test_scoping_to_one_person_covers_their_replies_and_what_they_answered():
     rows = {
         "scope-parent": ("UOTHER", None, "부모 메시지"),
         "scope-mine": ("USCOPE", "scope-parent", "내 답글"),
+        # Someone else, in the same channel. Part of the conversation he is
+        # in, so part of the corpus: this is where a situation comes from.
         "scope-theirs": ("UOTHER", None, "남의 메시지"),
     }
     ids = {name: uuid.uuid5(uuid.NAMESPACE_URL, f"scope:{name}") for name in rows}
@@ -364,7 +367,11 @@ def test_scoping_to_one_person_covers_their_replies_and_what_they_answered():
 
         assert ids["scope-mine"] in embedded, "his own reply"
         assert ids["scope-parent"] in embedded, "and the message it answered"
-        assert ids["scope-theirs"] not in embedded, "not the rest of the workspace"
+        assert ids["scope-theirs"] in embedded, (
+            "and the rest of that conversation -- a situation is usually "
+            "somebody else's message, and exactness here cost more than it "
+            "saved"
+        )
 
 
 
