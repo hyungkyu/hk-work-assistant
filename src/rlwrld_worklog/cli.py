@@ -511,10 +511,28 @@ def build_parser() -> argparse.ArgumentParser:
         "instead of half a million",
     )
     embed_parser.add_argument(
+        "--blocks",
+        action="store_true",
+        help="Embed conversation blocks instead of single messages. A block "
+        "carries context; one line of chat does not (measured 2026-09-21)",
+    )
+    embed_parser.add_argument(
         "--model",
         default=None,
         help="Local model name. Default: $WORKLOG_EMBED_MODEL, else BAAI/bge-m3",
     )
+
+    blocks_parser = subparsers.add_parser(
+        "blocks",
+        help="Cut the conversations one person took part in into blocks",
+    )
+    blocks_parser.add_argument("--person-name", required=True)
+    blocks_parser.add_argument("--database-url", default=None)
+    blocks_parser.add_argument(
+        "--apply", action="store_true", help="Write the blocks. Without it, count only"
+    )
+    blocks_parser.add_argument("--gap-minutes", type=_positive_int, default=None)
+    blocks_parser.add_argument("--max-messages", type=_positive_int, default=None)
 
     precedent = subparsers.add_parser(
         "precedents",
@@ -1883,10 +1901,55 @@ def embed_command(args: argparse.Namespace) -> int:
         limit=args.limit,
         sources=args.source,
         person_id=person_id,
+        blocks=args.blocks,
         apply=args.apply,
     )
     _print_json("embed", result.as_dict())
     return 1 if result.errors else 0
+
+
+def blocks_command(args: argparse.Namespace) -> int:
+    """Build the conversation blocks the precedent search reads."""
+    from . import digest as digest_module
+    from .blocks import GAP_MINUTES, MAX_MESSAGES, build_blocks
+
+    database_url = args.database_url or os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise SystemExit("DATABASE_URL or --database-url is required")
+    match = digest_module.resolve_people(database_url, [args.person_name])
+    if not match["resolved"]:
+        raise SystemExit(f"찾지 못함: {args.person_name}")
+    person_id = next(iter(match["resolved"].values()))
+
+    result = build_blocks(
+        database_url,
+        person_id,
+        names=_slack_names(database_url),
+        gap_minutes=args.gap_minutes or GAP_MINUTES,
+        max_messages=args.max_messages or MAX_MESSAGES,
+        apply=args.apply,
+    )
+    _print_json("blocks", result.as_dict())
+    return 1 if result.errors else 0
+
+
+def _slack_names(database_url: str) -> dict[str, str]:
+    """Slack handles to names, so a block reads as people talking.
+
+    `U07EKRU6F7H: 배포 됐나요` puts an id where a word should be, and the
+    embedding treats it as one.
+    """
+    import psycopg
+
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT identity.value, person.name "
+                "  FROM org_identity identity "
+                "  JOIN org_person person ON person.person_id = identity.person_id "
+                " WHERE identity.kind = 'slack'"
+            )
+            return {str(row[0]): str(row[1]) for row in cursor.fetchall()}
 
 
 def precedents_command(args: argparse.Namespace) -> int:
@@ -2191,6 +2254,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return reconcile_command(args)
     if args.command == "embed":
         return embed_command(args)
+    if args.command == "blocks":
+        return blocks_command(args)
     if args.command == "precedents":
         return precedents_command(args)
     if args.command == "slack-thread-sweep":

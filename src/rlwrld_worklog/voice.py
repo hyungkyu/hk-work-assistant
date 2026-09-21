@@ -96,6 +96,28 @@ MATCH_FLOOR = 0.3
 # "no precedent close enough" is a real answer.
 SCORE_FLOOR = float(__import__("os").environ.get("WORKLOG_PRECEDENT_FLOOR", "0.55"))
 
+# Blocks, which is what the search reads once they are built. A block already
+# holds the pairing -- what others said, what he said -- so there is no time
+# window to infer and nothing to guess about who was answering whom.
+_BLOCK_SQL = """
+    SELECT his_first_at,
+           channel,
+           his_text,
+           permalink,
+           block_id::text,
+           situation_text,
+           NULL AS situation_author,
+           1 - (embedding <=> %(vector)s::vector) AS score,
+           'block' AS link,
+           message_count,
+           speaker_count
+      FROM conversation_blocks
+     WHERE person_id = %(person_id)s::text
+       AND embedding IS NOT NULL
+     ORDER BY embedding <=> %(vector)s::vector
+     LIMIT %(pool)s
+"""
+
 # How many nearest messages to pull before folding duplicates and ranking.
 # Larger than the limit because one sentence he repeats often collapses to a
 # single precedent.
@@ -218,7 +240,7 @@ class Precedent:
     between_speakers: int = 0
 
     @property
-    def certainty(self) -> str:
+    def certainty(self) -> str:  # noqa: D401
         """How much weight the pairing can carry.
 
         Named rather than scored: a number invites averaging, and the three
@@ -228,6 +250,10 @@ class Precedent:
         """
         if not self.situation:
             return "상황 없음"
+        if self.link == "block":
+            # The block is the pairing: these messages and his answer are the
+            # same stretch of one conversation, so there is nothing inferred.
+            return f"대화 {self.between_count}건/{self.between_speakers}명"
         if self.link == "thread":
             return "스레드"
         if self.between_speakers > 1 or self.between_count > 3:
@@ -320,6 +346,19 @@ def precedents(
             if embedder is not None:
                 vector = embedder.embed([text])[0]
                 cursor.execute(
+                    _BLOCK_SQL,
+                    {
+                        "vector": "[" + ",".join(repr(value) for value in vector) + "]",
+                        "person_id": person_id,
+                        "pool": VECTOR_POOL,
+                    },
+                )
+                rows = cursor.fetchall()
+                if rows:
+                    result.matcher = "block"
+            if embedder is not None and not rows:
+                vector = embedder.embed([text])[0]
+                cursor.execute(
                     _SITUATION_SQL,
                     {
                         "vector": "[" + ",".join(repr(value) for value in vector) + "]",
@@ -370,11 +409,13 @@ def precedents(
     # Thread links first, then quiet pairings, then the crowded ones -- and
     # only then by similarity. A close match whose pairing is a guess is worth
     # less than a slightly worse match Slack itself linked.
-    _order = {"thread": 2, "nearby": 1, "none": 0}
+    _order = {"block": 3, "thread": 2, "nearby": 1, "none": 0}
     found.sort(
         key=lambda item: (
             _order.get(item.link, 0),
-            -min(item.between_count, 10),
+            # A block's message count is a property of the conversation, not a
+            # measure of doubt, so it does not push a block down the list.
+            0 if item.link == "block" else -min(item.between_count, 10),
             item.score,
         ),
         reverse=True,

@@ -239,6 +239,35 @@ _COUNT_SQL = """
        {person_filter}
 """
 
+# The block corpus. Same batch, same width check, same per-row model name --
+# a different table because a block is a different object from a message, and
+# because clearing one does not disturb the other.
+_BLOCK_COUNT_SQL = """
+    SELECT count(*)
+      FROM conversation_blocks
+     WHERE situation_text <> ''
+       AND (embedding IS NULL OR embedding_model IS DISTINCT FROM %(model)s)
+       AND (%(person_id)s::text IS NULL OR person_id = %(person_id)s::text)
+"""
+
+_BLOCK_CANDIDATES_SQL = """
+    SELECT block_id, situation_text
+      FROM conversation_blocks
+     WHERE situation_text <> ''
+       AND (embedding IS NULL OR embedding_model IS DISTINCT FROM %(model)s)
+       AND (%(person_id)s::text IS NULL OR person_id = %(person_id)s::text)
+     ORDER BY started_at DESC
+     LIMIT %(limit)s
+"""
+
+_BLOCK_WRITE_SQL = """
+    UPDATE conversation_blocks
+       SET embedding = %(vector)s::vector,
+           embedding_model = %(model)s,
+           embedded_at = now()
+     WHERE block_id = %(doc_id)s
+"""
+
 _WRITE_SQL = """
     UPDATE search_documents
        SET embedding = %(vector)s::vector,
@@ -248,6 +277,77 @@ _WRITE_SQL = """
 """
 
 
+def _embed_blocks(
+    database_url: str,
+    embedder: Embedder,
+    *,
+    limit: int,
+    person_id: str | None,
+    apply: bool,
+    result: EmbedResult,
+    began,
+) -> EmbedResult:
+    """The conversation blocks, which are the corpus the search now reads."""
+    from datetime import datetime, timezone
+
+    import psycopg
+
+    result.scope = "conversation blocks"
+    parameters = {
+        "model": embedder.name,
+        "limit": max(1, int(limit)),
+        "person_id": person_id,
+    }
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(_BLOCK_COUNT_SQL, parameters)
+            result.candidates = int(cursor.fetchone()[0])
+            if not apply:
+                return result
+            cursor.execute(_BLOCK_CANDIDATES_SQL, parameters)
+            rows = cursor.fetchall()
+
+        _write_vectors(
+            connection, embedder, rows, result=result, statement=_BLOCK_WRITE_SQL
+        )
+    result.seconds = round((datetime.now(timezone.utc) - began).total_seconds(), 1)
+    return result
+
+
+def _write_vectors(connection, embedder, rows, *, result, statement) -> None:
+    """Embed in batches and write, committing each batch as it lands."""
+    import sys
+
+    for start in range(0, len(rows), BATCH):
+        chunk = rows[start : start + BATCH]
+        texts = [str(row[1]) for row in chunk]
+        try:
+            vectors = embedder.embed(texts)
+            check_width(vectors, model=embedder.name)
+        except ValueError:
+            raise
+        except Exception as error:  # pragma: no cover - model runtime
+            result.errors.append(f"batch at {start}: {type(error).__name__}: {error}")
+            continue
+        with connection.cursor() as cursor:
+            for (doc_id, _text), vector in zip(chunk, vectors):
+                cursor.execute(
+                    statement,
+                    {
+                        "vector": "[" + ",".join(repr(value) for value in vector) + "]",
+                        "model": embedder.name,
+                        "doc_id": doc_id,
+                    },
+                )
+        connection.commit()
+        result.batches += 1
+        result.embedded += len(chunk)
+        if result.batches % 10 == 0:
+            print(
+                f"embedding… {result.embedded}/{len(rows)}", file=sys.stderr, flush=True
+            )
+
+
 def embed_corpus(
     database_url: str,
     embedder: Embedder,
@@ -255,6 +355,7 @@ def embed_corpus(
     limit: int = 2000,
     sources: Sequence[str] = (),
     person_id: str | None = None,
+    blocks: bool = False,
     apply: bool = False,
 ) -> EmbedResult:
     """Give the searchable text its vectors, in batches, resumably.
@@ -279,6 +380,12 @@ def embed_corpus(
         # nothing to show for it.
         "window": ANSWER_WINDOW_MINUTES,
     }
+
+    if blocks:
+        return _embed_blocks(
+            database_url, embedder, limit=limit, person_id=person_id, apply=apply,
+            result=result, began=began,
+        )
 
     with psycopg.connect(database_url) as connection:
         person_filter = ""

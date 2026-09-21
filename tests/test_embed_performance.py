@@ -103,7 +103,13 @@ def corpus():
                                 ELSE 'U' || (index %% 37) END
                        ),
                        'perf', 'h', 'p', 'v', 'v', 'current_head', 'recorded',
-                       now() - make_interval(mins => index),
+                       -- Divided by the channel count, so messages *within*
+                       -- a channel land about a minute apart and form real
+                       -- conversations. The first version spaced them 100
+                       -- minutes apart inside each channel, which made every
+                       -- message its own block -- a fixture that measured
+                       -- speed correctly and content not at all.
+                       now() - make_interval(mins => index / 100),
                        now()
                   FROM generate_series(1, %s) AS index
                 """,
@@ -181,3 +187,34 @@ def test_the_scope_is_smaller_than_the_archive_and_larger_than_his_own_words(cor
 
     assert scoped.candidates > his_own * 2, "situations, not only his replies"
     assert scoped.candidates <= CORPUS, "never more than the corpus"
+
+
+@REQUIRES_DATABASE
+def test_building_the_blocks_costs_less_than_embedding_them(corpus):
+    """The rule I wrote for myself on 2026-09-21, applied to my own next step.
+
+    Block building reads every message in every channel he speaks in. That is
+    the shape that has bitten four times today, so it is measured here before
+    it is handed over -- with the number, not with a promise.
+    """
+    from rlwrld_worklog.blocks import build_blocks
+
+    url, person = corpus
+
+    started = time.monotonic()
+    result = build_blocks(url, person, apply=True)
+    took = time.monotonic() - started
+
+    assert result.blocks > 0
+    assert result.blocks_with_him > 0
+    assert result.messages > 0
+    # Loose, and about the shape: 12,000 messages over 100 channels is a
+    # fiftieth of the real corpus. Minutes here would mean hours there.
+    assert took < 20.0, (
+        f"building blocks took {took:.1f}s over {result.messages} messages in "
+        f"{result.channels} channels -- measure again before handing it over"
+    )
+    print(
+        f"blocks: {result.blocks_with_him} kept of {result.blocks} from "
+        f"{result.messages} messages in {took:.1f}s"
+    )
