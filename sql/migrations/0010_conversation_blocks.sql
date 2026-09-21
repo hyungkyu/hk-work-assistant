@@ -24,6 +24,15 @@ CREATE TABLE IF NOT EXISTS conversation_blocks (
     block_id uuid PRIMARY KEY,
     source text NOT NULL,
     channel text NOT NULL,
+    -- How this block was found. 'window' is a run of messages close together
+    -- in one channel; 'thread' is a Slack thread followed from his reply back
+    -- to the message that started it.
+    --
+    -- HK, 2026-09-21: 내가 쓴글이 댓글이면 원글을 찾고... 뭐 이런식으로 탐색해
+    -- 보는건 어때? Right, and time alone cannot do it: a thread's parent can
+    -- be hours or days before the reply, so a window around his message never
+    -- contains it. Structure says what time only guesses.
+    kind text NOT NULL DEFAULT 'window' CHECK (kind IN ('window', 'thread')),
     -- text, not uuid: org_person keys people by text and a mismatch here
     -- would be a foreign key that cannot be declared.
     person_id text REFERENCES org_person(person_id) ON DELETE CASCADE,
@@ -56,6 +65,17 @@ COMMENT ON TABLE conversation_blocks IS
     'better blocking rule rewrites these rows. The situation text is what '
     'the precedent search embeds and compares -- single messages are too '
     'short for a vector to separate topics (measured 2026-09-21).';
+
+-- Added after the table, so a database that already created it under the
+-- first version of this file gains the column instead of silently missing it.
+-- The table statement above is idempotent and therefore skips an existing
+-- table entirely, change and all -- which is what this ALTER is for.
+--
+-- (The phrase for that statement is avoided in this comment on purpose: the
+-- idempotency check in tests/test_ledger_migrations.py reads these files as
+-- text and is not comment-aware, so writing it here fails the suite.)
+ALTER TABLE conversation_blocks
+    ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'window';
 
 CREATE INDEX IF NOT EXISTS conversation_blocks_person_idx
     ON conversation_blocks (person_id, started_at DESC);

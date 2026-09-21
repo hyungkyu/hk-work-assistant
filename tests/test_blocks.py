@@ -203,3 +203,126 @@ def test_rebuilding_a_block_drops_its_stale_vector():
 
     assert "embedding = NULL" in _WRITE_SQL
     assert "embedding_model = NULL" in _WRITE_SQL
+
+
+@REQUIRES_DATABASE
+def test_a_thread_is_followed_to_its_first_message_however_old():
+    """HK: 내가 쓴글이 댓글이면 원글을 찾고... 뭐 이런식으로 탐색해 보는건 어때?
+
+    Right, and a time window cannot do it. A thread's opening message can be
+    hours or days before his reply, so no run of nearby messages contains it.
+    `thread_id` says exactly which message he answered -- the one path here
+    that infers nothing at all.
+
+    A thread whose opening message was never collected is counted, not
+    silently kept: his answer is there and the question is missing.
+    """
+    import uuid
+
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    from rlwrld_worklog.blocks import build_blocks
+    from rlwrld_worklog.ledger.load import apply_migrations
+
+    url = os.environ["WORKLOG_TEST_DATABASE_URL"]
+    apply_migrations(
+        database_url=url,
+        migrations_dir=__import__("pathlib").Path(__file__).resolve().parents[1]
+        / "sql"
+        / "migrations",
+        dry_run=False,
+    )
+    person = uuid.uuid4()
+    # The parent is three days before the reply: far outside any window.
+    rows = [
+        ("thr-parent", "UTHEM", None, -4320, "이 설계로 가면 리스크가 뭘까요"),
+        ("thr-mine", "UTHREAD", "thr-parent", 0, "롤백 경로가 없는 게 리스크야"),
+        # A second thread whose opening message is not in the ledger at all.
+        ("thr-orphan", "UTHREAD", "thr-missing", 5, "그건 다음 주에 보죠"),
+    ]
+
+    with psycopg.connect(url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM conversation_blocks WHERE channel = 'CTHREAD'")
+            cursor.execute("DELETE FROM ledger_records WHERE source_entity_id LIKE 'thr-%'")
+            cursor.execute("DELETE FROM org_identity WHERE value = 'UTHREAD'")
+            cursor.execute("DELETE FROM org_person WHERE name = '스레드테스트'")
+            cursor.execute(
+                "INSERT INTO roster_observation (observed_at, source, row_count) "
+                "VALUES (now(), 'roster_seed_2', 1) RETURNING observation_id"
+            )
+            observation = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO org_person (person_id, name, first_seen, last_seen) "
+                "VALUES (%s, '스레드테스트', %s, %s)",
+                (person, observation, observation),
+            )
+            cursor.execute(
+                "INSERT INTO org_identity (person_id, kind, value, first_seen, last_seen, "
+                "origin) VALUES (%s, 'slack', 'UTHREAD', %s, %s, 'roster')",
+                (person, observation, observation),
+            )
+            for entity, author, parent, minute, text in rows:
+                fields = {
+                    "ledger_id": uuid.uuid5(uuid.NAMESPACE_URL, f"thr:{entity}"),
+                    "schema_version": "v1",
+                    "capture_profile": "live-slack-web-api/v1",
+                    "source": "slack",
+                    "entity_type": "message",
+                    "tenant_workspace_id": "T",
+                    "tenant_status": "observed",
+                    "scope": Jsonb({"channel_id": "CTHREAD"}),
+                    "source_entity_id": entity,
+                    "source_updated_at_status": "observed",
+                    "deleted_status": "observed",
+                    "raw_payload": Jsonb({"text": text, "permalink": f"https://x/{entity}"}),
+                    "content_hash": entity,
+                    "relations": Jsonb({"author_user_id": author, "thread_id": parent}),
+                    "source_file": "f",
+                    "source_file_sha256": "h",
+                    "record_pointer": "p",
+                    "legacy_layout_version": "v",
+                    "converter_version": "v",
+                    "observation_role": "current_head",
+                    "capture_completeness_status": "recorded",
+                    "source_created_at": START + timedelta(minutes=minute),
+                    "collected_at": START,
+                }
+                cursor.execute(
+                    f"INSERT INTO ledger_records ({','.join(fields)}) "
+                    f"VALUES ({','.join('%s' for _ in fields)})",
+                    list(fields.values()),
+                )
+        connection.commit()
+
+    try:
+        result = build_blocks(
+            url, str(person), names={"UTHREAD": "HK", "UTHEM": "스톰"}, apply=True
+        )
+        assert result.thread_blocks == 1
+        assert result.threads_without_parent == 1, "his answer, question missing"
+
+        with psycopg.connect(url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT kind, situation_text, his_text FROM conversation_blocks "
+                    " WHERE channel = 'CTHREAD' AND kind = 'thread'"
+                )
+                found = cursor.fetchall()
+
+        assert len(found) == 1
+        kind, situation, his = found[0]
+        assert kind == "thread"
+        assert situation == "스톰: 이 설계로 가면 리스크가 뭘까요", (
+            "the opening message, three days back, reached by structure"
+        )
+        assert his == "HK: 롤백 경로가 없는 게 리스크야"
+    finally:
+        with psycopg.connect(url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("DELETE FROM conversation_blocks WHERE channel = 'CTHREAD'")
+                cursor.execute(
+                    "DELETE FROM ledger_records WHERE source_entity_id LIKE 'thr-%'"
+                )
+            connection.commit()

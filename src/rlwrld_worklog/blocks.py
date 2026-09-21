@@ -42,9 +42,15 @@ MAX_MESSAGES = int(__import__("os").environ.get("WORKLOG_BLOCK_MAX_MESSAGES", "1
 _NAMESPACE = uuid.UUID("2f6f4d1e-8c1a-4f2b-9e3d-5a7b1c2d3e4f")
 
 
-def block_id_for(channel: str, first_ts: str, *, gap: int, cap: int) -> uuid.UUID:
-    """Stable identity: same channel, same first message, same rule."""
-    return uuid.uuid5(_NAMESPACE, f"{channel}|{first_ts}|{gap}|{cap}")
+def block_id_for(
+    channel: str, first_ts: str, *, gap: int, cap: int, kind: str = "window"
+) -> uuid.UUID:
+    """Stable identity: same channel, same first message, same rule, same kind.
+
+    A thread block and a window block can start at the same message and are
+    still two different readings of it, so the kind is part of the identity.
+    """
+    return uuid.uuid5(_NAMESPACE, f"{kind}|{channel}|{first_ts}|{gap}|{cap}")
 
 
 def render(messages: Sequence[dict[str, Any]], names: dict[str, str]) -> str:
@@ -100,6 +106,12 @@ class BlockResult:
     messages: int = 0
     blocks: int = 0
     blocks_with_him: int = 0
+    # Threads followed from one of his replies back to the message that
+    # started them. Counted separately because a thread block is reached by
+    # structure and a window block by time, and one number hiding both would
+    # not say whether following threads found anything.
+    thread_blocks: int = 0
+    threads_without_parent: int = 0
     seconds: float = 0.0
     errors: list[str] = field(default_factory=list)
 
@@ -113,6 +125,11 @@ class BlockResult:
             # and the difference between the two numbers says how much of the
             # room's traffic he is actually in.
             "blocks_with_him": self.blocks_with_him,
+            "thread_blocks": self.thread_blocks,
+            # Threads whose starting message is not in the ledger: the orphans
+            # the nightly sweep is recovering. Reported, because a thread with
+            # no parent has no situation and is silently unusable otherwise.
+            "threads_without_parent": self.threads_without_parent,
             "gap_minutes": GAP_MINUTES,
             "max_messages": MAX_MESSAGES,
             "seconds": self.seconds,
@@ -146,16 +163,56 @@ _MESSAGES_SQL = """
      ORDER BY source_entity_id, collected_at DESC
 """
 
+# Threads he replied in, followed from his reply to the message that started
+# it. `thread_id` is the parent's ts, and the parent can be any distance back
+# in time -- which is exactly what a time window cannot reach.
+_THREADS_SQL = """
+    WITH his_threads AS (
+        SELECT DISTINCT
+               coalesce(scope->>'channel_id', scope->>'container') AS channel,
+               coalesce(relations->>'thread_id', relations->>'parent_ts') AS parent_ts
+          FROM ledger_records
+         WHERE source = 'slack'
+           AND entity_type = 'message'
+           AND relations->>'author_user_id' = ANY(%(handles)s)
+           AND coalesce(relations->>'thread_id', relations->>'parent_ts') IS NOT NULL
+    )
+    SELECT DISTINCT ON (his_threads.channel, his_threads.parent_ts, message.source_entity_id)
+           his_threads.channel,
+           his_threads.parent_ts,
+           message.source_entity_id,
+           message.source_created_at,
+           message.relations->>'author_user_id' AS author,
+           message.raw_payload->>'text' AS text,
+           message.raw_payload->>'permalink' AS permalink
+      FROM his_threads
+      JOIN ledger_records message
+        ON message.source = 'slack'
+       AND message.entity_type = 'message'
+       AND coalesce(message.scope->>'channel_id', message.scope->>'container')
+           = his_threads.channel
+       AND (
+           -- the message that started the thread ...
+           message.source_entity_id = his_threads.parent_ts
+           -- ... and every reply in it, his own included
+           OR coalesce(message.relations->>'thread_id', message.relations->>'parent_ts')
+              = his_threads.parent_ts
+       )
+       AND coalesce(message.raw_payload->>'text', '') <> ''
+     ORDER BY his_threads.channel, his_threads.parent_ts, message.source_entity_id,
+              message.collected_at DESC
+"""
+
 _WRITE_SQL = """
     INSERT INTO conversation_blocks (
         block_id, source, channel, person_id, started_at, ended_at,
         gap_minutes, max_messages, message_count, speaker_count,
-        situation_text, his_text, his_first_at, permalink
+        situation_text, his_text, his_first_at, permalink, kind
     ) VALUES (
         %(block_id)s, 'slack', %(channel)s, %(person_id)s, %(started_at)s,
         %(ended_at)s, %(gap_minutes)s, %(max_messages)s, %(message_count)s,
         %(speaker_count)s, %(situation_text)s, %(his_text)s, %(his_first_at)s,
-        %(permalink)s
+        %(permalink)s, %(kind)s
     )
     ON CONFLICT (block_id) DO UPDATE SET
         situation_text = excluded.situation_text,
@@ -242,7 +299,11 @@ def build_blocks(
                         _WRITE_SQL,
                         {
                             "block_id": block_id_for(
-                                channel, run[0]["ts"], gap=gap_minutes, cap=max_messages
+                                channel,
+                                run[0]["ts"],
+                                gap=gap_minutes,
+                                cap=max_messages,
+                                kind="window",
                             ),
                             "channel": channel,
                             "person_id": person_id,
@@ -256,12 +317,90 @@ def build_blocks(
                             "his_text": render(his, lookup),
                             "his_first_at": his[0]["at"],
                             "permalink": his[0]["permalink"],
+                            "kind": "window",
                         },
                     )
             if apply:
                 # Per channel, so an interrupted run keeps the channels it
                 # finished rather than starting over.
                 connection.commit()
+
+        # Threads, followed rather than guessed at. HK: 내가 쓴글이 댓글이면
+        # 원글을 찾고... A thread's parent can be days before the reply, so no
+        # window around his message reaches it; `thread_id` says exactly which
+        # message he was answering, and this is the one path in the system that
+        # needs no inference at all.
+        with connection.cursor() as cursor:
+            cursor.execute(_THREADS_SQL, {"handles": handles})
+            thread_rows = cursor.fetchall()
+
+        threads: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for row in thread_rows:
+            if row[3] is None:
+                continue
+            threads.setdefault((str(row[0]), str(row[1])), []).append(
+                {
+                    "ts": str(row[2]),
+                    "at": row[3],
+                    "author": row[4],
+                    "text": row[5],
+                    "permalink": row[6],
+                }
+            )
+
+        for (channel, parent_ts), messages in threads.items():
+            messages.sort(key=lambda item: item["at"])
+            his = [item for item in messages if str(item["author"]) in handle_set]
+            others = [item for item in messages if str(item["author"]) not in handle_set]
+            if not his:
+                continue
+            if not any(item["ts"] == parent_ts for item in messages):
+                # The message that started the thread is not in the ledger --
+                # one of the orphans the nightly sweep is recovering. His
+                # reply is here and the question it answered is not, so there
+                # is no situation to match and the count says so.
+                result.threads_without_parent += 1
+                continue
+            if not others:
+                continue
+            result.thread_blocks += 1
+            if not apply:
+                continue
+            # Capped like a window block: a 200-reply thread is not one
+            # situation, and the model cannot read it in one go either.
+            kept = messages[: max_messages * 2]
+            kept_his = [item for item in kept if str(item["author"]) in handle_set]
+            kept_others = [item for item in kept if str(item["author"]) not in handle_set]
+            if not kept_his or not kept_others:
+                continue
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    _WRITE_SQL,
+                    {
+                        "block_id": block_id_for(
+                            channel,
+                            parent_ts,
+                            gap=gap_minutes,
+                            cap=max_messages,
+                            kind="thread",
+                        ),
+                        "channel": channel,
+                        "person_id": person_id,
+                        "started_at": kept[0]["at"],
+                        "ended_at": kept[-1]["at"],
+                        "gap_minutes": gap_minutes,
+                        "max_messages": max_messages,
+                        "message_count": len(kept),
+                        "speaker_count": len({str(item["author"]) for item in kept}),
+                        "situation_text": render(kept_others, lookup),
+                        "his_text": render(kept_his, lookup),
+                        "his_first_at": kept_his[0]["at"],
+                        "permalink": kept_his[0]["permalink"],
+                        "kind": "thread",
+                    },
+                )
+        if apply:
+            connection.commit()
 
     result.seconds = round((datetime.now(timezone.utc) - began).total_seconds(), 1)
     return result
