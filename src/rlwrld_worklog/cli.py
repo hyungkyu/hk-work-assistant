@@ -1943,14 +1943,26 @@ def precedents_command(args: argparse.Namespace) -> int:
         else:
             # Said plainly. Half a precedent is not a precedent.
             print("    상황 (부모 메시지가 원장에 없음 — 스윕 대기)")
-        print(f"    HK   {' '.join(item.said.split())[:300]}")
+        print(f"    HK   {' '.join(item.said.split())[:300]}   [{item.score:.2f}]")
         if item.permalink:
             print(f"    {item.permalink}")
+    if not result.found:
+        # Said plainly rather than printed as an empty list. On 2026-09-21 the
+        # nearest situations to a question about deployments were "퇴근하고
+        # 운동중입니다" -- one line of Slack carries too little for a vector to
+        # separate topics, and showing that as precedent is worse than saying
+        # there is none.
+        print(
+            "이 상황에 가까운 선례가 없음"
+            + (f" (문턱 아래 {result.below_floor}건)" if result.below_floor else "")
+        )
     _print_json(
         "precedents",
         {
             "query": result.query,
             "found": len(result.found),
+            "below_floor": result.below_floor,
+            "matcher": result.matcher,
             "without_situation": result.without_situation,
         },
     )

@@ -83,6 +83,19 @@ _PRECEDENT_SQL = """
 # The same reasoning search.py already arrived at for its fallback matcher.
 MATCH_FLOOR = 0.3
 
+# Below this, the nearest thing in the corpus is not about the question.
+#
+# Measured on 2026-09-21, against 63,092 embedded messages: "배포를 사람이
+# 직접 돌리고 있다" came back with "퇴근하고 운동중입니다" and "ㅋㅋㅋ
+# 잘드시네요" as its closest situations. Nothing was broken -- one line of
+# Slack is short and contextless, so in a space of 63,000 of them everything
+# is roughly equidistant and the nearest neighbour is noise.
+#
+# A tool that shows noise as precedent is worse than one that shows nothing,
+# because the noise gets used. So there is a floor, the score is printed, and
+# "no precedent close enough" is a real answer.
+SCORE_FLOOR = float(__import__("os").environ.get("WORKLOG_PRECEDENT_FLOOR", "0.55"))
+
 # How many nearest messages to pull before folding duplicates and ranking.
 # Larger than the limit because one sentence he repeats often collapses to a
 # single precedent.
@@ -255,6 +268,9 @@ class PrecedentResult:
     found: list[Precedent] = field(default_factory=list)
     without_situation: int = 0
     person_id: str = ""
+    # Near misses that were dropped for being too far away. Reported so an
+    # empty answer can be told from an unasked question.
+    below_floor: int = 0
     # "embedding" or "trigram". Printed, because a thin result means something
     # different in each case: with trigrams it usually means the words differ,
     # and the fix is to run the embedding batch.
@@ -270,6 +286,7 @@ class PrecedentResult:
             # has to know that before leaning on it.
             "without_situation": self.without_situation,
             "matcher": self.matcher,
+            "below_floor": self.below_floor,
         }
 
 
@@ -363,5 +380,10 @@ def precedents(
         reverse=True,
     )
     result.without_situation = sum(1 for item in found if not item.has_situation)
+    # Only for the vector matcher: the trigram score is a different quantity
+    # on a different scale, and one floor cannot mean the same thing in both.
+    if result.matcher == "embedding":
+        result.below_floor = sum(1 for item in found if item.score < SCORE_FLOOR)
+        found = [item for item in found if item.score >= SCORE_FLOOR]
     result.found = found[:limit]
     return result

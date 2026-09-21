@@ -229,3 +229,22 @@ def test_a_linked_precedent_outranks_a_closer_guess():
     )
     assert ranked[0] is threaded
     assert isinstance(PrecedentResult(query="q").as_dict()["matcher"], str)
+
+
+def test_noise_is_not_shown_as_precedent():
+    """63,092 embedded messages, and the nearest situation to a question about
+    deployments was "퇴근하고 운동중입니다".
+
+    One line of Slack is short and contextless, so in a space that size
+    everything is roughly equidistant and the nearest neighbour is noise. A
+    floor is the difference between an empty answer and a misleading one, and
+    the count below it is reported so empty can be told from unasked.
+    """
+    from rlwrld_worklog.voice import SCORE_FLOOR, PrecedentResult
+
+    assert 0 < SCORE_FLOOR < 1
+    result = PrecedentResult(query="배포", matcher="embedding")
+    result.below_floor = 7
+    found = result.as_dict()
+    assert found["below_floor"] == 7
+    assert found["precedents"] == []
