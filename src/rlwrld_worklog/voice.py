@@ -83,54 +83,109 @@ _PRECEDENT_SQL = """
 # The same reasoning search.py already arrived at for its fallback matcher.
 MATCH_FLOOR = 0.3
 
-# The same query, ranked by meaning instead of by characters. Requires the
-# embedding batch to have run; when it has not, `precedents` falls back to the
-# trigram query above and says which matcher answered, because "no precedent"
-# and "no embedding yet" are different answers.
-#
-# `<=>` is cosine distance, so smaller is closer; the score is flipped to
-# 1 - distance to keep "higher is better" true for both matchers.
-_PRECEDENT_VECTOR_SQL = """
-    WITH mine AS (
-        SELECT reply.ledger_id,
-               reply.source_created_at AS said_at,
-               coalesce(reply.scope->>'channel_id', reply.scope->>'container') AS channel,
-               reply.raw_payload->>'text' AS said,
-               reply.raw_payload->>'permalink' AS permalink,
-               coalesce(
-                   reply.relations->>'thread_id', reply.relations->>'parent_ts'
-               ) AS parent_ts,
-               1 - (text.embedding <=> %(vector)s::vector) AS score
-          FROM ledger_records reply
-          JOIN search_documents text ON text.ledger_id = reply.ledger_id
-         WHERE reply.source = 'slack'
-           AND reply.entity_type = 'message'
-           AND reply.relations->>'author_user_id' = ANY(%(handles)s)
-           AND text.embedding IS NOT NULL
-         ORDER BY text.embedding <=> %(vector)s::vector
-         LIMIT %(pool)s
-    )
-    SELECT DISTINCT ON (mine.said, mine.parent_ts)
-           mine.said_at,
-           mine.channel,
-           mine.said,
-           mine.permalink,
-           mine.parent_ts,
-           parent.raw_payload->>'text' AS situation,
-           parent.relations->>'author_user_id' AS situation_author,
-           mine.score
-      FROM mine
-      LEFT JOIN ledger_records parent
-        ON parent.source = 'slack'
-       AND parent.entity_type = 'message'
-       AND parent.source_entity_id = mine.parent_ts
-     ORDER BY mine.said, mine.parent_ts, mine.score DESC
-"""
-
 # How many nearest messages to pull before folding duplicates and ranking.
 # Larger than the limit because one sentence he repeats often collapses to a
 # single precedent.
 VECTOR_POOL = 60
+
+# How long after a message he can speak and still be answering it. Slack
+# conversations are not turn-taking protocols; ten minutes is wide enough to
+# catch a reply typed after reading, narrow enough that the next topic in the
+# channel is not counted as an answer to this one.
+ANSWER_WINDOW_MINUTES = 10
+
+# The query is a situation, so the situation is what gets matched. The first
+# version embedded his replies and compared the situation against those --
+# asking "what does this look like" of the answers instead of the questions.
+# On 2026-09-21 that returned "가는 중." and "ㅋㅋㅋㅋ 알아서 해요" for a
+# question about deployments being run by hand, which is the retrieval
+# equivalent of matching a key to a key.
+#
+# And a situation is not only a thread parent. Most of what he writes is not a
+# thread reply at all -- 60 of 68 precedents came back with no parent -- so the
+# situation is the conversation immediately before he spoke: the thread parent
+# when there is one, otherwise the messages in that channel in the minutes
+# before his own.
+_SITUATION_SQL = """
+    WITH situation AS (
+        SELECT other.ledger_id,
+               other.source_created_at AS said_at,
+               coalesce(other.scope->>'channel_id', other.scope->>'container') AS channel,
+               other.raw_payload->>'text' AS situation_text,
+               other.relations->>'author_user_id' AS situation_author,
+               other.source_entity_id AS situation_ts,
+               1 - (doc.embedding <=> %(vector)s::vector) AS score
+          FROM ledger_records other
+          JOIN search_documents doc ON doc.ledger_id = other.ledger_id
+         WHERE other.source = 'slack'
+           AND other.entity_type = 'message'
+           AND other.relations->>'author_user_id' <> ALL(%(handles)s)
+           AND doc.embedding IS NOT NULL
+         ORDER BY doc.embedding <=> %(vector)s::vector
+         LIMIT %(pool)s
+    )
+    SELECT DISTINCT ON (situation.ledger_id)
+           mine.source_created_at AS said_at,
+           situation.channel,
+           mine.raw_payload->>'text' AS said,
+           mine.raw_payload->>'permalink' AS permalink,
+           situation.situation_ts,
+           situation.situation_text,
+           situation.situation_author,
+           situation.score,
+           -- How the two were connected. A thread link is Slack's own
+           -- statement that this answers that; anything else is this query
+           -- inferring it from time and place, and the reader is told which.
+           CASE
+               WHEN coalesce(mine.relations->>'thread_id', mine.relations->>'parent_ts')
+                    = situation.situation_ts THEN 'thread'
+               ELSE 'nearby'
+           END AS link,
+           -- HK, 2026-09-21: 여럿이 오갈 경우, 바로 직전 대화가 아닐 수는
+           -- 있어. So the pairing is not asserted, it is measured: how many
+           -- messages, from how many people, sat between the two. One person
+           -- and nothing in between is a conversation; nine messages from
+           -- four people is a guess, and the line says so instead of looking
+           -- the same as the first case.
+           (SELECT count(*)
+              FROM ledger_records between_them
+             WHERE between_them.source = 'slack'
+               AND between_them.entity_type = 'message'
+               AND coalesce(between_them.scope->>'channel_id',
+                            between_them.scope->>'container') = situation.channel
+               AND between_them.source_created_at > situation.said_at
+               AND between_them.source_created_at < mine.source_created_at
+           ) AS between_count,
+           (SELECT count(DISTINCT between_them.relations->>'author_user_id')
+              FROM ledger_records between_them
+             WHERE between_them.source = 'slack'
+               AND between_them.entity_type = 'message'
+               AND coalesce(between_them.scope->>'channel_id',
+                            between_them.scope->>'container') = situation.channel
+               AND between_them.source_created_at > situation.said_at
+               AND between_them.source_created_at < mine.source_created_at
+           ) AS between_speakers
+      FROM situation
+      JOIN ledger_records mine
+        ON mine.source = 'slack'
+       AND mine.entity_type = 'message'
+       AND mine.relations->>'author_user_id' = ANY(%(handles)s)
+       AND coalesce(mine.scope->>'channel_id', mine.scope->>'container')
+           = situation.channel
+       AND (
+           -- He replied in the thread that message started ...
+           coalesce(mine.relations->>'thread_id', mine.relations->>'parent_ts')
+               = situation.situation_ts
+           -- ... or he spoke next, in the same place, soon after.
+           OR (
+               mine.source_created_at > situation.said_at
+               AND mine.source_created_at
+                   < situation.said_at + make_interval(mins => %(window)s)
+           )
+       )
+       AND coalesce(mine.raw_payload->>'text', '') <> ''
+     ORDER BY situation.ledger_id, mine.source_created_at
+"""
 
 
 
@@ -143,6 +198,28 @@ class Precedent:
     situation: str | None
     situation_author: str | None
     score: float
+    # "thread" when Slack itself linked the two, "nearby" when this query
+    # inferred it from time and place, "none" when there is no situation.
+    link: str = "none"
+    between_count: int = 0
+    between_speakers: int = 0
+
+    @property
+    def certainty(self) -> str:
+        """How much weight the pairing can carry.
+
+        Named rather than scored: a number invites averaging, and the three
+        cases are different in kind. A thread link is Slack's own record. A
+        quiet gap is a conversation. A busy gap is a guess, and a guess shown
+        as a precedent is the failure this whole tool exists to avoid.
+        """
+        if not self.situation:
+            return "상황 없음"
+        if self.link == "thread":
+            return "스레드"
+        if self.between_speakers > 1 or self.between_count > 3:
+            return f"추정 · 사이 {self.between_count}건/{self.between_speakers}명"
+        return "직후"
 
     @property
     def has_situation(self) -> bool:
@@ -164,6 +241,10 @@ class Precedent:
             "situation": self.situation,
             "situation_author": self.situation_author,
             "has_situation": self.has_situation,
+            "link": self.link,
+            "between_count": self.between_count,
+            "between_speakers": self.between_speakers,
+            "certainty": self.certainty,
             "score": round(float(self.score), 4),
         }
 
@@ -222,11 +303,12 @@ def precedents(
             if embedder is not None:
                 vector = embedder.embed([text])[0]
                 cursor.execute(
-                    _PRECEDENT_VECTOR_SQL,
+                    _SITUATION_SQL,
                     {
                         "vector": "[" + ",".join(repr(value) for value in vector) + "]",
                         "handles": handles,
                         "pool": VECTOR_POOL,
+                        "window": ANSWER_WINDOW_MINUTES,
                     },
                 )
                 rows = cursor.fetchall()
@@ -257,12 +339,29 @@ def precedents(
             situation=row[5],
             situation_author=lookup.get(str(row[6]), row[6]) if row[6] else None,
             score=row[7] or 0.0,
+            # The trigram query joins the thread parent directly, so a
+            # situation it returns is always Slack's own link; it has no
+            # column to say so.
+            link=str(row[8]) if len(row) > 8 else ("thread" if row[5] else "none"),
+            between_count=int(row[9]) if len(row) > 9 else 0,
+            between_speakers=int(row[10]) if len(row) > 10 else 0,
         )
         for row in rows
     ]
     # Ranked here rather than in SQL: DISTINCT ON has to order by its own key
     # first, so the database cannot also return them best-first.
-    found.sort(key=lambda item: (item.has_situation, item.score), reverse=True)
+    # Thread links first, then quiet pairings, then the crowded ones -- and
+    # only then by similarity. A close match whose pairing is a guess is worth
+    # less than a slightly worse match Slack itself linked.
+    _order = {"thread": 2, "nearby": 1, "none": 0}
+    found.sort(
+        key=lambda item: (
+            _order.get(item.link, 0),
+            -min(item.between_count, 10),
+            item.score,
+        ),
+        reverse=True,
+    )
     result.without_situation = sum(1 for item in found if not item.has_situation)
     result.found = found[:limit]
     return result

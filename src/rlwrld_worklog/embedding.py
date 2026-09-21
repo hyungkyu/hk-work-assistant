@@ -41,6 +41,13 @@ DEFAULT_MODEL = os.environ.get("WORKLOG_EMBED_MODEL", "BAAI/bge-m3")
 # keeps everything it had already embedded.
 BATCH = 32
 
+# bge-m3 accepts 8192 tokens, and sentence-transformers sizes its buffers for
+# whatever the model allows. On a 16GB card that asked for 4.3GB against 0.8GB
+# free and died: the first real run, on 2026-09-21. Chat messages are short, so
+# the length that matters here is a fraction of that, and capping it is the
+# difference between fitting and not.
+MAX_TOKENS = int(os.environ.get("WORKLOG_EMBED_MAX_TOKENS", "512"))
+
 
 class Embedder(Protocol):
     """Anything that turns text into a fixed-width vector.
@@ -85,11 +92,42 @@ class LocalEmbedder:
                     "sentence-transformers"
                 ) from error
             self._model = SentenceTransformer(self._model_name)
+            # Set after construction: the model reports its own maximum, and
+            # this lowers it rather than raising it past what it supports.
+            try:
+                self._model.max_seq_length = min(
+                    MAX_TOKENS, int(self._model.max_seq_length)
+                )
+            except (AttributeError, TypeError, ValueError):
+                pass
         return self._model
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:
             return []
+        try:
+            return self._encode(texts)
+        except Exception as error:  # pragma: no cover - needs a real GPU
+            if "out of memory" not in str(error).lower():
+                raise
+            # Halve and retry, then fall back to one at a time. A run that
+            # finishes slowly is worth more than a run that dies at batch 40
+            # with nothing said about why.
+            import gc
+
+            gc.collect()
+            try:
+                import torch
+
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+            if len(texts) == 1:
+                raise
+            middle = len(texts) // 2
+            return self._encode(list(texts[:middle])) + self.embed(list(texts[middle:]))
+
+    def _encode(self, texts: Sequence[str]) -> list[list[float]]:
         # Normalised, so cosine distance and inner product agree and the
         # pgvector `<=>` operator means what the ranking assumes it means.
         found = self.model.encode(

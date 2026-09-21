@@ -126,16 +126,20 @@ def test_the_batch_fills_the_column_and_a_second_run_finds_less():
 
 
 @REQUIRES_DATABASE
-def test_a_precedent_is_found_when_the_words_differ():
-    """The whole reason for embeddings.
+def test_the_situation_is_what_gets_matched_and_his_answer_is_what_comes_back():
+    """The direction the first real run got wrong.
 
-    The trigram query cannot connect "배포를 자동으로 돌게 해야지" to a
-    question about a nightly batch: no shared run of characters. Matching by
-    meaning is the point, and with a fake embedder the check is that the
-    vector path is the one that answered.
+    Asking "what does this situation look like" of his *answers* returned
+    "가는 중." and "ㅋㅋㅋㅋ 알아서 해요" for a question about deployments run
+    by hand. The query is a situation, so situations are what the index is
+    compared against; his reply is the payload, not the key.
+
+    The reply here is not a thread reply -- most of his messages are not -- so
+    it is paired by being the next thing he said in that channel, and the
+    pairing is labelled as such.
     """
     import uuid
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
 
     import psycopg
     from psycopg.types.json import Jsonb
@@ -154,15 +158,18 @@ def test_a_precedent_is_found_when_the_words_differ():
     )
     person = uuid.uuid4()
     moment = datetime(2026, 9, 17, 1, 0, tzinfo=timezone.utc)
-    reply_id = uuid.uuid5(uuid.NAMESPACE_URL, "vec:reply")
+    rows = {
+        "vec-situation": ("UOTHER", moment, "배포 스크립트 보내드릴게요, 직접 돌리시면 됩니다"),
+        "vec-mine": ("UVECTOR", moment + timedelta(minutes=2), "이걸 내가 돌려야해? 자동으로 돌게 해야지"),
+    }
+    ids = {name: uuid.uuid5(uuid.NAMESPACE_URL, f"vec:{name}") for name in rows}
 
     with psycopg.connect(url) as connection:
         with connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM search_documents WHERE doc_id = ANY(%s)", (list(ids.values()),)
+            )
             cursor.execute("DELETE FROM ledger_records WHERE source_entity_id LIKE 'vec-%'")
-            # By doc_id too: a previous run of this test, or of the search
-            # index suite, may already hold this row.
-            cursor.execute("DELETE FROM search_documents WHERE doc_id = %s", (reply_id,))
-            cursor.execute("DELETE FROM search_documents WHERE ledger_id = %s", (reply_id,))
             cursor.execute("DELETE FROM org_identity WHERE value = 'UVECTOR'")
             cursor.execute("DELETE FROM org_person WHERE name = '벡터테스트'")
             cursor.execute(
@@ -180,62 +187,69 @@ def test_a_precedent_is_found_when_the_words_differ():
                 "origin) VALUES (%s, 'slack', 'UVECTOR', %s, %s, 'roster')",
                 (person, observation, observation),
             )
-            fields = {
-                "ledger_id": reply_id,
-                "schema_version": "v1",
-                "capture_profile": "live-slack-web-api/v1",
-                "source": "slack",
-                "entity_type": "message",
-                "tenant_workspace_id": "T",
-                "tenant_status": "observed",
-                "scope": Jsonb({"channel_id": "C9"}),
-                "source_entity_id": "vec-reply",
-                "source_updated_at_status": "observed",
-                "deleted_status": "observed",
-                "raw_payload": Jsonb({"text": "이걸 내가 돌려야해? 자동으로 돌게 해야지"}),
-                "content_hash": "vec-reply",
-                "relations": Jsonb({"author_user_id": "UVECTOR"}),
-                "source_file": "f",
-                "source_file_sha256": "h",
-                "record_pointer": "p",
-                "legacy_layout_version": "v",
-                "converter_version": "v",
-                "observation_role": "current_head",
-                "capture_completeness_status": "recorded",
-                "source_created_at": moment,
-                "collected_at": moment,
-            }
-            cursor.execute(
-                f"INSERT INTO ledger_records ({','.join(fields)}) "
-                f"VALUES ({','.join('%s' for _ in fields)})",
-                list(fields.values()),
-            )
-            cursor.execute(
-                "INSERT INTO search_documents "
-                "(doc_id, ledger_id, source, entity_type, text_content, text_sha256, "
-                "extractor) VALUES (%s, %s, 'slack', 'message', %s, 'sha-vec', 'test')",
-                (reply_id, reply_id, "이걸 내가 돌려야해? 자동으로 돌게 해야지"),
-            )
+            for name, (author, when, text) in rows.items():
+                fields = {
+                    "ledger_id": ids[name],
+                    "schema_version": "v1",
+                    "capture_profile": "live-slack-web-api/v1",
+                    "source": "slack",
+                    "entity_type": "message",
+                    "tenant_workspace_id": "T",
+                    "tenant_status": "observed",
+                    "scope": Jsonb({"channel_id": "C9"}),
+                    "source_entity_id": name,
+                    "source_updated_at_status": "observed",
+                    "deleted_status": "observed",
+                    "raw_payload": Jsonb({"text": text}),
+                    "content_hash": name,
+                    "relations": Jsonb({"author_user_id": author}),
+                    "source_file": "f",
+                    "source_file_sha256": "h",
+                    "record_pointer": "p",
+                    "legacy_layout_version": "v",
+                    "converter_version": "v",
+                    "observation_role": "current_head",
+                    "capture_completeness_status": "recorded",
+                    "source_created_at": when,
+                    "collected_at": when,
+                }
+                cursor.execute(
+                    f"INSERT INTO ledger_records ({','.join(fields)}) "
+                    f"VALUES ({','.join('%s' for _ in fields)})",
+                    list(fields.values()),
+                )
+                cursor.execute(
+                    "INSERT INTO search_documents (doc_id, ledger_id, source, entity_type, "
+                    "text_content, text_sha256, extractor) "
+                    "VALUES (%s, %s, 'slack', 'message', %s, %s, 'test')",
+                    (ids[name], ids[name], text, f"sha-{name}"),
+                )
         connection.commit()
 
     embedder = FakeEmbedder()
     try:
         embed_corpus(url, embedder, apply=True, sources=["slack"])
-        found = precedents(url, str(person), "야간 배치", embedder=embedder)
-        assert found.matcher == "embedding", "the vector path answered"
-        assert found.found and "자동으로 돌게" in found.found[0].said
+        # The fake embedder is deterministic, so the query that finds the
+        # situation is the situation's own words.
+        found = precedents(url, str(person), rows["vec-situation"][2], embedder=embedder)
+        assert found.matcher == "embedding"
+        assert found.found, "the situation was matched"
+        best = found.found[0]
+        assert "자동으로 돌게" in best.said, "and his answer is what came back"
+        assert best.situation == rows["vec-situation"][2]
+        assert best.link == "nearby", "no thread link; paired by place and time"
+        assert best.certainty == "직후", "nobody else spoke in between"
 
-        # And with no embedder the same question falls back and says so.
         plain = precedents(url, str(person), "야간 배치")
         assert plain.matcher == "trigram"
     finally:
         with psycopg.connect(url) as connection:
             with connection.cursor() as cursor:
-                cursor.execute("DELETE FROM ledger_records WHERE source_entity_id LIKE 'vec-%'")
-                cursor.execute("DELETE FROM search_documents WHERE doc_id = %s", (reply_id,))
                 cursor.execute(
-                    "DELETE FROM search_documents WHERE ledger_id = %s", (reply_id,)
+                    "DELETE FROM search_documents WHERE doc_id = ANY(%s)",
+                    (list(ids.values()),),
                 )
+                cursor.execute("DELETE FROM ledger_records WHERE source_entity_id LIKE 'vec-%'")
             connection.commit()
 
 

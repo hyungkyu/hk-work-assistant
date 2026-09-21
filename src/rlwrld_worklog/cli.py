@@ -1936,7 +1936,10 @@ def precedents_command(args: argparse.Namespace) -> int:
         print(f"— {when} KST · {item.channel or '?'}")
         if item.situation:
             who = item.situation_author or "누군가"
-            print(f"    상황 [{who}] {' '.join(item.situation.split())[:200]}")
+            print(
+                f"    상황 [{who} · {item.certainty}] "
+                f"{' '.join(item.situation.split())[:200]}"
+            )
         else:
             # Said plainly. Half a precedent is not a precedent.
             print("    상황 (부모 메시지가 원장에 없음 — 스윕 대기)")

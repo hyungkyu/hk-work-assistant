@@ -21,7 +21,15 @@ REQUIRES_DATABASE = pytest.mark.skipif(
 )
 
 
-def _precedent(said: str, *, situation: str | None, score: float = 0.5) -> Precedent:
+def _precedent(
+    said: str,
+    *,
+    situation: str | None,
+    score: float = 0.5,
+    link: str = "thread",
+    between_count: int = 0,
+    between_speakers: int = 0,
+) -> Precedent:
     return Precedent(
         said_at=datetime(2026, 9, 16, 1, 0, tzinfo=timezone.utc),
         channel="C1",
@@ -30,6 +38,9 @@ def _precedent(said: str, *, situation: str | None, score: float = 0.5) -> Prece
         situation=situation,
         situation_author="storm",
         score=score,
+        link=link if situation else "none",
+        between_count=between_count,
+        between_speakers=between_speakers,
     )
 
 
@@ -171,3 +182,50 @@ def test_his_own_replies_come_back_with_what_they_answered(tmp_path):
                     "DELETE FROM ledger_records WHERE source_entity_id LIKE 'voice-%'"
                 )
             connection.commit()
+
+
+def test_how_the_pair_was_linked_is_part_of_the_answer():
+    """HK: 여럿이 오갈 경우, 바로 직전 대화가 아닐 수는 있어.
+
+    In a busy channel the message he answered may be several turns back, and
+    the pairing is then an inference. It is reported as one: a thread link is
+    Slack's own record, a quiet gap is a conversation, and a crowded gap is a
+    guess that says so rather than looking like the other two.
+    """
+    threaded = _precedent("이건 주인이 없네", situation="스크립트 드립니다")
+    quiet = _precedent("주인이 누구야?", situation="배포 얘기", link="nearby")
+    crowded = _precedent(
+        "ㅇㅇ",
+        situation="배포 얘기",
+        link="nearby",
+        between_count=9,
+        between_speakers=4,
+    )
+
+    assert threaded.certainty == "스레드"
+    assert quiet.certainty == "직후"
+    assert "추정" in crowded.certainty and "9건/4명" in crowded.certainty
+    assert _precedent("x", situation=None).certainty == "상황 없음"
+
+
+def test_a_linked_precedent_outranks_a_closer_guess():
+    """A better similarity score does not beat Slack saying so itself."""
+    from rlwrld_worklog.voice import PrecedentResult
+
+    threaded = _precedent("A", situation="상황", score=0.4)
+    crowded = _precedent(
+        "B", situation="상황", score=0.9, link="nearby", between_count=9,
+        between_speakers=4,
+    )
+    order = {"thread": 2, "nearby": 1, "none": 0}
+    ranked = sorted(
+        [crowded, threaded],
+        key=lambda item: (
+            order.get(item.link, 0),
+            -min(item.between_count, 10),
+            item.score,
+        ),
+        reverse=True,
+    )
+    assert ranked[0] is threaded
+    assert isinstance(PrecedentResult(query="q").as_dict()["matcher"], str)
