@@ -231,3 +231,34 @@ def test_a_rebuild_does_not_undo_a_decision():
     assert "chosen" not in updates
     assert "decided_by" not in updates and "decided_at" not in updates
     assert "proposed" in updates, "the guess may be revised; the decision may not"
+
+
+def test_a_missing_table_says_which_command_fixes_it(monkeypatch):
+    """Three commands answered with tracebacks on 2026-09-21.
+
+    The tables come from a migration, and the migration is a separate step I
+    left out of the instructions. A traceback says what broke; it does not say
+    what to do, and that difference costs a round trip.
+    """
+    import pytest as _pytest
+
+    from rlwrld_worklog import blocks
+
+    class UndefinedTable(Exception):
+        pass
+
+    def boom():
+        with blocks._needs_migration():
+            raise UndefinedTable('relation "answer_pairs" does not exist')
+
+    with _pytest.raises(SystemExit) as failure:
+        boom()
+    assert "ledger-migrate --apply" in str(failure.value)
+
+    # Anything else is not swallowed or relabelled.
+    def other():
+        with blocks._needs_migration():
+            raise ValueError("something else")
+
+    with _pytest.raises(ValueError):
+        other()

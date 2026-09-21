@@ -24,6 +24,7 @@ order, with the speaker's name, and the raw payload remains the record.
 from __future__ import annotations
 
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Sequence
@@ -40,6 +41,26 @@ MAX_MESSAGES = int(__import__("os").environ.get("WORKLOG_BLOCK_MAX_MESSAGES", "1
 # The uuid namespace for block ids. Derived from the channel and the first
 # message, so rebuilding under the same rule replaces rather than duplicates.
 _NAMESPACE = uuid.UUID("2f6f4d1e-8c1a-4f2b-9e3d-5a7b1c2d3e4f")
+
+
+@contextmanager
+def _needs_migration():
+    """Turn "relation does not exist" into the one command that fixes it.
+
+    The tables arrive with a migration, and a migration is a separate step
+    that a person has to run. On 2026-09-21 that step was left out of the
+    instructions and three commands answered with tracebacks -- which says
+    what broke and not what to do, and the difference is a round trip.
+    """
+    try:
+        yield
+    except Exception as error:
+        if type(error).__name__ != "UndefinedTable":
+            raise
+        raise SystemExit(
+            "이 명령이 쓰는 표가 아직 없음 (0010_conversation_blocks). "
+            "먼저: .venv/bin/worklog ledger-migrate --apply"
+        ) from error
 
 
 def block_id_for(
@@ -256,7 +277,7 @@ def build_blocks(
 
     from .reconcile import person_handles
 
-    with psycopg.connect(database_url) as connection:
+    with _needs_migration(), psycopg.connect(database_url) as connection:
         with connection.cursor() as cursor:
             handles = person_handles(cursor, person_id)
             cursor.execute(_CHANNELS_SQL, {"handles": handles})
@@ -706,7 +727,7 @@ def propose_pairs(
 
     from .reconcile import person_handles
 
-    with psycopg.connect(database_url) as connection:
+    with _needs_migration(), psycopg.connect(database_url) as connection:
         with connection.cursor() as cursor:
             handles = person_handles(cursor, person_id)
             cursor.execute(_ANSWERS_SQL, {"handles": handles, "since": since})
@@ -869,7 +890,7 @@ def pair_queue(
     if state not in PAIR_STATES:
         raise ValueError(f"unknown state {state!r}")
 
-    with psycopg.connect(database_url) as connection:
+    with _needs_migration(), psycopg.connect(database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 _PAIR_QUEUE_SQL,
