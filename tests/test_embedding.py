@@ -365,6 +365,9 @@ def test_scoping_to_one_person_covers_their_replies_and_what_they_answered():
         assert ids["scope-mine"] in embedded, "his own reply"
         assert ids["scope-parent"] in embedded, "and the message it answered"
         assert ids["scope-theirs"] not in embedded, "not the rest of the workspace"
+
+
+
     finally:
         with psycopg.connect(url) as connection:
             with connection.cursor() as cursor:
@@ -375,4 +378,133 @@ def test_scoping_to_one_person_covers_their_replies_and_what_they_answered():
                 cursor.execute(
                     "DELETE FROM ledger_records WHERE source_entity_id LIKE 'scope-%'"
                 )
+            connection.commit()
+
+
+@REQUIRES_DATABASE
+def test_the_index_covers_what_the_search_will_ask_about():
+    """Inverting the search without reindexing found nothing, silently.
+
+    The search matches situations -- what other people said. If only his own
+    words carry vectors, every question falls back to character matching and
+    reports zero, which reads as "no precedent" and means "nothing to compare
+    against". A message someone else sent shortly before he spoke in that
+    channel is a situation, and has to be in the index.
+    """
+    import uuid
+    from datetime import datetime, timedelta, timezone
+
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    from rlwrld_worklog.embedding import embed_corpus
+
+    url = os.environ["WORKLOG_TEST_DATABASE_URL"]
+    person = uuid.uuid4()
+    moment = datetime(2026, 9, 19, 1, 0, tzinfo=timezone.utc)
+    rows = {
+        # Someone else, minutes before he spoke in the same channel: a
+        # situation, with no thread link anywhere.
+        "near-theirs": ("UOTHER", "C7", moment, None),
+        "near-mine": ("UNEAR", "C7", moment + timedelta(minutes=3), None),
+        # Someone else, in a channel he never spoke in.
+        "far-theirs": ("UOTHER", "C6", moment, None),
+    }
+    ids = {name: uuid.uuid5(uuid.NAMESPACE_URL, f"near:{name}") for name in rows}
+
+    with psycopg.connect(url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM search_documents WHERE doc_id = ANY(%s)", (list(ids.values()),)
+            )
+            # By id as well as by name: a previous run's rows are the same
+            # ids, and a leftover ledger row makes the next suite's row count
+            # wrong rather than failing here.
+            cursor.execute(
+                "DELETE FROM ledger_records WHERE ledger_id = ANY(%s)",
+                (list(ids.values()),),
+            )
+            cursor.execute("DELETE FROM ledger_records WHERE source_entity_id LIKE 'near-%'")
+            cursor.execute("DELETE FROM org_identity WHERE value = 'UNEAR'")
+            cursor.execute("DELETE FROM org_person WHERE name = '근접테스트'")
+            cursor.execute(
+                "INSERT INTO roster_observation (observed_at, source, row_count) "
+                "VALUES (now(), 'roster_seed_2', 1) RETURNING observation_id"
+            )
+            observation = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO org_person (person_id, name, first_seen, last_seen) "
+                "VALUES (%s, '근접테스트', %s, %s)",
+                (person, observation, observation),
+            )
+            cursor.execute(
+                "INSERT INTO org_identity (person_id, kind, value, first_seen, last_seen, "
+                "origin) VALUES (%s, 'slack', 'UNEAR', %s, %s, 'roster')",
+                (person, observation, observation),
+            )
+            for name, (author, channel, when, parent) in rows.items():
+                fields = {
+                    "ledger_id": ids[name],
+                    "schema_version": "v1",
+                    "capture_profile": "live-slack-web-api/v1",
+                    "source": "slack",
+                    "entity_type": "message",
+                    "tenant_workspace_id": "T",
+                    "tenant_status": "observed",
+                    "scope": Jsonb({"channel_id": channel}),
+                    "source_entity_id": name,
+                    "source_updated_at_status": "observed",
+                    "deleted_status": "observed",
+                    "raw_payload": Jsonb({"text": f"{name} 본문"}),
+                    "content_hash": name,
+                    "relations": Jsonb({"author_user_id": author, "thread_id": parent}),
+                    "source_file": "f",
+                    "source_file_sha256": "h",
+                    "record_pointer": "p",
+                    "legacy_layout_version": "v",
+                    "converter_version": "v",
+                    "observation_role": "current_head",
+                    "capture_completeness_status": "recorded",
+                    "source_created_at": when,
+                    "collected_at": when,
+                }
+                cursor.execute(
+                    f"INSERT INTO ledger_records ({','.join(fields)}) "
+                    f"VALUES ({','.join('%s' for _ in fields)})",
+                    list(fields.values()),
+                )
+                cursor.execute(
+                    "INSERT INTO search_documents (doc_id, ledger_id, source, entity_type, "
+                    "text_content, text_sha256, extractor) "
+                    "VALUES (%s, %s, 'slack', 'message', %s, %s, 'test')",
+                    (ids[name], ids[name], f"{name} 본문", f"sha-{name}"),
+                )
+        connection.commit()
+
+    try:
+        embed_corpus(url, FakeEmbedder(), apply=True, person_id=str(person))
+        with psycopg.connect(url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT doc_id FROM search_documents WHERE doc_id = ANY(%s) "
+                    "AND embedding IS NOT NULL",
+                    (list(ids.values()),),
+                )
+                embedded = {row[0] for row in cursor.fetchall()}
+
+        assert ids["near-mine"] in embedded
+        assert ids["near-theirs"] in embedded, "the situation he answered"
+        assert ids["far-theirs"] not in embedded, "a conversation he never joined"
+    finally:
+        with psycopg.connect(url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM search_documents WHERE doc_id = ANY(%s)",
+                    (list(ids.values()),),
+                )
+                cursor.execute(
+                    "DELETE FROM ledger_records WHERE ledger_id = ANY(%s)",
+                    (list(ids.values()),),
+                )
+                cursor.execute("DELETE FROM ledger_records WHERE source_entity_id LIKE 'near-%'")
             connection.commit()

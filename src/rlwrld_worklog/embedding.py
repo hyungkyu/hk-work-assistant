@@ -41,6 +41,8 @@ DEFAULT_MODEL = os.environ.get("WORKLOG_EMBED_MODEL", "BAAI/bge-m3")
 # keeps everything it had already embedded.
 BATCH = 32
 
+from .voice import ANSWER_WINDOW_MINUTES  # noqa: E402  (kept beside its use)
+
 # bge-m3 accepts 8192 tokens, and sentence-transformers sizes its buffers for
 # whatever the model allows. On a 16GB card that asked for 4.3GB against 0.8GB
 # free and died: the first real run, on 2026-09-21. Chat messages are short, so
@@ -180,31 +182,50 @@ class EmbedResult:
         }
 
 
-# One person's own messages, and the messages those replied to. This is the
-# corpus the precedent search actually reads, and it is three orders of
-# magnitude smaller than everything: 581,315 documents on 2026-09-18, against a
-# few thousand here. Embedding the whole archive is hours of CPU for text no
-# question in this path ever looks at; this is minutes, and the rest can follow
-# whenever it is worth it.
+# The corpus the precedent search reads, which is not only his own words.
+#
+# The first version of this filter embedded his messages and their thread
+# parents, and then the search was inverted to match *situations* -- what other
+# people said -- against the query. The index was left pointing the other way,
+# so on 2026-09-21 every question fell back to character matching and found
+# nothing. Changing the question without changing what is indexed is half a
+# change, and it fails silently.
+#
+# So: his own messages, and the messages he could have been answering. The
+# second group is what other people said in a channel shortly before he spoke
+# there, plus the parents of threads he replied in. Still far smaller than the
+# archive -- everything else is conversations he never joined.
 _PERSON_FILTER = """
-       AND (
-           doc.ledger_id IN (
-               SELECT mine.ledger_id
-                 FROM ledger_records mine
-                WHERE mine.source = 'slack'
-                  AND mine.relations->>'author_user_id' = ANY(%(handles)s)
-           )
-           OR doc.ledger_id IN (
-               SELECT parent.ledger_id
-                 FROM ledger_records parent
-                 JOIN ledger_records reply
-                   ON reply.source = 'slack'
-                  AND reply.relations->>'author_user_id' = ANY(%(handles)s)
-                  AND parent.source_entity_id = coalesce(
-                      reply.relations->>'thread_id', reply.relations->>'parent_ts'
+       AND EXISTS (
+           SELECT 1
+             FROM ledger_records rec
+            WHERE rec.ledger_id = doc.ledger_id
+              AND rec.source = 'slack'
+              AND (
+                  rec.relations->>'author_user_id' = ANY(%(handles)s)
+                  OR EXISTS (
+                      SELECT 1
+                        FROM ledger_records mine
+                       WHERE mine.source = 'slack'
+                         AND mine.entity_type = 'message'
+                         AND mine.relations->>'author_user_id' = ANY(%(handles)s)
+                         AND coalesce(mine.scope->>'channel_id',
+                                      mine.scope->>'container')
+                             = coalesce(rec.scope->>'channel_id',
+                                        rec.scope->>'container')
+                         AND (
+                             coalesce(mine.relations->>'thread_id',
+                                      mine.relations->>'parent_ts')
+                                 = rec.source_entity_id
+                             OR (
+                                 mine.source_created_at > rec.source_created_at
+                                 AND mine.source_created_at
+                                     < rec.source_created_at
+                                       + make_interval(mins => %(window)s)
+                             )
+                         )
                   )
-                WHERE parent.source = 'slack'
-           )
+              )
        )
 """
 
@@ -269,6 +290,11 @@ def embed_corpus(
         "model": embedder.name,
         "limit": max(1, int(limit)),
         "sources": list(sources),
+        # Kept in step with voice.ANSWER_WINDOW_MINUTES on purpose: the batch
+        # must embed exactly what the search will look at, and two numbers
+        # that drift apart would leave a band of situations unsearchable and
+        # nothing to show for it.
+        "window": ANSWER_WINDOW_MINUTES,
     }
 
     with psycopg.connect(database_url) as connection:
