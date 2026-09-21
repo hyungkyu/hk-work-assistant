@@ -77,6 +77,35 @@ COMMENT ON TABLE conversation_blocks IS
 ALTER TABLE conversation_blocks
     ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'window';
 
+-- Human judgement about the pair.
+--
+-- HK, 2026-09-21: 어드민에서 Q&A pair 를 선택/삭제할 수 있게 하면 어때? Yes,
+-- and it is the highest-value part of this. Whether a block really is
+-- (situation -> his intervention) is not something the blocking rule can
+-- decide: a run of messages can be two topics, and his reply can be about
+-- neither. A person skimming decides it in a second.
+--
+-- It is also the evaluation set. 'kept' and 'dropped' are exactly the labels
+-- needed to measure whether an agent's answer matches what he would have
+-- asked, and they arrive as a side effect of curation rather than as a
+-- separate annotation project.
+--
+-- Default 'pending', so nothing is presumed reviewed. The search uses kept and
+-- pending and never dropped; 'dropped' hides the block without deleting it,
+-- because a rebuild would otherwise bring back a pair a person has already
+-- judged.
+ALTER TABLE conversation_blocks
+    ADD COLUMN IF NOT EXISTS review text NOT NULL DEFAULT 'pending';
+ALTER TABLE conversation_blocks
+    ADD COLUMN IF NOT EXISTS reviewed_by text;
+ALTER TABLE conversation_blocks
+    ADD COLUMN IF NOT EXISTS reviewed_at timestamptz;
+ALTER TABLE conversation_blocks
+    ADD COLUMN IF NOT EXISTS review_note text;
+
+CREATE INDEX IF NOT EXISTS conversation_blocks_review_idx
+    ON conversation_blocks (person_id, review, started_at DESC);
+
 CREATE INDEX IF NOT EXISTS conversation_blocks_person_idx
     ON conversation_blocks (person_id, started_at DESC);
 
@@ -86,3 +115,69 @@ CREATE INDEX IF NOT EXISTS conversation_blocks_unembedded_idx
 
 CREATE INDEX IF NOT EXISTS conversation_blocks_rule_idx
     ON conversation_blocks (gap_minutes, max_messages);
+
+
+-- The pairing itself, proposed and correctable.
+--
+-- HK, 2026-09-21: 결과적으로, 이 답변의 원 질문은 이거 일거 같다는 후보들이
+-- 있어서, 난 그걸 선택하는거지. 정확히는 네가 페어링을 한것을 가정하되, 나는
+-- 수정할 수 있게 하는거지.
+--
+-- So a pair is not a fact the blocking rule asserts. For one of his answers
+-- there are several plausible questions, each reached by a different route --
+-- Slack's own thread link, a permalink he quoted, the messages around his --
+-- and the routes disagree. The rows below hold the candidates with the route
+-- and the score that produced them, one of them marked as the proposal, and
+-- room for a person to mark a different one.
+--
+-- Why keep the candidates instead of only the answer: a correction is only
+-- informative next to what was proposed. "He chose the thread parent over the
+-- nearer message" is a fact about how to rank; "the answer is X" is not.
+CREATE TABLE IF NOT EXISTS answer_pairs (
+    pair_id uuid PRIMARY KEY,
+    person_id text NOT NULL REFERENCES org_person(person_id) ON DELETE CASCADE,
+    -- His message: the answer, and the thing a pair is always about.
+    answer_ledger_id uuid NOT NULL REFERENCES ledger_records(ledger_id) ON DELETE CASCADE,
+    answer_text text NOT NULL,
+    answer_at timestamptz NOT NULL,
+    channel text NOT NULL,
+    permalink text,
+    -- One candidate question for that answer.
+    candidate_block_id uuid REFERENCES conversation_blocks(block_id) ON DELETE CASCADE,
+    candidate_text text NOT NULL,
+    -- How this candidate was reached. 'thread' is Slack's own link, 'quote' is
+    -- a permalink in his own message, 'window' is the conversation around it.
+    -- Kept per row because it is the thing his corrections teach: which route
+    -- to trust when they disagree.
+    basis text NOT NULL CHECK (basis IN ('thread', 'quote', 'window')),
+    score double precision NOT NULL DEFAULT 0,
+    rank integer NOT NULL DEFAULT 0,
+    -- The proposal, and the decision. `proposed` is what this system guessed;
+    -- `chosen` is what a person said. Both are kept, because the difference is
+    -- the only measurement of whether the guessing is getting better.
+    proposed boolean NOT NULL DEFAULT false,
+    chosen boolean NOT NULL DEFAULT false,
+    decided_by text,
+    decided_at timestamptz,
+    built_at timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE answer_pairs IS
+    'Candidate questions for each of one person answers, with the route that '
+    'found each and which one was proposed or chosen. A correction is stored '
+    'against the candidates it corrected, so the ranking can be measured '
+    'rather than argued about.';
+
+CREATE INDEX IF NOT EXISTS answer_pairs_answer_idx
+    ON answer_pairs (answer_ledger_id, rank);
+CREATE INDEX IF NOT EXISTS answer_pairs_person_idx
+    ON answer_pairs (person_id, answer_at DESC);
+-- Finding the answers nobody has decided on yet, which is the review queue.
+CREATE INDEX IF NOT EXISTS answer_pairs_undecided_idx
+    ON answer_pairs (person_id, answer_at DESC)
+    WHERE decided_at IS NULL;
+-- One chosen question per answer. The database holds the rule rather than
+-- trusting every writer to remember it.
+CREATE UNIQUE INDEX IF NOT EXISTS answer_pairs_one_choice_idx
+    ON answer_pairs (answer_ledger_id)
+    WHERE chosen;

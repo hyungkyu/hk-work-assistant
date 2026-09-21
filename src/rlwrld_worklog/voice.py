@@ -114,6 +114,10 @@ _BLOCK_SQL = """
       FROM conversation_blocks
      WHERE person_id = %(person_id)s::text
        AND embedding IS NOT NULL
+       -- A pair a person has ruled out is not a precedent. Kept and pending
+       -- both count; only an explicit 'dropped' is excluded, so review is an
+       -- improvement to the corpus and not a prerequisite for using it.
+       AND review <> 'dropped'
      ORDER BY embedding <=> %(vector)s::vector
      LIMIT %(pool)s
 """

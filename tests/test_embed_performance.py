@@ -125,6 +125,12 @@ def corpus():
                   FROM ledger_records WHERE source_file = 'perf'
                 """
             )
+            # Statistics, because without them the planner is guessing and the
+            # measurement is of the guess. A real database has been analysed;
+            # a fixture that skips it produced 15s on one run and 0.6s on the
+            # next, which measures nothing about the query.
+            cursor.execute("ANALYZE ledger_records")
+            cursor.execute("ANALYZE search_documents")
         connection.commit()
     yield url, str(person)
     with psycopg.connect(url) as connection:

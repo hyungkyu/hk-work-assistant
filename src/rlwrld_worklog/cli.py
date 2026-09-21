@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import IO, Sequence
 
 from .models import Source, TimelineEvent
+
+# KST, for reading a bare --since date the way every other command does.
+KST_TZ = timezone(timedelta(hours=9))
 from .work_cli import add_work_parser, run_work
 
 
@@ -533,6 +536,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     blocks_parser.add_argument("--gap-minutes", type=_positive_int, default=None)
     blocks_parser.add_argument("--max-messages", type=_positive_int, default=None)
+
+    pairs_parser = subparsers.add_parser(
+        "pairs",
+        help="Propose the question each of one person's answers was answering",
+    )
+    pairs_parser.add_argument("--person-name", required=True)
+    pairs_parser.add_argument("--database-url", default=None)
+    pairs_parser.add_argument(
+        "--apply", action="store_true", help="Write the candidates. Without it, count only"
+    )
+    pairs_parser.add_argument(
+        "--since", default=None, help="Only answers from this KST date onward"
+    )
+    pairs_parser.add_argument(
+        "--queue",
+        action="store_true",
+        help="Print the review queue instead of proposing: answers with their "
+        "candidate questions, newest first",
+    )
+    pairs_parser.add_argument(
+        "--agreement",
+        action="store_true",
+        help="How often the proposal was the one he chose",
+    )
+    pairs_parser.add_argument("--limit", type=_positive_int, default=25)
 
     precedent = subparsers.add_parser(
         "precedents",
@@ -1908,6 +1936,58 @@ def embed_command(args: argparse.Namespace) -> int:
     return 1 if result.errors else 0
 
 
+def pairs_command(args: argparse.Namespace) -> int:
+    """Propose, review or measure the answer-to-question pairing."""
+    from . import digest as digest_module
+    from .blocks import agreement, pair_queue, propose_pairs
+
+    database_url = args.database_url or os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise SystemExit("DATABASE_URL or --database-url is required")
+    match = digest_module.resolve_people(database_url, [args.person_name])
+    if not match["resolved"]:
+        raise SystemExit(f"찾지 못함: {args.person_name}")
+    person_id = next(iter(match["resolved"].values()))
+
+    if args.agreement:
+        _print_json("pair_agreement", agreement(database_url, person_id))
+        return 0
+
+    if args.queue:
+        found = pair_queue(database_url, person_id, limit=args.limit)
+        for answer in found["answers"]:
+            when = str(answer["answer_at"] or "")[:16].replace("T", " ")
+            print(f"— {when} · {answer['channel']}")
+            print(f"    HK   {answer['answer_text'][:200]}")
+            for candidate in answer["candidates"]:
+                mark = "제안" if candidate["proposed"] else "  "
+                if candidate["chosen"]:
+                    mark = "선택"
+                print(
+                    f"    [{mark}] ({candidate['basis']} {candidate['score']}) "
+                    f"{candidate['text'][:160]}"
+                )
+        _print_json("pair_queue", {"counts": found["counts"], "shown": len(found["answers"])})
+        return 0
+
+    since = None
+    if args.since:
+        from datetime import date as date_type
+
+        since = datetime.combine(
+            date_type.fromisoformat(args.since), datetime.min.time(), tzinfo=KST_TZ
+        )
+    result = propose_pairs(
+        database_url,
+        person_id,
+        since=since,
+        names=_slack_names(database_url),
+        apply=args.apply,
+    )
+    _print_json("pairs", result.as_dict())
+    return 0
+
+
 def blocks_command(args: argparse.Namespace) -> int:
     """Build the conversation blocks the precedent search reads."""
     from . import digest as digest_module
@@ -2254,6 +2334,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return reconcile_command(args)
     if args.command == "embed":
         return embed_command(args)
+    if args.command == "pairs":
+        return pairs_command(args)
     if args.command == "blocks":
         return blocks_command(args)
     if args.command == "precedents":
