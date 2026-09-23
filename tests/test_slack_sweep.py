@@ -52,7 +52,9 @@ def test_only_replies_whose_parent_is_absent_are_returned() -> None:
             def ledger_id_of(entity_id: str) -> uuid.UUID:
                 return uuid.uuid5(uuid.NAMESPACE_URL, f"slack-sweep-test:{entity_id}")
 
-            def insert(entity_id, *, is_reply, parent_ts=None, channel="C1"):
+            def insert(
+                entity_id, *, is_reply, parent_ts=None, channel="C1", entity_key=None
+            ):
                 cursor.execute(
                     """
                     INSERT INTO ledger_records (
@@ -69,7 +71,7 @@ def test_only_replies_whose_parent_is_absent_are_returned() -> None:
                     )
                     """,
                     (
-                        ledger_id_of(entity_id),
+                        ledger_id_of(entity_key or entity_id),
                         psycopg.types.json.Jsonb({"container": channel}),
                         entity_id,
                         entity_id,
@@ -84,11 +86,21 @@ def test_only_replies_whose_parent_is_absent_are_returned() -> None:
             # Not an orphan: reply whose parent IS present.
             insert("2.0", is_reply=False)
             insert("200.1", is_reply=True, parent_ts="2.0")
+            # The same pair, written the way the converters actually write
+            # ids: "{workspace}:{channel}:{ts}" for the row, bare ts for the
+            # parent pointer. Before 2026-09-22 this query compared the two
+            # spellings directly, so a present parent read as absent and the
+            # nightly sweep re-fetched threads the ledger already held. Only a
+            # fixture in the production shape can catch that.
+            insert("T:C1:3.0", is_reply=False, entity_key="3.0")
+            insert("T:C1:300.1", is_reply=True, parent_ts="3.0", entity_key="300.1")
             connection.commit()
 
     try:
         parents = orphan_thread_parents(url)
-        assert parents == {"C1": {"1.0"}}
+        assert parents == {"C1": {"1.0"}}, (
+            "3.0 is present under a composite id and must not read as missing"
+        )
     finally:
         # These rows have no source_created_at, which is fine for this query
         # and fatal for the projection suite that shares the database: leaving
@@ -98,6 +110,6 @@ def test_only_replies_whose_parent_is_absent_are_returned() -> None:
             with connection.cursor() as cursor:
                 cursor.execute(
                     "DELETE FROM ledger_records WHERE source_entity_id IN "
-                    "('100.1', '2.0', '200.1')"
+                    "('100.1', '2.0', '200.1', 'T:C1:3.0', 'T:C1:300.1')"
                 )
             connection.commit()

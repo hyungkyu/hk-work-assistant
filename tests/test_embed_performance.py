@@ -94,13 +94,25 @@ def corpus():
                 SELECT gen_random_uuid(), 'v1', 'p', 'slack', 'message', 'T',
                        'observed',
                        jsonb_build_object('channel_id', 'C' || (index %% 100)),
-                       'perf-' || index, 'observed', 'observed',
+                       -- The production id shape: the converters write
+                       -- "{workspace}:{channel}:{ts}" while a reply points at
+                       -- its parent by the bare ts. A fixture that wrote the
+                       -- bare ts in both places is exactly why the thread
+                       -- route shipped matching nothing.
+                       'T:C' || (index %% 100) || ':perf-' || index,
+                       'observed', 'observed',
                        jsonb_build_object('text', '메시지 ' || index),
                        'perf-' || index,
                        jsonb_build_object(
                            'author_user_id',
                            CASE WHEN index %% 37 = 0 THEN 'UPERF'
-                                ELSE 'U' || (index %% 37) END
+                                ELSE 'U' || (index %% 37) END,
+                           -- One message in five is a thread reply, pointing
+                           -- three messages back by bare ts.
+                           'thread_id',
+                           CASE WHEN index %% 5 = 0 AND index > 300
+                                THEN 'perf-' || (index - 300) END,
+                           'is_thread_reply', index %% 5 = 0 AND index > 300
                        ),
                        'perf', 'h', 'p', 'v', 'v', 'current_head', 'recorded',
                        -- Divided by the channel count, so messages *within*
@@ -223,4 +235,101 @@ def test_building_the_blocks_costs_less_than_embedding_them(corpus):
     print(
         f"blocks: {result.blocks_with_him} kept of {result.blocks} from "
         f"{result.messages} messages in {took:.1f}s"
+    )
+
+
+# What proposing the candidate questions is allowed to cost. Measured on HK's
+# machine on 2026-09-22: 5,120 of his answers took 1,408 seconds, a quarter of
+# a second each, because the nearby-messages query scanned the channel once per
+# answer. This corpus is a fiftieth of his archive, so the budget is set where
+# a per-answer scan fails and an index lookup passes.
+PAIR_BUDGET_SECONDS = 20.0
+
+
+@REQUIRES_DATABASE
+def test_proposing_the_questions_costs_less_than_reviewing_them(corpus):
+    """A review queue he waits 23 minutes for is a queue he stops rebuilding.
+
+    The rule from 2026-09-21 -- measure the cost before handing the command
+    over -- applied to the command I had already handed over once.
+    """
+    from rlwrld_worklog.blocks import build_blocks, propose_pairs
+
+    url, person = corpus
+    build_blocks(url, person, names={"UPERF": "HK"}, apply=True)
+
+    started = time.monotonic()
+    result = propose_pairs(url, person, names={"UPERF": "HK"}, apply=True)
+    took = time.monotonic() - started
+
+    assert result.answers > 0, "his messages are in the corpus"
+    assert took < PAIR_BUDGET_SECONDS, (
+        f"proposing candidates for {result.answers} answers took {took:.1f}s. "
+        "At the real archive's size that is the 23 minutes it already cost "
+        "once -- the per-answer query is scanning, not looking up"
+    )
+
+
+@REQUIRES_DATABASE
+def test_the_per_answer_query_looks_up_rather_than_scans(corpus):
+    """The wall clock cannot see this one, so ask the planner.
+
+    A fiftieth of the archive is not enough for a sequential scan to separate
+    from an index lookup by time -- both finish. The difference only shows at
+    his size, which is where it cost 23 minutes. So the assertion is about the
+    plan, which does not depend on how big this fixture happens to be.
+    """
+    import psycopg
+
+    from rlwrld_worklog.blocks import _NEARBY_SQL
+
+    url, _person = corpus
+    with psycopg.connect(url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("ANALYZE ledger_records")
+            cursor.execute(
+                "EXPLAIN " + _NEARBY_SQL,
+                {
+                    "channel": "C7",
+                    "handles": ["UPERF"],
+                    "before": "2026-09-22T00:00:00Z",
+                    "window": 120,
+                    "nearby": 3,
+                },
+            )
+            plan = "\n".join(row[0] for row in cursor.fetchall())
+
+    assert "Seq Scan" not in plan, (
+        "the messages before one answer are found by scanning every Slack row:\n"
+        f"{plan}\n"
+        "This runs once per answer -- 5,120 times on 2026-09-22 -- which is "
+        "what made proposing the queue take 1,408 seconds."
+    )
+
+
+@REQUIRES_DATABASE
+def test_a_thread_reply_finds_its_parent_at_production_id_shape(corpus):
+    """The bug this whole file could not have caught before.
+
+    Every fixture wrote bare timestamps into `source_entity_id`, so the join
+    between a reply's `parent_ts` and its parent's id matched in every test and
+    in nothing else. On the real ledger it built 0 thread blocks out of 1,674
+    threads and reported all 1,674 as having no parent -- a count that reads
+    like a finding about the data and was a finding about the query.
+    """
+    from rlwrld_worklog.blocks import build_blocks
+    from rlwrld_worklog.slack_sweep import orphan_thread_parents
+
+    url, person = corpus
+    result = build_blocks(url, person, names={"UPERF": "HK"}, apply=True)
+
+    assert result.thread_blocks > 0, (
+        "replies point at parents that are present in this corpus; zero here "
+        "means the id spellings are being compared directly again"
+    )
+    # And the other side of the same join: nothing in this corpus is an orphan,
+    # so a sweep seeded from it should have nothing to fetch.
+    assert orphan_thread_parents(url) == {}, (
+        "every parent is present; a non-empty sweep seed means the nightly "
+        "sweep is re-fetching threads the ledger already holds"
     )

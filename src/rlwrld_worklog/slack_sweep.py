@@ -22,11 +22,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from .slack_ids import ts_expr
+
 # A reply names its parent in `relations.parent_ts`; the parent, if present,
 # is a row whose `source_entity_id` equals that ts. An orphan is a reply whose
 # parent ts matches no row. `scope.container` is the channel the thread lives
 # in, which is what `conversations.replies` needs alongside the ts.
-_ORPHAN_SQL = """
+_ORPHAN_SQL = f"""
     SELECT DISTINCT reply.scope->>'container' AS channel,
                     reply.relations->>'parent_ts' AS parent_ts
       FROM ledger_records reply
@@ -38,7 +40,7 @@ _ORPHAN_SQL = """
            SELECT 1
              FROM ledger_records parent
             WHERE parent.source = 'slack'
-              AND parent.source_entity_id = reply.relations->>'parent_ts'
+              AND {ts_expr("parent.source_entity_id")} = reply.relations->>'parent_ts'
        )
 """
 

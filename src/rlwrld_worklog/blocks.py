@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Sequence
 
+from .slack_ids import ts_expr
+
 # When a room goes quiet for this long, the next message starts a new
 # conversation. Half an hour: long enough that a slow exchange stays one
 # block, short enough that this morning and this afternoon are two.
@@ -187,7 +189,7 @@ _MESSAGES_SQL = """
 # Threads he replied in, followed from his reply to the message that started
 # it. `thread_id` is the parent's ts, and the parent can be any distance back
 # in time -- which is exactly what a time window cannot reach.
-_THREADS_SQL = """
+_THREADS_SQL = f"""
     WITH his_threads AS (
         SELECT DISTINCT
                coalesce(scope->>'channel_id', scope->>'container') AS channel,
@@ -201,7 +203,7 @@ _THREADS_SQL = """
     SELECT DISTINCT ON (his_threads.channel, his_threads.parent_ts, message.source_entity_id)
            his_threads.channel,
            his_threads.parent_ts,
-           message.source_entity_id,
+           {ts_expr("message.source_entity_id")} AS ts,
            message.source_created_at,
            message.relations->>'author_user_id' AS author,
            message.raw_payload->>'text' AS text,
@@ -214,7 +216,7 @@ _THREADS_SQL = """
            = his_threads.channel
        AND (
            -- the message that started the thread ...
-           message.source_entity_id = his_threads.parent_ts
+           {ts_expr("message.source_entity_id")} = his_threads.parent_ts
            -- ... and every reply in it, his own included
            OR coalesce(message.relations->>'thread_id', message.relations->>'parent_ts')
               = his_threads.parent_ts
@@ -620,7 +622,7 @@ _ANSWERS_SQL = """
      ORDER BY answer.source_entity_id, answer.collected_at DESC
 """
 
-_ONE_MESSAGE_SQL = """
+_ONE_MESSAGE_SQL = f"""
     SELECT DISTINCT ON (source_entity_id)
            source_entity_id,
            relations->>'author_user_id' AS author,
@@ -628,7 +630,7 @@ _ONE_MESSAGE_SQL = """
       FROM ledger_records
      WHERE source = 'slack' AND entity_type = 'message'
        AND coalesce(scope->>'channel_id', scope->>'container') = %(channel)s
-       AND source_entity_id = %(ts)s
+       AND {ts_expr("source_entity_id")} = %(ts)s
      ORDER BY source_entity_id, collected_at DESC
 """
 

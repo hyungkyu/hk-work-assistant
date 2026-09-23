@@ -234,6 +234,16 @@ def test_a_thread_is_followed_to_its_first_message_however_old():
         dry_run=False,
     )
     person = uuid.uuid4()
+    # Ids are spelled the way the converters actually spell them --
+    # "{workspace}:{channel}:{ts}" -- while a reply names its parent by the
+    # bare ts. This test used to write the bare ts in both places, which is
+    # why it passed green while the real run built 0 thread blocks out of
+    # 1,674 threads and called every one of them parentless (2026-09-22). A
+    # fixture that does not use the production id shape tests a query that
+    # does not exist.
+    def row_id(ts: str) -> str:
+        return f"T:CTHREAD:{ts}"
+
     # The parent is three days before the reply: far outside any window.
     rows = [
         ("thr-parent", "UTHEM", None, -4320, "이 설계로 가면 리스크가 뭘까요"),
@@ -245,7 +255,9 @@ def test_a_thread_is_followed_to_its_first_message_however_old():
     with psycopg.connect(url) as connection:
         with connection.cursor() as cursor:
             cursor.execute("DELETE FROM conversation_blocks WHERE channel = 'CTHREAD'")
-            cursor.execute("DELETE FROM ledger_records WHERE source_entity_id LIKE 'thr-%'")
+            cursor.execute(
+                "DELETE FROM ledger_records WHERE source_entity_id LIKE '%%thr-%%'"
+            )
             cursor.execute("DELETE FROM org_identity WHERE value = 'UTHREAD'")
             cursor.execute("DELETE FROM org_person WHERE name = '스레드테스트'")
             cursor.execute(
@@ -273,7 +285,7 @@ def test_a_thread_is_followed_to_its_first_message_however_old():
                     "tenant_workspace_id": "T",
                     "tenant_status": "observed",
                     "scope": Jsonb({"channel_id": "CTHREAD"}),
-                    "source_entity_id": entity,
+                    "source_entity_id": row_id(entity),
                     "source_updated_at_status": "observed",
                     "deleted_status": "observed",
                     "raw_payload": Jsonb({"text": text, "permalink": f"https://x/{entity}"}),
@@ -323,6 +335,6 @@ def test_a_thread_is_followed_to_its_first_message_however_old():
             with connection.cursor() as cursor:
                 cursor.execute("DELETE FROM conversation_blocks WHERE channel = 'CTHREAD'")
                 cursor.execute(
-                    "DELETE FROM ledger_records WHERE source_entity_id LIKE 'thr-%'"
+                    "DELETE FROM ledger_records WHERE source_entity_id LIKE '%%thr-%%'"
                 )
             connection.commit()

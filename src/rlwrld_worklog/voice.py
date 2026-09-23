@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from .slack_ids import ts_expr
+
 KST_OFFSET_HOURS = 9
 
 # His own messages, ranked against the situation, each with the message it was
@@ -38,7 +40,7 @@ KST_OFFSET_HOURS = 9
 # The join is to the parent's own ledger row, which is why the orphaned-parent
 # sweep matters here: a reply whose parent was never collected comes back with
 # no situation, and is reported as such rather than dropped.
-_PRECEDENT_SQL = """
+_PRECEDENT_SQL = f"""
     WITH mine AS (
         SELECT reply.ledger_id,
                reply.source_created_at AS said_at,
@@ -69,7 +71,7 @@ _PRECEDENT_SQL = """
       LEFT JOIN ledger_records parent
         ON parent.source = 'slack'
        AND parent.entity_type = 'message'
-       AND parent.source_entity_id = mine.parent_ts
+       AND {ts_expr("parent.source_entity_id")} = mine.parent_ts
      ORDER BY mine.said, mine.parent_ts, mine.score DESC
 """
 
