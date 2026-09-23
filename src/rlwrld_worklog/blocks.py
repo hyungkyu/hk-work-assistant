@@ -637,18 +637,35 @@ _ONE_MESSAGE_SQL = f"""
 # The messages other people sent just before he spoke, nearest first. Not one
 # message: HK, 2026-09-21: 여럿이 오갈 경우, 바로 직전 대화가 아닐 수는 있어.
 # So several are offered and he picks.
+# One row per message, not one row per observation of it. The ledger keeps
+# every collection of a message, so a message re-collected three times filled
+# all three candidate slots -- and because a candidate's id is derived from
+# the message it points at, the three rows collapsed into one on write, the
+# top-ranked one overwritten by the duplicate behind it. The answer was then
+# left with a candidate ranked 1 and no proposal at all.
+#
+# Measured on HK's database 2026-09-22: 690 of 3,830 answers had no proposal,
+# and `pairs --audit` showed them as "candidates: 1, top_rank: 1" -- a rank
+# that could only exist if rank 0 had been written and then overwritten.
+# Every other query in this file already deduplicates this way; this one did
+# not, which is the whole defect.
 _NEARBY_SQL = """
-    SELECT source_entity_id,
-           relations->>'author_user_id' AS author,
-           raw_payload->>'text' AS text,
-           source_created_at
-      FROM ledger_records
-     WHERE source = 'slack' AND entity_type = 'message'
-       AND coalesce(scope->>'channel_id', scope->>'container') = %(channel)s
-       AND relations->>'author_user_id' <> ALL(%(handles)s)
-       AND coalesce(raw_payload->>'text', '') <> ''
-       AND source_created_at < %(before)s
-       AND source_created_at > %(before)s - make_interval(mins => %(window)s)
+    SELECT source_entity_id, author, text, source_created_at
+      FROM (
+          SELECT DISTINCT ON (source_entity_id)
+                 source_entity_id,
+                 relations->>'author_user_id' AS author,
+                 raw_payload->>'text' AS text,
+                 source_created_at
+            FROM ledger_records
+           WHERE source = 'slack' AND entity_type = 'message'
+             AND coalesce(scope->>'channel_id', scope->>'container') = %(channel)s
+             AND relations->>'author_user_id' <> ALL(%(handles)s)
+             AND coalesce(raw_payload->>'text', '') <> ''
+             AND source_created_at < %(before)s
+             AND source_created_at > %(before)s - make_interval(mins => %(window)s)
+           ORDER BY source_entity_id, collected_at DESC
+      ) AS latest
      ORDER BY source_created_at DESC
      LIMIT %(nearby)s
 """

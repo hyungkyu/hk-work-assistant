@@ -516,3 +516,136 @@ def test_a_decision_survives_a_rebuild():
                     "DELETE FROM ledger_records WHERE source_file = 'keeptest'"
                 )
             connection.commit()
+
+
+@REQUIRES_DATABASE
+def test_a_message_collected_twice_is_one_candidate():
+    """690 of his answers had no proposal at all (2026-09-22).
+
+    `pairs --audit` showed them as "candidates: 1, top_rank: 1" -- a rank that
+    can only exist if a rank-0 row was written and then overwritten. The
+    nearby-messages query was the only one in this module that did not reduce
+    the ledger's several observations of a message to one, so a re-collected
+    message filled every candidate slot; since a candidate's id is derived
+    from the message it points at, the duplicates collapsed on write and the
+    proposal was overwritten by the copy ranked behind it.
+
+    The audit count is what turned "I think it is staleness" -- which was
+    wrong, and whose test passed with the fix reverted -- into this. A number
+    that says which shape the wrongness has is worth more than an explanation.
+
+    Mutation caught: remove the DISTINCT ON and this answer comes back with
+    one candidate, ranked 1, proposed by nothing.
+    """
+    import uuid
+
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    from rlwrld_worklog.blocks import pair_queue, propose_pairs
+    from rlwrld_worklog.ledger.load import apply_migrations
+
+    url = os.environ["WORKLOG_TEST_DATABASE_URL"]
+    apply_migrations(
+        database_url=url,
+        migrations_dir=__import__("pathlib").Path(__file__).resolve().parents[1]
+        / "sql"
+        / "migrations",
+        dry_run=False,
+    )
+    person = uuid.uuid4()
+
+    def write(cursor, entity, author, minute, text, *, observation):
+        fields = {
+            "ledger_id": uuid.uuid5(uuid.NAMESPACE_URL, f"dup:{entity}:{observation}"),
+            "schema_version": "v1",
+            "capture_profile": "p",
+            "source": "slack",
+            "entity_type": "message",
+            "tenant_workspace_id": "T",
+            "tenant_status": "observed",
+            "scope": Jsonb({"channel_id": "CDUP"}),
+            "source_entity_id": f"T:CDUP:{entity}",
+            "source_updated_at_status": "observed",
+            "deleted_status": "observed",
+            "raw_payload": Jsonb({"text": text}),
+            "content_hash": f"dup-{entity}-{observation}",
+            "relations": Jsonb({"author_user_id": author}),
+            "source_file": "duptest",
+            "source_file_sha256": "h",
+            "record_pointer": "p",
+            "legacy_layout_version": "v",
+            "converter_version": "v",
+            "observation_role": "current_head",
+            "capture_completeness_status": "recorded",
+            "source_created_at": START + timedelta(minutes=minute),
+            # The thing that makes them different rows and the same message.
+            "collected_at": START + timedelta(hours=observation),
+        }
+        cursor.execute(
+            f"INSERT INTO ledger_records ({','.join(fields)}) "
+            f"VALUES ({','.join('%s' for _ in fields)})",
+            list(fields.values()),
+        )
+
+    with psycopg.connect(url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM answer_pairs WHERE channel = 'CDUP'")
+            cursor.execute("DELETE FROM ledger_records WHERE source_file = 'duptest'")
+            cursor.execute("DELETE FROM org_identity WHERE value = 'UDUP'")
+            cursor.execute("DELETE FROM org_person WHERE name = '관측중복테스트'")
+            cursor.execute(
+                "INSERT INTO roster_observation (observed_at, source, row_count) "
+                "VALUES (now(), 'roster_seed_2', 1) RETURNING observation_id"
+            )
+            observation = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO org_person (person_id, name, first_seen, last_seen) "
+                "VALUES (%s, '관측중복테스트', %s, %s)",
+                (person, observation, observation),
+            )
+            cursor.execute(
+                "INSERT INTO org_identity (person_id, kind, value, first_seen, "
+                "last_seen, origin) VALUES (%s, 'slack', 'UDUP', %s, %s, 'roster')",
+                (person, observation, observation),
+            )
+            # The same question, collected three times -- which is what a DM
+            # that keeps being re-read looks like in the ledger.
+            for attempt in (1, 2, 3):
+                write(
+                    cursor,
+                    "q",
+                    "UTHEM",
+                    0,
+                    "혹시 오늘 4시 30분 1on1 진행하는 것 맞을까요?",
+                    observation=attempt,
+                )
+            write(cursor, "mine", "UDUP", 2, "지금 갑니다.", observation=1)
+        connection.commit()
+
+    try:
+        result = propose_pairs(
+            url, str(person), names={"UDUP": "HK", "UTHEM": "박승철"}, apply=True
+        )
+        assert result.answers == 1
+
+        answer = pair_queue(url, str(person), limit=5)["answers"][0]
+        candidates = answer["candidates"]
+        assert len(candidates) == 1, (
+            "three observations of one message are one candidate, not three: "
+            f"{candidates}"
+        )
+        assert candidates[0]["rank"] == 0
+        assert candidates[0]["proposed"], (
+            "an answer in the review queue always carries a proposal; "
+            "without one there is nothing to correct and the review starts "
+            "from scratch"
+        )
+    finally:
+        with psycopg.connect(url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("DELETE FROM answer_pairs WHERE channel = 'CDUP'")
+                cursor.execute(
+                    "DELETE FROM ledger_records WHERE source_file = 'duptest'"
+                )
+            connection.commit()
