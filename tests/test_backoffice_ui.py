@@ -61,6 +61,10 @@ def test_the_menu_is_grouped_and_ordered_as_the_operator_asked() -> None:
             "다이제스트",
             [("org", "조직도"), ("person", "일자별"), ("unmapped", "미확인 계정")],
         ),
+        # HK, 2026-09-21: 어드민에서 Q&A pair 를 선택/삭제할 수 있게 하면 어때?
+        # Its own group rather than a row inside 다이제스트: the digest screens
+        # answer "what happened", and this one asks him a question.
+        ("말투", [("pairs", "질문·답변 검수")]),
         (
             "운영",
             [
@@ -264,6 +268,12 @@ def test_the_existing_backoffice_and_work_routes_are_all_still_served() -> None:
         "/api/v1/admin/work/history",
         "/api/v1/timeline",
         "/healthz",
+        # The review screen is only a screen if its routes are mounted; the
+        # router was registered in web.py and this is what says so.
+        "/api/v1/admin/voice/pairs",
+        "/api/v1/admin/voice/pairs/choose",
+        "/api/v1/admin/voice/agreement",
+        "/api/v1/admin/voice/audit",
     } <= paths
 
 
@@ -361,3 +371,74 @@ def test_the_served_assets_match_the_files_and_are_typed(tmp_path, monkeypatch) 
     assert js.media_type == "text/javascript"
     assert css.body.decode("utf-8") == ADMIN_CSS.read_text(encoding="utf-8")
     assert js.body.decode("utf-8") == ADMIN_JS.read_text(encoding="utf-8")
+
+
+def test_the_review_screen_shows_the_answer_with_its_candidates(
+    html: str, script: str
+) -> None:
+    """HK, 2026-09-21: 이 답변의 원 질문은 이거 일거 같다는 후보들이 있어서,
+    난 그걸 선택하는거지.
+
+    So the unit on screen is one answer with several candidate questions, one
+    of them already marked -- not a list of pairs to judge one row at a time.
+    """
+    assert 'id="page-pairs"' in html
+    assert 'id="pairs-list"' in html
+    # The card is built in the script, so that is where the shape lives.
+    assert "function pairCard(" in script
+    assert "answer.candidates" in script
+    assert "'제안'" in script and "'선택'" in script
+
+
+def test_none_of_these_is_offered_as_its_own_answer(html: str, script: str) -> None:
+    """The most informative correction has to be one click.
+
+    If saying "none of these was the question" needed him to skip the row
+    instead, the queue would only ever collect agreement, and the agreement
+    rate would measure nothing.
+    """
+    assert "해당 없음" in html or "해당 없음" in script
+    assert "choosePair(answer, null)" in script
+
+
+def test_the_review_screen_never_rebuilds_what_it_shows(script: str) -> None:
+    """The batch builds the candidates; this screen only chooses among them.
+
+    A rebuild button here would change the queue between the moment he read a
+    row and the moment he clicked it, and the stored correction would no
+    longer say what he chose it over.
+    """
+    pairs_block = script.split("질문·답변 검수")[1].split("async function loadSchedules")[0]
+    # Only GET, plus the one POST that records his decision. Anything else
+    # reaching the server from this screen would be it acting rather than
+    # asking. ("proposed" is a field on a candidate, not a call -- the check is
+    # on what this screen sends.)
+    calls = __import__("re").findall(r"api\(`?'?([^'`,\)]+)", pairs_block)
+    assert calls, "the screen talks to the server"
+    for call in calls:
+        assert call.startswith("/api/v1/admin/voice/"), call
+    posts = __import__("re").findall(r"method: '(\w+)'", pairs_block)
+    assert posts == ["POST"], f"one write from this screen, the decision: {posts}"
+    assert "/api/v1/admin/voice/pairs/choose" in pairs_block
+
+
+def test_a_decision_does_not_renumber_the_queue_under_him(script: str) -> None:
+    """One row leaves; the rest stay where they were.
+
+    Re-fetching the page after every click would reorder everything he had not
+    read yet, which is how a person loses their place in a list of three
+    thousand.
+    """
+    assert "if (card) card.remove();" in script
+
+
+def test_the_proposal_rate_is_shown_next_to_the_queue(html: str, script: str) -> None:
+    """The number the screen exists to move, not buried in a command.
+
+    If the proposal keeps being wrong, reviewing is data entry and the ranking
+    needs changing -- which is only visible if the rate is in front of him.
+    """
+    assert 'id="pairs-health"' in html
+    assert "/api/v1/admin/voice/agreement" in script
+    # A rate over zero decisions is an unanswered question, not 0%.
+    assert "agreement_rate === null" in script

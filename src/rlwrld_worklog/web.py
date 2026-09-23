@@ -12,6 +12,7 @@ from .admin_web import require_company_session, router as admin_router
 from .collection_web import router as collection_router
 from .org_web import router as org_router
 from .schedule_web import router as schedule_router
+from .voice_web import router as voice_router
 from .work_web import router as work_router
 
 
@@ -25,6 +26,7 @@ app.include_router(work_router)
 app.include_router(collection_router)
 app.include_router(org_router)
 app.include_router(schedule_router)
+app.include_router(voice_router)
 
 
 @contextmanager

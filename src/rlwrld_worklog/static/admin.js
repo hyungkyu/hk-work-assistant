@@ -1525,6 +1525,7 @@
       if (page === 'search') { loadSearchCorpus(); }
       if (page === 'org') loadOrg();
       if (page === 'unmapped') loadUnmapped();
+      if (page === 'pairs') loadPairs({ reset: true });
       if (page === 'person') { if (!$('person-day').value) $('person-day').value = yesterdayKST(); }
       if (page === 'audit') loadAudit();
       if (page === 'work') { loadWork(); startWorkPolling(); }
@@ -2007,6 +2008,155 @@
       }
     }
 
+    // -------------------------------------------------- 질문·답변 검수
+    //
+    // HK, 2026-09-21: 네가 페어링을 한것을 가정하되, 나는 수정할 수 있게 하는거지.
+    //
+    // So each answer renders as its candidates with one already marked, and a
+    // click records agreement or a correction. Nothing here rebuilds the
+    // candidates: a screen that regenerates what it is showing makes "what did
+    // he actually see when he chose this" unanswerable afterwards.
+    const pairsState = { offset: 0, loading: false };
+
+    async function loadPairs({ reset = false } = {}) {
+      const line = $('pairs-state-line');
+      const list = $('pairs-list');
+      if (pairsState.loading) return;
+      pairsState.loading = true;
+      if (reset) { pairsState.offset = 0; list.textContent = ''; }
+      const person = encodeURIComponent($('pairs-person').value.trim());
+      try {
+        const payload = await api(`/api/v1/admin/voice/pairs?person_name=${person}`
+          + `&state=${$('pairs-state').value}&limit=20&offset=${pairsState.offset}`);
+        const counts = payload.counts || {};
+        $('pairs-badge').textContent = `고른 것 ${counts.decided || 0} · 남은 것 ${counts.undecided || 0}`;
+        const answers = payload.answers || [];
+        answers.forEach((answer) => list.appendChild(pairCard(answer)));
+        pairsState.offset += answers.length;
+        line.textContent = answers.length
+          ? `${pairsState.offset}건 표시 중. 제안이 맞으면 「맞음」, 아니면 다른 후보를 고르세요.`
+          : (pairsState.offset ? '더 없습니다.' : '검수할 답변이 없습니다.');
+        loadPairsHealth(person);
+      } catch (error) {
+        line.textContent = `불러오지 못했습니다: ${error.message}`;
+        $('pairs-badge').textContent = '조회 실패';
+      } finally {
+        pairsState.loading = false;
+      }
+    }
+
+    // The proposal rate, next to the queue rather than buried: if it is not
+    // moving, the reviewing is data entry. The count of answers carrying no
+    // proposal sits beside it for the same reason -- those are the rows he has
+    // to review from scratch.
+    async function loadPairsHealth(person) {
+      const node = $('pairs-health');
+      try {
+        const [rate, audit] = await Promise.all([
+          api(`/api/v1/admin/voice/agreement?person_name=${person}`),
+          api(`/api/v1/admin/voice/audit?person_name=${person}&limit=1`),
+        ]);
+        const decided = rate.decided_answers || 0;
+        const parts = [];
+        if (rate.agreement_rate === null || rate.agreement_rate === undefined) {
+          // A rate over zero decisions is not a low rate, it is an unanswered
+          // question, and the screen says so rather than printing 0%.
+          parts.push(decided
+            ? `${decided}건 결정 · 전부 「해당 없음」이라 제안 정확도는 아직 알 수 없습니다.`
+            : '아직 결정한 답변이 없어 제안 정확도는 알 수 없습니다.');
+        } else {
+          parts.push(`${decided}건 결정 · 제안이 맞았던 비율 `
+            + `${Math.round(rate.agreement_rate * 100)}%`
+            + ` (수정 ${rate.corrected || 0}, 해당 없음 ${rate.none_of_these || 0})`);
+        }
+        if (audit.no_proposal) parts.push(`제안이 없는 답변 ${audit.no_proposal}건`);
+        node.textContent = parts.join(' · ');
+      } catch (_) {
+        // The health line is not the screen. If it cannot be read the queue
+        // still works, and a broken number is worse than no number.
+        node.textContent = '';
+      }
+    }
+
+    function pairCard(answer) {
+      const card = document.createElement('article');
+      card.className = 'pair';
+      card.dataset.answer = answer.answer_ledger_id;
+
+      const head = document.createElement('div');
+      head.className = 'pair-head';
+      const when = document.createElement('span');
+      when.className = 'pair-when';
+      when.textContent = `${new Date(answer.answer_at).toLocaleString()} · ${answer.channel}`;
+      head.appendChild(when);
+      if (answer.permalink) {
+        const link = document.createElement('a');
+        link.href = answer.permalink;
+        link.target = '_blank';
+        link.rel = 'noreferrer';
+        link.className = 'pair-link';
+        link.textContent = '슬랙에서 보기';
+        head.appendChild(link);
+      }
+      card.appendChild(head);
+
+      const said = document.createElement('p');
+      said.className = 'pair-answer';
+      said.textContent = answer.answer_text;
+      card.appendChild(said);
+
+      (answer.candidates || []).forEach((candidate) => {
+        const row = document.createElement('div');
+        row.className = 'pair-candidate'
+          + (candidate.chosen ? ' chosen' : (candidate.proposed ? ' proposed' : ''));
+        const mark = document.createElement('span');
+        mark.className = 'pair-mark';
+        mark.textContent = candidate.chosen ? '선택' : (candidate.proposed ? '제안' : '');
+        const text = document.createElement('span');
+        text.className = 'pair-text';
+        text.textContent = candidate.text;
+        const basis = document.createElement('span');
+        basis.className = 'pair-basis';
+        // The route is shown because it is the thing his corrections teach:
+        // which one to trust when they disagree.
+        basis.textContent = `${candidate.basis} ${candidate.score}`;
+        const pick = document.createElement('button');
+        pick.className = `button${candidate.proposed ? ' primary' : ''}`;
+        pick.textContent = candidate.proposed ? '맞음' : '이게 질문';
+        pick.addEventListener('click', () => choosePair(answer, candidate.pair_id));
+        row.append(mark, text, basis, pick);
+        card.appendChild(row);
+      });
+
+      const none = document.createElement('button');
+      none.className = 'button pair-none';
+      none.textContent = '해당 없음';
+      none.title = '후보 중에 답하고 있던 질문이 없습니다. 이 답변은 큐에서 빠집니다.';
+      none.addEventListener('click', () => choosePair(answer, null));
+      card.appendChild(none);
+
+      if (answer.decided) card.classList.add('decided');
+      return card;
+    }
+
+    async function choosePair(answer, pairId) {
+      const card = document.querySelector(`.pair[data-answer="${answer.answer_ledger_id}"]`);
+      try {
+        await api('/api/v1/admin/voice/pairs/choose', {
+          method: 'POST',
+          body: JSON.stringify({ answer_ledger_id: answer.answer_ledger_id, pair_id: pairId }),
+        });
+        // Removed from the list rather than re-fetched: re-fetching would
+        // renumber everything under his cursor mid-review.
+        if (card) card.remove();
+        toast(pairId ? '기록했습니다.' : '해당 없음으로 기록했습니다.');
+        loadPairsHealth(encodeURIComponent($('pairs-person').value.trim()));
+      } catch (error) {
+        toast(`기록하지 못했습니다: ${error.message}`, true);
+      }
+    }
+
+
     async function loadSchedules() {
       loadBatchRuns();
       try {
@@ -2062,6 +2212,10 @@
     $('search-run').addEventListener('click', runSearch);
     $('person-run').addEventListener('click', runPersonDay);
     $('person-day').addEventListener('change', () => { if ($('person-id').value.trim()) runPersonDay(); });
+    $('pairs-reload').addEventListener('click', () => loadPairs({ reset: true }));
+    $('pairs-more').addEventListener('click', () => loadPairs());
+    $('pairs-state').addEventListener('change', () => loadPairs({ reset: true }));
+    $('pairs-person').addEventListener('change', () => loadPairs({ reset: true }));
     $('unmapped-reload').addEventListener('click', loadUnmapped);
     $('unmapped-state').addEventListener('change', loadUnmapped);
     $('search-q').addEventListener('keydown', (event) => { if (event.key === 'Enter') runSearch(); });

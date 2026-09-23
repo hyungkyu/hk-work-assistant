@@ -23,6 +23,10 @@
           <button data-page="unmapped">미확인 계정</button>
         </div>
         <div class="nav-group">
+          <span class="nav-label">말투</span>
+          <button data-page="pairs">질문·답변 검수</button>
+        </div>
+        <div class="nav-group">
           <span class="nav-label">운영</span>
           <button data-page="collection">수집 현황</button>
           <button data-page="search">검색</button>
@@ -327,6 +331,32 @@
           <p class="work-state" id="unmapped-state-line">불러오는 중…</p>
           <div class="table-scroll"><table class="audit" id="unmapped-table"><tbody id="unmapped-body"></tbody></table></div>
           <p class="help">목록은 배치가 만듭니다(매일 09:30 KST). 여기서는 주인을 답하거나 사람이 아니라고 판정만 합니다.</p>
+        </article>
+      </section>
+
+      <section class="page" id="page-pairs">
+        <h1>질문·답변 검수</h1>
+        <p class="lead">답변 하나에 대해, 그게 답하고 있던 질문의 후보들입니다. 하나는 이미 제안으로 표시되어 있고,
+           맞으면 그대로 두고 아니면 다른 걸 고르면 됩니다. 후보가 전부 아니면 「해당 없음」입니다 —
+           그것도 답이고, 순위를 고치는 데는 동의보다 수정이 더 쓸모 있습니다.</p>
+        <article class="card">
+          <div class="collection-toolbar">
+            <div class="work-filters">
+              <input id="pairs-person" value="류형규" style="width:120px;padding:6px 8px">
+              <select id="pairs-state">
+                <option value="undecided">아직 안 고른 것</option>
+                <option value="decided">고른 것</option>
+                <option value="all">전부</option>
+              </select>
+              <button class="button" id="pairs-reload">새로고침</button>
+              <button class="button" id="pairs-more">더 보기</button>
+            </div>
+            <span class="badge" id="pairs-badge">-</span>
+          </div>
+          <p class="work-state" id="pairs-state-line">불러오는 중…</p>
+          <div id="pairs-list"></div>
+          <p class="help" id="pairs-health">후보는 배치(<code>worklog pairs --apply</code>)가 만듭니다.
+             이 화면은 만들지 않고 고르기만 합니다 — 그래야 「고를 때 실제로 뭘 봤는지」가 나중에도 답이 됩니다.</p>
         </article>
       </section>
 
