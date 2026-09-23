@@ -649,3 +649,121 @@ def test_a_message_collected_twice_is_one_candidate():
                     "DELETE FROM ledger_records WHERE source_file = 'duptest'"
                 )
             connection.commit()
+
+
+@REQUIRES_DATABASE
+def test_one_message_reached_by_two_routes_is_one_candidate():
+    """The 66 that survived the previous fix.
+
+    Deduplicating the nearby query took answers with no proposal from 690 to
+    66. The rest had the same shape -- one surviving candidate carrying a rank
+    of 2 -- from the other direction: the message he replied to in a thread is
+    also, often, the message just before his reply, so the thread route and
+    the window route both offered it. Two entries, one message, one row: the
+    second overwrote the first and took the proposal with it.
+
+    The rule now lives in one place, before ranking, and keeps the stronger
+    claim: Slack's own thread link beats "this was nearby".
+
+    Mutation caught: drop the collapse in `add` and this answer comes back
+    with one candidate ranked 1 and no proposal.
+    """
+    import uuid
+
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    from rlwrld_worklog.blocks import pair_queue, propose_pairs
+    from rlwrld_worklog.ledger.load import apply_migrations
+
+    url = os.environ["WORKLOG_TEST_DATABASE_URL"]
+    apply_migrations(
+        database_url=url,
+        migrations_dir=__import__("pathlib").Path(__file__).resolve().parents[1]
+        / "sql"
+        / "migrations",
+        dry_run=False,
+    )
+    person = uuid.uuid4()
+
+    def write(cursor, entity, author, minute, text, parent=None):
+        fields = {
+            "ledger_id": uuid.uuid5(uuid.NAMESPACE_URL, f"both:{entity}"),
+            "schema_version": "v1",
+            "capture_profile": "p",
+            "source": "slack",
+            "entity_type": "message",
+            "tenant_workspace_id": "T",
+            "tenant_status": "observed",
+            "scope": Jsonb({"channel_id": "CBOTH"}),
+            "source_entity_id": f"T:CBOTH:{entity}",
+            "source_updated_at_status": "observed",
+            "deleted_status": "observed",
+            "raw_payload": Jsonb({"text": text}),
+            "content_hash": f"both-{entity}",
+            "relations": Jsonb({"author_user_id": author, "thread_id": parent}),
+            "source_file": "bothtest",
+            "source_file_sha256": "h",
+            "record_pointer": "p",
+            "legacy_layout_version": "v",
+            "converter_version": "v",
+            "observation_role": "current_head",
+            "capture_completeness_status": "recorded",
+            "source_created_at": START + timedelta(minutes=minute),
+            "collected_at": START,
+        }
+        cursor.execute(
+            f"INSERT INTO ledger_records ({','.join(fields)}) "
+            f"VALUES ({','.join('%s' for _ in fields)})",
+            list(fields.values()),
+        )
+
+    with psycopg.connect(url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM answer_pairs WHERE channel = 'CBOTH'")
+            cursor.execute("DELETE FROM ledger_records WHERE source_file = 'bothtest'")
+            cursor.execute("DELETE FROM org_identity WHERE value = 'UBOTH'")
+            cursor.execute(
+                "INSERT INTO roster_observation (observed_at, source, row_count) "
+                "VALUES (now(), 'roster_seed_2', 1) RETURNING observation_id"
+            )
+            observation = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO org_person (person_id, name, first_seen, last_seen) "
+                "VALUES (%s, '두경로테스트', %s, %s)",
+                (person, observation, observation),
+            )
+            cursor.execute(
+                "INSERT INTO org_identity (person_id, kind, value, first_seen, "
+                "last_seen, origin) VALUES (%s, 'slack', 'UBOTH', %s, %s, 'roster')",
+                (person, observation, observation),
+            )
+            # He replies in a thread to the message right before his own --
+            # the ordinary case, where both routes point at the same message.
+            write(cursor, "q", "UTHEM", 0, "이 건 어떻게 갈까요?")
+            write(cursor, "mine", "UBOTH", 1, "롤백 경로부터 잡죠.", parent="q")
+        connection.commit()
+
+    try:
+        propose_pairs(
+            url, str(person), names={"UBOTH": "HK", "UTHEM": "상대"}, apply=True
+        )
+        answer = pair_queue(url, str(person), limit=5)["answers"][0]
+        candidates = answer["candidates"]
+
+        assert len(candidates) == 1, (
+            "one message, however many routes found it: " f"{candidates}"
+        )
+        assert candidates[0]["basis"] == "thread", (
+            "the thread link is the stronger claim about what he answered"
+        )
+        assert candidates[0]["rank"] == 0
+        assert candidates[0]["proposed"]
+    finally:
+        with psycopg.connect(url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("DELETE FROM answer_pairs WHERE channel = 'CBOTH'")
+                cursor.execute(
+                    "DELETE FROM ledger_records WHERE source_file = 'bothtest'"
+                )
+            connection.commit()

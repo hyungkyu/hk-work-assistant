@@ -774,18 +774,41 @@ def propose_pairs(
             result.answers += 1
             candidates: list[dict[str, Any]] = []
 
+            # One message is one candidate, whichever route reached it.
+            #
+            # A candidate's id is derived from the message it points at, so
+            # two entries for one message do not become two rows -- the second
+            # overwrites the first, taking its rank with it, and an answer can
+            # end up with its proposal overwritten by a copy ranked behind it.
+            # 690 of his answers were in that state on 2026-09-22 because a
+            # re-collected message filled every slot; another 66 survived that
+            # fix, which is what a rule enforced in one place and not the
+            # other looks like.
+            #
+            # So the collapse happens here, deliberately and before ranking,
+            # rather than in the database by accident: the same message
+            # reached by the thread link and by the window is the thread one,
+            # because that is the stronger claim about what he was answering.
+            seen: dict[str, dict[str, Any]] = {}
+
             def add(basis: str, other_ts: str, author: Any, other_text: Any) -> None:
                 if not other_text or str(other_ts) == str(ts):
                     return
+                key = str(other_ts)
                 who = lookup.get(str(author), str(author or "누군가"))
-                candidates.append(
-                    {
-                        "basis": basis,
-                        "ts": str(other_ts),
-                        "text": f"{who}: {' '.join(str(other_text).split())}",
-                        "score": BASIS_SCORE[basis],
-                    }
-                )
+                candidate = {
+                    "basis": basis,
+                    "ts": key,
+                    "text": f"{who}: {' '.join(str(other_text).split())}",
+                    "score": BASIS_SCORE[basis],
+                }
+                previous = seen.get(key)
+                if previous is not None:
+                    if candidate["score"] <= previous["score"]:
+                        return
+                    candidates.remove(previous)
+                seen[key] = candidate
+                candidates.append(candidate)
 
             with connection.cursor() as cursor:
                 if parent_ts:
@@ -819,9 +842,8 @@ def propose_pairs(
                     # thing he answered, and a lot less certain once other
                     # people have spoken in between.
                     penalty = 0.05 * index
-                    before = len(candidates)
                     add("window", row[0], row[1], row[2])
-                    if len(candidates) > before:
+                    if candidates and candidates[-1]["ts"] == str(row[0]):
                         candidates[-1]["score"] -= penalty
 
             if not candidates:
