@@ -653,6 +653,22 @@ _NEARBY_SQL = """
      LIMIT %(nearby)s
 """
 
+# A rebuild replaces an answer's candidates rather than layering on top of
+# them. Without this, a candidate the current rules no longer offer stays in
+# the table with whatever rank it had last time -- and if it was the proposal,
+# the answer ends up with a proposal that is not among its candidates, or with
+# the proposal spread across two runs and effectively none at all. Seen on
+# 2026-09-22 as answers in the review queue where nothing was marked 제안.
+#
+# Rows a person decided on are kept. That is the one thing a rebuild must not
+# touch, and the reason this is a filtered delete and not a truncate.
+_PAIR_CLEAR_SQL = """
+    DELETE FROM answer_pairs
+     WHERE answer_ledger_id = %(answer_ledger_id)s
+       AND decided_at IS NULL
+       AND NOT chosen
+"""
+
 _PAIR_WRITE_SQL = """
     INSERT INTO answer_pairs (
         pair_id, person_id, answer_ledger_id, answer_text, answer_at, channel,
@@ -793,9 +809,20 @@ def propose_pairs(
 
             if not candidates:
                 result.answers_without_candidate += 1
+                if apply:
+                    with connection.cursor() as cursor:
+                        cursor.execute(
+                            _PAIR_CLEAR_SQL, {"answer_ledger_id": ledger_id}
+                        )
+                    connection.commit()
                 continue
 
             candidates.sort(key=lambda item: item["score"], reverse=True)
+            if apply:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        _PAIR_CLEAR_SQL, {"answer_ledger_id": ledger_id}
+                    )
             for rank, candidate in enumerate(candidates):
                 result.candidates += 1
                 result.by_basis[candidate["basis"]] = (
@@ -1025,4 +1052,79 @@ def agreement(database_url: str, person_id: str) -> dict[str, Any]:
         "agreement_rate": round(agreed / total, 3) if total else None,
         "none_of_these": int(none_of_these or 0),
         "chosen_basis": dict(sorted(chosen_basis.items())),
+    }
+
+
+# Why an answer can sit in the review queue with nothing marked 제안.
+#
+# Seen on HK's database on 2026-09-22 and not yet explained: several answers
+# whose only candidates were window matches, none of them the proposal. Every
+# path through propose_pairs marks rank 0, so a row set with no proposal did
+# not come from a single clean run of the current code. Rather than guess at
+# which older run produced it -- a guess presented as a finding being the most
+# expensive thing here -- this counts them and shows a few, so the next run
+# says whether the rebuild cleared it or whether there is a real hole.
+_PAIR_AUDIT_SQL = """
+    SELECT answer_ledger_id::text,
+           min(answer_text) AS answer_text,
+           min(answer_at) AS answer_at,
+           min(channel) AS channel,
+           count(*) AS candidates,
+           count(*) FILTER (WHERE proposed) AS proposals,
+           count(*) FILTER (WHERE chosen) AS chosen,
+           max(rank) AS top_rank
+      FROM answer_pairs
+     WHERE person_id = %(person_id)s
+     GROUP BY answer_ledger_id
+    HAVING count(*) FILTER (WHERE proposed) <> 1
+     ORDER BY min(answer_at) DESC
+     LIMIT %(limit)s
+"""
+
+_PAIR_AUDIT_COUNT_SQL = """
+    SELECT count(*) FILTER (WHERE proposals = 0) AS no_proposal,
+           count(*) FILTER (WHERE proposals > 1) AS many_proposals,
+           count(*) AS answers
+      FROM (
+          SELECT answer_ledger_id,
+                 count(*) FILTER (WHERE proposed) AS proposals
+            FROM answer_pairs
+           WHERE person_id = %(person_id)s
+           GROUP BY answer_ledger_id
+      ) AS per_answer
+"""
+
+
+def audit_pairs(
+    database_url: str, person_id: str, *, limit: int = 25
+) -> dict[str, Any]:
+    """Answers whose candidates do not carry exactly one proposal."""
+    import psycopg
+
+    with _needs_migration(), psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(_PAIR_AUDIT_COUNT_SQL, {"person_id": person_id})
+            no_proposal, many, answers = cursor.fetchone()
+            cursor.execute(
+                _PAIR_AUDIT_SQL, {"person_id": person_id, "limit": limit}
+            )
+            rows = cursor.fetchall()
+
+    return {
+        "answers": answers,
+        "no_proposal": no_proposal,
+        "many_proposals": many,
+        "examples": [
+            {
+                "answer_ledger_id": row[0],
+                "answer_text": (row[1] or "")[:120],
+                "answer_at": str(row[2] or ""),
+                "channel": row[3],
+                "candidates": row[4],
+                "proposals": row[5],
+                "chosen": row[6],
+                "top_rank": row[7],
+            }
+            for row in rows
+        ],
     }

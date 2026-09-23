@@ -560,6 +560,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="How often the proposal was the one he chose",
     )
+    pairs_parser.add_argument(
+        "--audit",
+        action="store_true",
+        help="Count answers whose candidates carry no proposal, and show a few. "
+        "A queue row with nothing marked 제안 means reviewing it from scratch",
+    )
     pairs_parser.add_argument("--limit", type=_positive_int, default=25)
 
     precedent = subparsers.add_parser(
@@ -1939,7 +1945,7 @@ def embed_command(args: argparse.Namespace) -> int:
 def pairs_command(args: argparse.Namespace) -> int:
     """Propose, review or measure the answer-to-question pairing."""
     from . import digest as digest_module
-    from .blocks import agreement, pair_queue, propose_pairs
+    from .blocks import agreement, audit_pairs, pair_queue, propose_pairs
 
     database_url = args.database_url or os.environ.get("DATABASE_URL")
     if not database_url:
@@ -1951,6 +1957,10 @@ def pairs_command(args: argparse.Namespace) -> int:
 
     if args.agreement:
         _print_json("pair_agreement", agreement(database_url, person_id))
+        return 0
+
+    if args.audit:
+        _print_json("pair_audit", audit_pairs(database_url, person_id, limit=args.limit))
         return 0
 
     if args.queue:
