@@ -442,3 +442,42 @@ def test_the_proposal_rate_is_shown_next_to_the_queue(html: str, script: str) ->
     assert "/api/v1/admin/voice/agreement" in script
     # A rate over zero decisions is an unanswered question, not 0%.
     assert "agreement_rate === null" in script
+
+
+def test_the_question_is_read_before_the_answer(script: str) -> None:
+    """HK, 2026-09-23: 질문/대답 순서로 해주면 좋겠어.
+
+    The order the exchange happened in, and not only for looks: reading his
+    answer first makes every candidate look plausible, because a question can
+    be fitted to an answer after the fact. Question first asks "was this the
+    one he was answering" instead of "could this have been".
+
+    So in the card the candidates are built and appended before his answer is.
+    """
+    card = script.split("function pairCard(")[1].split("async function choosePair")[0]
+    questions_at = card.index("questions.appendChild(row)")
+    answer_at = card.index("said.className = 'pair-answer'")
+    assert questions_at < answer_at, (
+        "his answer is being rendered above the candidate questions"
+    )
+    assert "'질문 후보'" in card and "'HK 의 답변'" in card, (
+        "each half is labelled; an unlabelled pair of blocks is a guess about "
+        "which is which"
+    )
+
+
+def test_a_recorded_decision_moves_a_number_on_screen(script: str) -> None:
+    """HK, 2026-09-23: 대답을 선택하고 있는데 제대로 되고 있는거야?
+
+    The screen was not answering that: the row vanished and a toast said so
+    for two seconds, and a dropped click would have looked identical. A count
+    that moves on every decision, and stays put, is the difference between
+    "it worked" and "it looked like it worked".
+    """
+    choose = script.split("async function choosePair(")[1].split("function renderPairCounts")[0]
+    assert "pairsState.decided += 1" in choose
+    assert "renderPairCounts()" in choose
+    # And it is updated only after the request came back, so a failed write
+    # never increments anything.
+    assert choose.index("await api(") < choose.index("pairsState.decided += 1")
+    assert "toast(`기록하지 못했습니다" in choose, "a failure says so"

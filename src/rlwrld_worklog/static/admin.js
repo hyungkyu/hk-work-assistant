@@ -2016,7 +2016,7 @@
     // click records agreement or a correction. Nothing here rebuilds the
     // candidates: a screen that regenerates what it is showing makes "what did
     // he actually see when he chose this" unanswerable afterwards.
-    const pairsState = { offset: 0, loading: false };
+    const pairsState = { offset: 0, loading: false, decided: 0, undecided: 0 };
 
     async function loadPairs({ reset = false } = {}) {
       const line = $('pairs-state-line');
@@ -2029,7 +2029,9 @@
         const payload = await api(`/api/v1/admin/voice/pairs?person_name=${person}`
           + `&state=${$('pairs-state').value}&limit=20&offset=${pairsState.offset}`);
         const counts = payload.counts || {};
-        $('pairs-badge').textContent = `고른 것 ${counts.decided || 0} · 남은 것 ${counts.undecided || 0}`;
+        pairsState.decided = counts.decided || 0;
+        pairsState.undecided = counts.undecided || 0;
+        renderPairCounts();
         const answers = payload.answers || [];
         answers.forEach((answer) => list.appendChild(pairCard(answer)));
         pairsState.offset += answers.length;
@@ -2100,10 +2102,21 @@
       }
       card.appendChild(head);
 
-      const said = document.createElement('p');
-      said.className = 'pair-answer';
-      said.textContent = answer.answer_text;
-      card.appendChild(said);
+      // HK, 2026-09-23: 질문/대답 순서로 해주면 좋겠어.
+      //
+      // Which is how the exchange actually happened, and it is not only
+      // cosmetic: reading the answer first makes every candidate look
+      // plausible, because a question can be invented to fit an answer after
+      // the fact. Question first, then what he said, asks the right question
+      // -- "was this the one he was answering" rather than "could this have
+      // been".
+      const questions = document.createElement('div');
+      questions.className = 'pair-questions';
+      const questionLabel = document.createElement('div');
+      questionLabel.className = 'pair-label';
+      questionLabel.textContent = '질문 후보';
+      questions.appendChild(questionLabel);
+      card.appendChild(questions);
 
       (answer.candidates || []).forEach((candidate) => {
         const row = document.createElement('div');
@@ -2125,7 +2138,7 @@
         pick.textContent = candidate.proposed ? '맞음' : '이게 질문';
         pick.addEventListener('click', () => choosePair(answer, candidate.pair_id));
         row.append(mark, text, basis, pick);
-        card.appendChild(row);
+        questions.appendChild(row);
       });
 
       const none = document.createElement('button');
@@ -2133,12 +2146,28 @@
       none.textContent = '해당 없음';
       none.title = '후보 중에 답하고 있던 질문이 없습니다. 이 답변은 큐에서 빠집니다.';
       none.addEventListener('click', () => choosePair(answer, null));
-      card.appendChild(none);
+      questions.appendChild(none);
+
+      const answerLabel = document.createElement('div');
+      answerLabel.className = 'pair-label';
+      answerLabel.textContent = 'HK 의 답변';
+      card.appendChild(answerLabel);
+      const said = document.createElement('p');
+      said.className = 'pair-answer';
+      said.textContent = answer.answer_text;
+      card.appendChild(said);
 
       if (answer.decided) card.classList.add('decided');
       return card;
     }
 
+    // HK, 2026-09-23: 대답을 선택하고 있는데 제대로 되고 있는거야?
+    //
+    // A fair question, and the screen was not answering it: the row vanished
+    // and a toast said so for two seconds. Vanishing is what a dropped click
+    // would look like too. So the running count of what has been decided is
+    // updated on every decision and stays on screen -- if it does not move,
+    // nothing was recorded, and that is visible without asking.
     async function choosePair(answer, pairId) {
       const card = document.querySelector(`.pair[data-answer="${answer.answer_ledger_id}"]`);
       try {
@@ -2149,11 +2178,19 @@
         // Removed from the list rather than re-fetched: re-fetching would
         // renumber everything under his cursor mid-review.
         if (card) card.remove();
+        pairsState.decided += 1;
+        if (pairsState.undecided > 0) pairsState.undecided -= 1;
+        renderPairCounts();
         toast(pairId ? '기록했습니다.' : '해당 없음으로 기록했습니다.');
         loadPairsHealth(encodeURIComponent($('pairs-person').value.trim()));
       } catch (error) {
         toast(`기록하지 못했습니다: ${error.message}`, true);
       }
+    }
+
+    function renderPairCounts() {
+      $('pairs-badge').textContent =
+        `고른 것 ${pairsState.decided} · 남은 것 ${pairsState.undecided}`;
     }
 
 

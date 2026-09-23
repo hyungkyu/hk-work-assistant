@@ -175,7 +175,9 @@
     .pair-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 8px; }
     .pair-when { color: var(--muted); font-size: 12px; }
     .pair-link { color: var(--accent-2); font-size: 12px; text-decoration: none; }
-    .pair-answer { margin: 0 0 12px; font-size: 15px; line-height: 1.55; }
+    .pair-label { color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; margin: 2px 0 6px; }
+    .pair-questions { margin-bottom: 14px; }
+    .pair-answer { margin: 0; font-size: 15px; line-height: 1.55; border-left: 2px solid var(--accent); padding-left: 12px; }
     .pair-candidate { display: grid; grid-template-columns: 34px 1fr auto auto; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); margin-bottom: 6px; }
     .pair-candidate.proposed { outline: 1px solid var(--accent); }
     .pair-candidate.chosen { outline: 1px solid var(--accent-2); }
