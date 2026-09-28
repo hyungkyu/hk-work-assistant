@@ -307,3 +307,149 @@ def test_the_seed_list_is_not_a_setting(tmp_path: Path) -> None:
     stored = json.loads(store.notion_seeds_path.read_text(encoding="utf-8"))
     assert stored["seeds"][0]["added_by"] == "hk"
     assert stored["seeds"][0]["added_at"]
+
+
+# --------------------------------------------------------------- 북마크
+# HK, 2026-09-28: 북마크를 만들자. 사내 주요 시스템에 접근하기 위함이야.
+
+
+def test_a_fresh_install_opens_on_a_grouped_list_not_an_empty_one(
+    tmp_path: Path,
+) -> None:
+    """An empty bookmark screen teaches nobody where anything is."""
+    store = AdminStore(tmp_path / "config")
+    assert not store.bookmarks_path.exists()
+    groups = [(group["group"], len(group["bookmarks"])) for group in store.bookmark_groups()]
+    assert groups == [("인프라", 2), ("협업 도구", 4), ("문서", 1)]
+    assert [entry["label"] for entry in store.bookmark_groups()[0]["bookmarks"]] == [
+        "GPU",
+        "스토리지 (foundary)",
+    ]
+
+
+def test_every_seeded_bookmark_passes_the_same_check_a_typed_one_does(
+    tmp_path: Path,
+) -> None:
+    """A seed is not exempt from the address rule -- it is just typed earlier.
+
+    Catches a seed added later with a bare host or a `notion://` scheme: the
+    screen would draw it as unopenable text and nobody would know why.
+    """
+    seen: set[str] = set()
+    for entry in AdminStore.SEEDED_BOOKMARKS:
+        assert AdminStore._clean_bookmark_url(entry["url"]) == entry["url"]
+        assert entry["id"] not in seen and entry["url"] not in seen
+        seen.update({entry["id"], entry["url"]})
+        assert entry["label"] and entry["group"]
+
+
+def test_deleting_a_seeded_bookmark_stays_deleted(tmp_path: Path) -> None:
+    """The seeds are the file's first content, not a floor under it.
+
+    Without this, `load_bookmarks` would hand the defaults back every time
+    the file happened to be shorter than the seed list and a removal would
+    silently undo itself on the next page load.
+    """
+    store = AdminStore(tmp_path / "config")
+    assert store.remove_bookmark("bm_infra_gpu") is True
+    assert "bm_infra_gpu" not in [entry["id"] for entry in store.load_bookmarks()]
+    # And emptying it entirely leaves it empty. This is the half that catches
+    # `return bookmarks or SEEDED`: a falsy list must stay falsy, or the two
+    # seeds come back the next time the screen is opened.
+    for entry in list(store.load_bookmarks()):
+        assert store.remove_bookmark(entry["id"]) is True
+    assert store.load_bookmarks() == []
+    assert AdminStore(tmp_path / "config").load_bookmarks() == []
+    assert AdminStore(tmp_path / "config").bookmark_groups() == []
+
+
+def test_a_bookmark_that_is_not_an_http_address_is_refused(tmp_path: Path) -> None:
+    """The page turns this value into an href, so a scheme is not cosmetic.
+
+    Catches the mutation that accepts any string: `javascript:` stored here
+    would run in the next super-admin's session, every time the screen loads.
+    """
+    store = AdminStore(tmp_path / "config")
+    before = len(store.load_bookmarks())
+    for bad in ("javascript:alert(1)", "data:text/html,<b>", "ftp://host/x", "  ", "/relative"):
+        with pytest.raises(ValueError):
+            store.add_bookmark(bad, label="나쁜 것", group="시험")
+    assert len(store.load_bookmarks()) == before
+
+
+def test_bookmarks_keep_the_order_they_were_added_in(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "config")
+    store.add_bookmark("https://a.example/", label="A", group="제품")
+    store.add_bookmark("https://b.example/", label="B", group="인프라")
+    store.add_bookmark("https://c.example/", label="C", group="제품")
+    groups = {group["group"]: group["bookmarks"] for group in store.bookmark_groups()}
+    # A new group appears after the seeded ones, in the order it was created.
+    assert [group["group"] for group in store.bookmark_groups()][-1] == "제품"
+    assert [entry["label"] for entry in groups["제품"]] == ["A", "C"]
+    assert [entry["label"] for entry in groups["인프라"]][-1] == "B"
+
+
+def test_the_same_address_is_not_registered_twice(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "config")
+    store.add_bookmark("https://a.example/", label="A", group="제품")
+    with pytest.raises(ValueError):
+        store.add_bookmark("https://a.example/", label="다른 이름", group="인프라")
+
+
+def test_a_bookmark_with_no_name_is_shown_by_its_address(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "config")
+    entry = store.add_bookmark("https://a.example/x", group="제품")
+    assert entry["label"] == "https://a.example/x"
+    assert entry["group"] == "제품"
+
+
+def test_a_bookmark_with_no_group_lands_somewhere_visible(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "config")
+    entry = store.add_bookmark("https://a.example/x", label="A")
+    assert entry["group"] == "기타"
+
+
+def test_editing_a_bookmark_changes_only_the_fields_that_were_sent(
+    tmp_path: Path,
+) -> None:
+    store = AdminStore(tmp_path / "config")
+    entry = store.add_bookmark("https://a.example/", label="A", group="제품", note="메모")
+    updated = store.update_bookmark(entry["id"], {"group": "인프라"})
+    assert updated["group"] == "인프라"
+    assert updated["label"] == "A"
+    assert updated["url"] == "https://a.example/"
+    assert updated["note"] == "메모"
+    with pytest.raises(ValueError):
+        store.update_bookmark(entry["id"], {"url": "javascript:alert(1)"})
+    with pytest.raises(ValueError):
+        store.update_bookmark(entry["id"], {"colour": "red"})
+    with pytest.raises(KeyError):
+        store.update_bookmark("bm_nope", {"label": "X"})
+
+
+def test_every_bookmark_change_is_in_the_audit_trail(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "config")
+    entry = store.add_bookmark("https://a.example/", label="A", group="제품", actor="hk")
+    store.update_bookmark(entry["id"], {"label": "B"}, actor="hk")
+    store.remove_bookmark(entry["id"], actor="hk")
+    actions = [line["action"] for line in store.read_audit(limit=10)]
+    assert {"bookmark.added", "bookmark.updated", "bookmark.removed"} <= set(actions)
+
+
+def test_the_bookmark_file_is_written_readable_only_by_its_owner(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "config")
+    store.add_bookmark("https://a.example/", label="A", group="제품")
+    mode = stat.S_IMODE(store.bookmarks_path.stat().st_mode)
+    assert mode == 0o600
+    stored = json.loads(store.bookmarks_path.read_text(encoding="utf-8"))
+    assert [entry["label"] for entry in stored["bookmarks"]][-1] == "A"
+
+
+def test_a_malformed_bookmark_row_is_skipped_not_fatal(tmp_path: Path) -> None:
+    store = AdminStore(tmp_path / "config")
+    store.bookmarks_path.write_text(
+        json.dumps({"bookmarks": [{"id": "x"}, {"url": "https://a.example/"},
+                                  {"id": "y", "url": "https://b.example/"}]}),
+        encoding="utf-8",
+    )
+    assert [entry["id"] for entry in store.load_bookmarks()] == ["y"]

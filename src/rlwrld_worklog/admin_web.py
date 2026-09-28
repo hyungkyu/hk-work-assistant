@@ -530,6 +530,78 @@ def delete_notion_seed(page_id: str, request: Request) -> dict[str, Any]:
     return {"seeds": store().load_notion_seeds()}
 
 
+def require_reader_session(request: Request) -> dict[str, Any]:
+    """Anyone who works here may read the bookmark list.
+
+    A bookmark is an address, not a secret, and the point of the screen is
+    that everyone opens the same one. `/collection/*` being super-admin-only
+    is the mistake this avoids repeating -- an agent that cannot see the
+    address reasons about the system from memory instead.
+    """
+    current = _session(request)
+    if current is None:
+        raise HTTPException(status_code=401, detail="login required")
+    if current.get("role") not in {"super_admin", "company_user", "agent"}:
+        raise HTTPException(status_code=403, detail="backoffice access required")
+    return current
+
+
+@router.get("/api/v1/admin/bookmarks")
+def get_bookmarks(request: Request) -> dict[str, Any]:
+    require_reader_session(request)
+    return {"groups": store().bookmark_groups(), "bookmarks": store().load_bookmarks()}
+
+
+@router.post("/api/v1/admin/bookmarks")
+async def post_bookmark(request: Request) -> dict[str, Any]:
+    """Register one company system under a group.
+
+    The address is validated here rather than when it is clicked: a bad
+    scheme refused while somebody is looking at the field costs a sentence,
+    and the same value stored costs a script in a super-admin's session.
+    """
+    current = require_super_admin_session(request)
+    _require_csrf(request, current)
+    body = await _json_object(request)
+    try:
+        bookmark = store().add_bookmark(
+            str(body.get("url", "")),
+            label=str(body.get("label", "")),
+            group=str(body.get("group", "")),
+            note=str(body.get("note", "")),
+            actor=session_actor(current),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"bookmark": bookmark, "groups": store().bookmark_groups()}
+
+
+@router.put("/api/v1/admin/bookmarks/{bookmark_id}")
+async def put_bookmark(bookmark_id: str, request: Request) -> dict[str, Any]:
+    current = require_super_admin_session(request)
+    _require_csrf(request, current)
+    body = await _json_object(request)
+    changes = {key: body[key] for key in ("group", "label", "url", "note") if key in body}
+    try:
+        bookmark = store().update_bookmark(
+            bookmark_id, changes, actor=session_actor(current)
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="no such bookmark") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"bookmark": bookmark, "groups": store().bookmark_groups()}
+
+
+@router.delete("/api/v1/admin/bookmarks/{bookmark_id}")
+def delete_bookmark(bookmark_id: str, request: Request) -> dict[str, Any]:
+    current = require_super_admin_session(request)
+    _require_csrf(request, current)
+    if not store().remove_bookmark(bookmark_id, actor=session_actor(current)):
+        raise HTTPException(status_code=404, detail="no such bookmark")
+    return {"groups": store().bookmark_groups()}
+
+
 @router.put("/api/v1/admin/secrets/{name}")
 async def put_secret(name: str, request: Request) -> dict[str, Any]:
     current = require_super_admin_session(request)

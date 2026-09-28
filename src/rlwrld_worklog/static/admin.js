@@ -273,6 +273,158 @@
       } catch (error) { state_line.textContent = error.message; }
     }
 
+    // ------------------------------------------------------------- 북마크
+    // Addresses of the company systems, grouped. The list is small and its
+    // order is the order he put it in, so the screen never re-sorts it: a
+    // link that moves under the cursor is worse than a list that is untidy.
+    const bookmarkState = { editing: null, groups: [] };
+
+    // The store already refuses anything but http(s); this repeats the check
+    // at the point the href is set, so a value that somehow got into the file
+    // by hand cannot become a link either.
+    function safeBookmarkURL(value) {
+      const url = String(value || '').trim();
+      return /^https?:\/\//i.test(url) ? url : null;
+    }
+
+    function bookmarkFormMode() {
+      const editing = bookmarkState.editing;
+      $('bookmark-mode-badge').textContent = editing ? '수정 중' : '새 북마크';
+      $('bookmark-save').textContent = editing ? '수정 저장' : '추가';
+      $('bookmark-cancel').hidden = !editing;
+    }
+
+    function resetBookmarkForm() {
+      bookmarkState.editing = null;
+      ['bookmark-group', 'bookmark-label', 'bookmark-url', 'bookmark-note'].forEach((id) => { $(id).value = ''; });
+      $('bookmark-form-state').textContent = '';
+      bookmarkFormMode();
+    }
+
+    function startBookmarkEdit(bookmark) {
+      bookmarkState.editing = bookmark.id;
+      $('bookmark-group').value = bookmark.group || '';
+      $('bookmark-label').value = bookmark.label || '';
+      $('bookmark-url').value = bookmark.url || '';
+      $('bookmark-note').value = bookmark.note || '';
+      $('bookmark-form-state').textContent = '';
+      bookmarkFormMode();
+      $('bookmark-label').focus();
+    }
+
+    function renderBookmarkGroups(groups) {
+      const host = $('bookmark-list');
+      host.textContent = '';
+      const known = $('bookmark-groups');
+      known.textContent = '';
+      groups.forEach((group) => {
+        const option = document.createElement('option');
+        option.value = group.group;
+        known.appendChild(option);
+
+        const card = document.createElement('article');
+        card.className = 'card';
+        const header = document.createElement('div');
+        header.className = 'card-header';
+        const title = document.createElement('h2');
+        title.textContent = group.group;
+        const count = document.createElement('span');
+        count.className = 'badge';
+        count.textContent = `${group.bookmarks.length}개`;
+        header.appendChild(title); header.appendChild(count);
+        card.appendChild(header);
+
+        group.bookmarks.forEach((bookmark) => {
+          const row = document.createElement('div');
+          row.className = 'bookmark-row';
+          const left = document.createElement('div');
+          const href = safeBookmarkURL(bookmark.url);
+          // A row whose address is not http(s) is shown, not hidden: the
+          // operator needs to see the bad entry in order to fix it.
+          const link = document.createElement(href ? 'a' : 'span');
+          link.className = 'bookmark-link';
+          link.textContent = bookmark.label || bookmark.url;
+          if (href) { link.href = href; link.target = '_blank'; link.rel = 'noopener noreferrer'; }
+          left.appendChild(link);
+          const address = document.createElement('div');
+          address.className = 'bookmark-address';
+          address.textContent = href ? bookmark.url : `${bookmark.url} — 열 수 없는 주소입니다`;
+          left.appendChild(address);
+          if (bookmark.note) {
+            const note = document.createElement('div');
+            note.className = 'bookmark-note';
+            note.textContent = bookmark.note;
+            left.appendChild(note);
+          }
+          row.appendChild(left);
+
+          const actions = document.createElement('div');
+          actions.className = 'bookmark-actions';
+          const edit = document.createElement('button');
+          edit.className = 'button'; edit.textContent = '수정';
+          edit.addEventListener('click', () => startBookmarkEdit(bookmark));
+          const remove = document.createElement('button');
+          remove.className = 'button danger'; remove.textContent = '삭제';
+          remove.addEventListener('click', async () => {
+            remove.disabled = true;
+            try {
+              const body = await api(`/api/v1/admin/bookmarks/${encodeURIComponent(bookmark.id)}`, { method: 'DELETE' });
+              if (bookmarkState.editing === bookmark.id) resetBookmarkForm();
+              bookmarkState.groups = body.groups || [];
+              renderBookmarkGroups(bookmarkState.groups);
+              $('bookmark-state').textContent = bookmarkCount(bookmarkState.groups);
+            } catch (error) { $('bookmark-state').textContent = error.message; remove.disabled = false; }
+          });
+          actions.appendChild(edit); actions.appendChild(remove);
+          row.appendChild(actions);
+          card.appendChild(row);
+        });
+        host.appendChild(card);
+      });
+    }
+
+    function bookmarkCount(groups) {
+      const total = groups.reduce((sum, group) => sum + group.bookmarks.length, 0);
+      return total ? `${groups.length}개 그룹 · ${total}개 주소` : '등록된 북마크가 없습니다. 위에서 추가하세요.';
+    }
+
+    async function loadBookmarks() {
+      try {
+        const body = await api('/api/v1/admin/bookmarks');
+        bookmarkState.groups = body.groups || [];
+        renderBookmarkGroups(bookmarkState.groups);
+        $('bookmark-state').textContent = bookmarkCount(bookmarkState.groups);
+      } catch (error) { $('bookmark-state').textContent = error.message; }
+    }
+
+    async function saveBookmark() {
+      const payload = {
+        group: $('bookmark-group').value,
+        label: $('bookmark-label').value,
+        url: $('bookmark-url').value,
+        note: $('bookmark-note').value,
+      };
+      if (!payload.url.trim()) { $('bookmark-form-state').textContent = '주소가 필요합니다.'; return; }
+      const editing = bookmarkState.editing;
+      $('bookmark-save').disabled = true;
+      try {
+        const body = editing
+          ? await api(`/api/v1/admin/bookmarks/${encodeURIComponent(editing)}`, { method: 'PUT', body: JSON.stringify(payload) })
+          : await api('/api/v1/admin/bookmarks', { method: 'POST', body: JSON.stringify(payload) });
+        resetBookmarkForm();
+        bookmarkState.groups = body.groups || [];
+        renderBookmarkGroups(bookmarkState.groups);
+        $('bookmark-state').textContent = bookmarkCount(bookmarkState.groups);
+        toast(editing ? '북마크를 수정했습니다.' : '북마크를 추가했습니다.');
+      } catch (error) { $('bookmark-form-state').textContent = error.message; }
+      $('bookmark-save').disabled = false;
+    }
+
+    $('bookmark-save').addEventListener('click', saveBookmark);
+    $('bookmark-cancel').addEventListener('click', resetBookmarkForm);
+    $('bookmark-url').addEventListener('keydown', (event) => { if (event.key === 'Enter') saveBookmark(); });
+    $('bookmark-label').addEventListener('keydown', (event) => { if (event.key === 'Enter') saveBookmark(); });
+
     // 검색. Read-only, and every hit carries its provenance -- the table shows
     // source and kind next to the snippet so a reader can tell a Slack message
     // from a Notion page without opening anything.
@@ -1522,6 +1674,7 @@
       closeTimeline();
       stopWorkPolling();
       stopCollectionPolling();
+      if (page === 'bookmarks') loadBookmarks();
       if (page === 'search') { loadSearchCorpus(); }
       if (page === 'org') loadOrg();
       if (page === 'unmapped') loadUnmapped();

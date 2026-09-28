@@ -186,3 +186,11 @@
     .pair-text { color: var(--text); font-size: 13px; line-height: 1.5; overflow: hidden; }
     .pair-basis { color: var(--muted); font-size: 11px; white-space: nowrap; }
     .pair-none { margin-top: 4px; }
+    .bookmark-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 11px 0; border-bottom: 1px solid var(--line); }
+    .bookmark-row:last-child { border-bottom: 0; }
+    .bookmark-link { color: var(--text); text-decoration: none; font-size: 14px; display: block; }
+    .bookmark-link:hover { color: var(--accent-2); }
+    .bookmark-address { color: var(--muted); font-size: 11px; margin-top: 3px; word-break: break-all; }
+    .bookmark-note { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .bookmark-actions { display: flex; gap: 6px; }
+    .bookmark-actions .button { padding: 6px 10px; font-size: 12px; }

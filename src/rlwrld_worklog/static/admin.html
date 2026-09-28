@@ -12,6 +12,10 @@
       <div class="brand"><strong>HK Work Assistant</strong><span>Super-admin backoffice</span></div>
       <nav id="nav">
         <div class="nav-group">
+          <span class="nav-label">바로가기</span>
+          <button data-page="bookmarks">북마크</button>
+        </div>
+        <div class="nav-group">
           <span class="nav-label">업무</span>
           <button data-page="work" class="active">업무 현황</button>
           <button data-page="roadmap" disabled title="원본 시스템과 필드가 정해지면 활성화됩니다">로드맵</button>
@@ -48,6 +52,27 @@
     </aside>
 
     <main>
+      <section class="page" id="page-bookmarks">
+        <h1>북마크</h1>
+        <p class="lead">사내 주요 시스템 주소를 그룹으로 모아 둡니다. 여기에 등록한 것은 이 백오피스를 쓰는 사람과 에이전트가 모두 같은 주소로 봅니다.</p>
+        <section class="card" style="margin-bottom:16px">
+          <div class="card-header"><h2>등록</h2><span class="badge" id="bookmark-mode-badge">새 북마크</span></div>
+          <div class="form-grid">
+            <div class="field"><label for="bookmark-group">그룹</label><input id="bookmark-group" list="bookmark-groups" placeholder="인프라"><datalist id="bookmark-groups"></datalist></div>
+            <div class="field"><label for="bookmark-label">이름</label><input id="bookmark-label" placeholder="GPU"></div>
+            <div class="field full"><label for="bookmark-url">주소</label><input id="bookmark-url" placeholder="https://… 또는 http://…"></div>
+            <div class="field full"><label for="bookmark-note">메모 (선택)</label><input id="bookmark-note" placeholder="이 주소가 무엇인지 한 줄"></div>
+          </div>
+          <div class="actions">
+            <button class="button" id="bookmark-cancel" hidden>수정 취소</button>
+            <button class="button primary" id="bookmark-save">추가</button>
+          </div>
+          <p class="work-state" id="bookmark-form-state" style="margin:12px 0 0"></p>
+        </section>
+        <p class="work-state" id="bookmark-state">불러오는 중…</p>
+        <div class="grid" id="bookmark-list"></div>
+      </section>
+
       <section class="page" id="page-server">
         <h1>서버 상태</h1>
         <p class="lead">이 호스트에서 실제로 읽을 수 있는 값만 표시합니다. 읽을 수 없으면 불명이라고 적습니다.</p>

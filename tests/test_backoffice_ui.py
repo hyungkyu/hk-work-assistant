@@ -52,6 +52,10 @@ def test_the_menu_is_grouped_and_ordered_as_the_operator_asked() -> None:
         for block in groups
     ]
     assert parsed == [
+        # HK, 2026-09-28: 북마크를 만들자. 사내 주요 시스템에 접근하기 위함이야.
+        # First, and on its own, because it is the one screen opened to leave
+        # the backoffice rather than to read something in it.
+        ("바로가기", [("bookmarks", "북마크")]),
         ("업무", [("work", "업무 현황"), ("roadmap", "로드맵")]),
         # The org chart and the per-person day sit together, above 운영,
         # because they are what somebody opens to answer a question about a
@@ -481,3 +485,55 @@ def test_a_recorded_decision_moves_a_number_on_screen(script: str) -> None:
     # never increments anything.
     assert choose.index("await api(") < choose.index("pairsState.decided += 1")
     assert "toast(`기록하지 못했습니다" in choose, "a failure says so"
+
+
+def test_the_bookmark_screen_has_the_form_and_the_list(html: str, script: str) -> None:
+    """HK, 2026-09-28: 북마크를 만들자 … 잘 그루핑해줘."""
+    for marker in (
+        'id="page-bookmarks"',
+        'id="bookmark-group"',
+        'id="bookmark-groups"',
+        'id="bookmark-label"',
+        'id="bookmark-url"',
+        'id="bookmark-note"',
+        'id="bookmark-save"',
+        'id="bookmark-cancel"',
+        'id="bookmark-list"',
+        'id="bookmark-state"',
+    ):
+        assert marker in html, f"{marker} is missing from the bookmark screen"
+    assert "if (page === 'bookmarks') loadBookmarks();" in script
+    assert "await api('/api/v1/admin/bookmarks')" in script
+
+
+def test_a_bookmark_is_only_ever_linked_when_it_is_an_http_address(script: str) -> None:
+    """The store refuses the rest; this is the second place it is refused.
+
+    Catches the mutation that sets `link.href = bookmark.url` unconditionally
+    -- a `javascript:` row written into the file by hand would then run in a
+    super-admin's session on every load of the screen.
+    """
+    assert "function safeBookmarkURL" in script
+    assert "/^https?:\\/\\//i.test(url)" in script
+    render = script.split("function renderBookmarkGroups(")[1].split("function bookmarkCount(")[0]
+    assert "const href = safeBookmarkURL(bookmark.url);" in render
+    assert render.count("link.href") == 1
+    assert "if (href) { link.href = href;" in render
+    # A row it cannot link is still drawn, because a hidden bad entry is one
+    # nobody fixes.
+    assert "열 수 없는 주소입니다" in render
+
+
+def test_a_bookmark_opens_in_a_new_tab_without_handing_over_the_session(
+    script: str,
+) -> None:
+    render = script.split("function renderBookmarkGroups(")[1].split("function bookmarkCount(")[0]
+    assert "link.target = '_blank'" in render
+    assert "link.rel = 'noopener noreferrer'" in render
+
+
+def test_the_bookmark_routes_are_mounted() -> None:
+    from rlwrld_worklog.web import app
+
+    paths = set(app.openapi()["paths"])
+    assert {"/api/v1/admin/bookmarks", "/api/v1/admin/bookmarks/{bookmark_id}"} <= paths

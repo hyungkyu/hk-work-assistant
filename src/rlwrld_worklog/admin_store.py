@@ -91,6 +91,10 @@ class AdminStore:
         # that grows and shrinks, and each entry records when and by whom it
         # was added, which a flat settings map has no room for.
         self.notion_seeds_path = root / "notion-seeds.json"
+        # Same reason as the seed list, and one more: a bookmark is worth
+        # nothing if it is only in one person's browser. This file is what
+        # makes "the storage dashboard" mean the same address to everybody.
+        self.bookmarks_path = root / "bookmarks.json"
         self.audit_path = root / "audit.jsonl"
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.root.chmod(0o700)
@@ -529,6 +533,218 @@ class AdminStore:
         _atomic_private_write(
             self.notion_seeds_path,
             json.dumps({"seeds": seeds}, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        )
+
+    # ------------------------------------------------- 사내 시스템 북마크
+
+    MAX_BOOKMARKS = 300
+    MAX_BOOKMARK_URL = 2000
+    DEFAULT_BOOKMARK_GROUP = "기타"
+    # The addresses the screen starts with. They are the file's initial
+    # content, not a floor: every write below persists the whole list, so
+    # deleting or renaming one of these sticks. The two 인프라 entries are the
+    # ones the operator named; the rest are the systems this deployment is
+    # already configured against (Slack, Notion, the GitHub organisation), so
+    # the screen is useful on its first open rather than empty.
+    SEEDED_BOOKMARKS: tuple[dict[str, str], ...] = (
+        {
+            "id": "bm_infra_gpu",
+            "group": "인프라",
+            "label": "GPU",
+            "url": "http://infra-node:8888/",
+            "note": "",
+        },
+        {
+            "id": "bm_infra_storage",
+            "group": "인프라",
+            "label": "스토리지 (foundary)",
+            "url": (
+                "https://lightdash.tailadd0bc.ts.net/projects/"
+                "59d50c1e-87b1-4ced-b95d-c5322aeebc67/dashboards/"
+                "29c31d00-076e-47c8-9b84-5da3074c9bb9/view"
+            ),
+            "note": "Lightdash 대시보드",
+        },
+        {
+            "id": "bm_tool_slack",
+            "group": "협업 도구",
+            "label": "Slack",
+            "url": "https://rlwrld.slack.com/",
+            "note": "",
+        },
+        {
+            "id": "bm_tool_notion",
+            "group": "협업 도구",
+            "label": "Notion — RLWRLD AI HOME",
+            "url": "https://app.notion.com/p/1716cbdff6f680dca3a8d1b389ccb256",
+            "note": "워크스페이스 최상위",
+        },
+        {
+            "id": "bm_tool_github",
+            "group": "협업 도구",
+            "label": "GitHub — RLWRLD 조직",
+            "url": "https://github.com/RLWRLD",
+            "note": "제품별 저장소는 여기 아래에 하나씩 추가",
+        },
+        {
+            "id": "bm_tool_drive",
+            "group": "협업 도구",
+            "label": "Google Drive",
+            "url": "https://drive.google.com/",
+            "note": "",
+        },
+        {
+            "id": "bm_doc_roadmap",
+            "group": "문서",
+            "label": "Platform Team Roadmap",
+            "url": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+            "note": "로드맵 백오피스의 원본",
+        },
+    )
+
+    @staticmethod
+    def _clean_bookmark_url(value: str) -> str:
+        """Accept only an http(s) address, because the page turns this into a link.
+
+        A `javascript:` or `data:` value in this field would be a stored
+        script running in a super-admin's session, so the refusal is here --
+        at the moment it is typed -- rather than in the renderer alone.
+        """
+        url = (value or "").strip()
+        if not url:
+            raise ValueError("주소가 필요합니다")
+        if len(url) > AdminStore.MAX_BOOKMARK_URL:
+            raise ValueError(f"주소는 {AdminStore.MAX_BOOKMARK_URL}자를 넘을 수 없습니다")
+        lowered = url.lower()
+        if not (lowered.startswith("http://") or lowered.startswith("https://")):
+            raise ValueError("http:// 또는 https:// 로 시작하는 주소만 등록할 수 있습니다")
+        if any(character in url for character in ("\n", "\r", "\t", " ")):
+            raise ValueError("주소에 공백이나 줄바꿈이 들어 있습니다")
+        return url
+
+    @staticmethod
+    def _clean_bookmark_text(value: str, *, limit: int = 120) -> str:
+        return " ".join((value or "").split())[:limit]
+
+    def load_bookmarks(self) -> list[dict[str, Any]]:
+        """Links to the company systems, grouped, in the order they were added.
+
+        Order is insertion order and nothing else: a list somebody built by
+        hand should read back the way he built it, and re-sorting it on every
+        load would move a link out from under the click that was aimed at it.
+        """
+        if not self.bookmarks_path.exists():
+            return [dict(entry, added_at="", added_by="") for entry in self.SEEDED_BOOKMARKS]
+        stored = json.loads(self.bookmarks_path.read_text(encoding="utf-8"))
+        entries = stored.get("bookmarks") if isinstance(stored, dict) else stored
+        if not isinstance(entries, list):
+            raise RuntimeError("bookmarks.json must hold a list of bookmarks")
+        bookmarks: list[dict[str, Any]] = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry.get("id") or not entry.get("url"):
+                continue
+            bookmarks.append(
+                {
+                    "id": str(entry["id"]),
+                    "group": str(entry.get("group") or self.DEFAULT_BOOKMARK_GROUP),
+                    "label": str(entry.get("label") or ""),
+                    "url": str(entry["url"]),
+                    "note": str(entry.get("note") or ""),
+                    "added_at": str(entry.get("added_at") or ""),
+                    "added_by": str(entry.get("added_by") or ""),
+                }
+            )
+        return bookmarks
+
+    def bookmark_groups(self) -> list[dict[str, Any]]:
+        """The same list, bucketed, with the groups in first-seen order."""
+        groups: list[dict[str, Any]] = []
+        index: dict[str, dict[str, Any]] = {}
+        for bookmark in self.load_bookmarks():
+            name = bookmark["group"]
+            bucket = index.get(name)
+            if bucket is None:
+                bucket = {"group": name, "bookmarks": []}
+                index[name] = bucket
+                groups.append(bucket)
+            bucket["bookmarks"].append(bookmark)
+        return groups
+
+    def add_bookmark(
+        self,
+        url: str,
+        *,
+        label: str = "",
+        group: str = "",
+        note: str = "",
+        actor: str = "owner",
+    ) -> dict[str, Any]:
+        bookmarks = self.load_bookmarks()
+        if len(bookmarks) >= self.MAX_BOOKMARKS:
+            raise ValueError(f"북마크는 최대 {self.MAX_BOOKMARKS}개까지입니다")
+        clean_url = self._clean_bookmark_url(url)
+        if any(entry["url"] == clean_url for entry in bookmarks):
+            raise ValueError("이미 등록된 주소입니다")
+        entry = {
+            "id": f"bm_{secrets.token_hex(6)}",
+            "group": self._clean_bookmark_text(group, limit=60) or self.DEFAULT_BOOKMARK_GROUP,
+            "label": self._clean_bookmark_text(label) or clean_url,
+            "url": clean_url,
+            "note": self._clean_bookmark_text(note, limit=200),
+            "added_at": _utc_now(),
+            "added_by": actor,
+        }
+        bookmarks.append(entry)
+        self._write_bookmarks(bookmarks)
+        self.audit("bookmark.added", actor=actor, details={"id": entry["id"], "url": clean_url})
+        return entry
+
+    def update_bookmark(
+        self, bookmark_id: str, changes: Mapping[str, Any], *, actor: str = "owner"
+    ) -> dict[str, Any]:
+        bookmarks = self.load_bookmarks()
+        target = next((entry for entry in bookmarks if entry["id"] == bookmark_id), None)
+        if target is None:
+            raise KeyError(bookmark_id)
+        unknown = sorted(set(changes) - {"group", "label", "url", "note"})
+        if unknown:
+            raise ValueError(f"unknown bookmark fields: {', '.join(unknown)}")
+        if "url" in changes:
+            clean_url = self._clean_bookmark_url(str(changes["url"]))
+            if any(
+                entry["url"] == clean_url and entry["id"] != bookmark_id for entry in bookmarks
+            ):
+                raise ValueError("이미 등록된 주소입니다")
+            target["url"] = clean_url
+        if "group" in changes:
+            target["group"] = (
+                self._clean_bookmark_text(str(changes["group"]), limit=60)
+                or self.DEFAULT_BOOKMARK_GROUP
+            )
+        if "label" in changes:
+            target["label"] = self._clean_bookmark_text(str(changes["label"])) or target["url"]
+        if "note" in changes:
+            target["note"] = self._clean_bookmark_text(str(changes["note"]), limit=200)
+        self._write_bookmarks(bookmarks)
+        self.audit("bookmark.updated", actor=actor, details={"id": bookmark_id})
+        return target
+
+    def remove_bookmark(self, bookmark_id: str, *, actor: str = "owner") -> bool:
+        bookmarks = self.load_bookmarks()
+        remaining = [entry for entry in bookmarks if entry["id"] != bookmark_id]
+        if len(remaining) == len(bookmarks):
+            return False
+        self._write_bookmarks(remaining)
+        self.audit("bookmark.removed", actor=actor, details={"id": bookmark_id})
+        return True
+
+    def _write_bookmarks(self, bookmarks: list[dict[str, Any]]) -> None:
+        # sort_keys inside each entry only -- the list itself keeps its order,
+        # which is the order the operator put the links in.
+        _atomic_private_write(
+            self.bookmarks_path,
+            json.dumps({"bookmarks": bookmarks}, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
         )
 
     def audit(self, action: str, *, actor: str, details: Mapping[str, Any] | None = None) -> None:
