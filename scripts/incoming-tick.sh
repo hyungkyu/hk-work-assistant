@@ -23,12 +23,16 @@ started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 applied=0
 outcome="idle"
 detail=""
+# Which board items the applied patches named. Empty is a real state and is
+# reported as such -- see `unannounced` below.
+items=""
 
 finish() {
   mkdir -p incoming
-  printf '{"started_at":"%s","finished_at":"%s","outcome":"%s","applied":%d,"head":"%s","detail":%s}\n' \
+  printf '{"started_at":"%s","finished_at":"%s","outcome":"%s","applied":%d,"head":"%s","items":%s,"detail":%s}\n' \
     "$started" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$outcome" "$applied" \
     "$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" \
+    "$(printf '%s' "$items" | python3 -c 'import json,sys; print(json.dumps([w for w in sys.stdin.read().split() if w]))' 2>/dev/null || echo '[]')" \
     "$(printf '%s' "$detail" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo '""')" \
     > "$state"
   exit 0
@@ -82,6 +86,7 @@ if ! git fetch -q origin main || ! git merge -q --ff-only origin/main; then
   finish
 fi
 
+before=$(git rev-parse HEAD)
 for p in "${patches[@]}"; do
   if git am --3way "$p" >/dev/null 2>&1; then
     mv "$p" "incoming/applied/$(basename "$p")"
@@ -94,6 +99,26 @@ for p in "${patches[@]}"; do
     finish
   fi
 done
+
+# Which board items this landed against.
+#
+# HK, 2026-09-14: 주인업는 작업은 킬 하자. 네가 모르는 작업은 없어야해. Three
+# separate board items exist because I agreed to announce work before starting
+# it and then did not, three times -- a rule kept in memory is a rule that gets
+# kept when nothing is urgent. So the carrier reads it off the commits instead
+# of trusting anyone to remember: any `wi_<hex>` in the applied messages is
+# recorded here, and an empty list is a patch that arrived against nothing.
+#
+# Recorded, not refused. Refusing would stop the carrier over bookkeeping, and
+# a batch that blocks work to enforce a note about work is the wrong trade. The
+# board audit is where an empty list becomes a question somebody answers.
+items=$(git log --format=%B "$before"..HEAD 2>/dev/null \
+        | grep -oE 'wi_[0-9a-f]{8,}' | sort -u | paste -sd' ' -)
+if [ -z "$items" ]; then
+  unannounced=" (no board item named)"
+else
+  unannounced=""
+fi
 
 # Only a suite that actually ran counts. A missing interpreter is a reason
 # not to push, not a reason to push untested.
@@ -116,7 +141,7 @@ fi
 
 if git push -q origin main; then
   outcome="pushed"
-  detail=$(printf '%s' "$test_log" | tail -1)
+  detail="$(printf '%s' "$test_log" | tail -1)${unannounced}"
 else
   outcome="push-failed"
   detail="$applied patch(es) applied and green, but the push was refused"

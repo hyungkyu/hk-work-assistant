@@ -89,3 +89,92 @@ def test_an_empty_queue_is_not_reported_as_a_blockage(repo: Path):
     (repo / "a.txt").write_text("changed\n")
     found = _tick(repo)
     assert found["outcome"] == "idle"
+
+
+def _origin(repo: Path) -> None:
+    """A bare remote, so the tick gets past its fast-forward check."""
+    bare = repo.parent / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    _git(repo, "remote", "add", "origin", str(bare))
+    _git(repo, "push", "-q", "origin", "main")
+
+
+def _patch(repo: Path, name: str, message: str, line: str) -> None:
+    """A real patch file, made the way the cloud side makes them."""
+    work = repo.parent / "work"
+    if not work.exists():
+        subprocess.run(
+            ["git", "clone", "-q", str(repo.parent / "origin.git"), str(work)],
+            check=True,
+        )
+        _git(work, "config", "user.email", "t@t")
+        _git(work, "config", "user.name", "t")
+    (work / "b.txt").write_text(line)
+    _git(work, "add", "b.txt")
+    _git(work, "commit", "-qm", message)
+    subprocess.run(
+        ["git", "format-patch", "-1", "-o", str(repo / "incoming")],
+        cwd=work,
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_the_carrier_records_which_board_items_a_patch_named(repo: Path):
+    """HK, 2026-09-14: 주인업는 작업은 킬 하자. 네가 모르는 작업은 없어야해.
+
+    Three separate P0 items exist because I agreed to announce work on the
+    board before starting it and then did not, three times. A rule held in
+    memory is a rule kept only when nothing is urgent, so the carrier reads
+    it off the commits instead: any `wi_` id in the applied messages is
+    recorded, and the board audit can then ask about a patch that named
+    none.
+    """
+    _origin(repo)
+    (repo / "incoming").mkdir(exist_ok=True)
+    _patch(repo, "0001", "Do the thing\n\nRefs wi_1bda10e6938ed059", "b\n")
+
+    found = _tick(repo)
+
+    assert found["applied"] == 1
+    assert found["items"] == ["wi_1bda10e6938ed059"]
+
+
+def test_a_patch_that_named_no_item_says_so_instead_of_being_refused(repo: Path):
+    """Recorded, not blocked.
+
+    Refusing would stop the carrier over bookkeeping, and a batch that halts
+    work to enforce a note about work is the wrong trade -- especially this
+    one, where the person it would block is the person who forgot. So the
+    empty list is the signal, and it is in the same file everything else
+    about a tick is in.
+    """
+    _origin(repo)
+    (repo / "incoming").mkdir(exist_ok=True)
+    _patch(repo, "0001", "Do the thing with no item", "b\n")
+
+    found = _tick(repo)
+
+    assert found["applied"] == 1, "the patch still lands"
+    assert found["items"] == []
+
+
+def test_every_rule_that_cost_a_day_is_written_down_not_remembered():
+    """The three P0 items that said 「docs/agent-onboarding.md에 적는다」.
+
+    Each was created after I broke the rule, and each stayed open while I
+    agreed to it again. A rule that lives only in a conversation is a rule
+    the next session does not have, and this project runs sessions that
+    start cold by design.
+    """
+    doc = (
+        Path(__file__).resolve().parents[1] / "docs" / "agent-onboarding.md"
+    ).read_text(encoding="utf-8")
+    for rule in (
+        "Put the item on the board when you start",
+        "incoming/last-run.json` first",
+        "Measure a query that could be heavy before handing it over",
+        "does not use the production shape",
+        "count it",
+    ):
+        assert rule in doc, f"the rule about {rule!r} is only in somebody's memory"

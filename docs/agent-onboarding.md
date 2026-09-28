@@ -129,6 +129,50 @@ Nothing here is a substitute for reading the thing you are about to change.
   expensive thing you can produce here; this project has already lost days
   to a false green that reported `ok` while writing nothing.
 
+## The rules that exist because somebody broke them
+
+Every line here is a mistake that already happened on this project, written
+down because agreeing to remember it did not work. Three of them were agreed
+to and not recorded, and the board carried the same P0 item three times
+before this section existed — which is itself the argument for the section.
+
+* **Put the item on the board when you start, not when you finish.** Work
+  announced only on completion is work nobody could have redirected, and the
+  primary cannot report on what it does not know is happening. The carrier
+  now records which `wi_` ids the applied commits name (`items` in
+  `incoming/last-run.json`); an empty list is visible rather than refused,
+  because blocking a patch over bookkeeping is the wrong trade — but it is a
+  question somebody gets asked.
+
+* **"Fixed but still wrong" means read `incoming/last-run.json` first.**
+  Before theorising, check that the fix is actually running here. Twice the
+  answer was that the patch never applied — once it sat in
+  `incoming/failed/`, once the worktree was dirty and the carrier had been
+  refusing every tick for four hours. Both times the reasoning that followed
+  was about code that was not deployed.
+
+* **Measure a query that could be heavy before handing it over.** Not after
+  somebody runs it. The rule came from four incidents in one day, the worst
+  being a scoping query that would have taken twenty minutes before any work
+  began. `tests/test_embed_performance.py` is where the measurement lives;
+  when wall-clock cannot separate the good plan from the bad one at fixture
+  size, assert the plan instead (`EXPLAIN`, no `Seq Scan`) — that does not
+  depend on how big the fixture happens to be.
+
+* **A fixture that does not use the production shape tests a query that does
+  not exist.** Every Slack fixture wrote a bare timestamp into
+  `source_entity_id` while the converters write `workspace:channel:ts`. The
+  suite was green; the real run built 0 thread blocks out of 1,674 threads
+  and reported all 1,674 as missing their parent. Write ids, payloads and
+  duplicate observations the way the converters actually write them.
+
+* **When you cannot explain a number, count it — do not explain it.** 690
+  answers had no proposal. The first explanation was wrong, and its test
+  passed with the fix reverted. Adding `pairs --audit`, which reported the
+  *shape* of the wrongness (`candidates: 1, top_rank: 1`), found the cause in
+  one reading. A number that says how something is wrong beats an account of
+  why it might be.
+
 ## Where to read next
 
 | You need | Read |
