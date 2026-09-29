@@ -348,7 +348,7 @@ def test_explain_does_not_demand_a_range_it_does_not_use(monkeypatch, capsys):
     printed = capsys.readouterr().out
     assert "주간 리뷰" in printed
     assert "원장에만" in printed
-    assert "live-google-calendar-occurrences/v1" in printed
+    assert "occurrences" in printed
     # The third side, and which line is doubled on it.
     assert "다이제스트 2줄" in printed
     assert "중복" in printed
@@ -430,3 +430,87 @@ def test_explain_can_be_pointed_at_slack(monkeypatch, capsys):
     assert "슬랙" in printed
     assert "원장에만" in printed and "안녕" in printed
     assert "원본에만" in printed and "9.9" in printed
+
+
+def test_explain_lists_meetings_not_observations(monkeypatch, capsys):
+    """192 rows for 18 meetings, one of them repeated 42 times (09-23).
+
+    The ledger keeps every collection of a meeting on purpose, so a listing
+    that prints rows prints how often we looked rather than what was there --
+    and the question this command exists to answer is which meetings the two
+    sides disagree about. The raw count stays in the header so nothing is
+    hidden, and the repetition becomes a number on the line, because "seen 42
+    times" is worth noticing on its own.
+
+    It also says when one meeting was stored under two UTC offsets:
+    21:00-07:00 and 13:00+09:00 are the same moment, and leaving a reader to
+    work that out is how a listing built to stop a guess starts causing one.
+    """
+    from rlwrld_worklog import cli, digest, reconcile as reconcile_module
+
+    monkeypatch.setattr(
+        digest,
+        "resolve_people",
+        lambda url, names: {"resolved": {"x": "p_1"}, "unresolved": [], "ambiguous": {}},
+    )
+
+    def observation(profile: str, starts: str) -> dict:
+        return {
+            "key": "k1",
+            "entity_id": "k1",
+            "summary": "Model Team Weekly",
+            "starts": starts,
+            "capture_profile": profile,
+            "recurring_of": "weekly",
+            "status": "confirmed",
+        }
+
+    monkeypatch.setattr(
+        reconcile_module,
+        "explain_calendar_day",
+        lambda url, person, day, **kwargs: {
+            "day": day.isoformat(),
+            # One meeting, six observations, two offsets, two profiles.
+            "ledger": [
+                observation("live-google-calendar-events/v1", "2026-09-23T13:00:00+09:00"),
+                observation("live-google-calendar-events/v1", "2026-09-23T13:00:00+09:00"),
+                observation("live-google-calendar-occurrences/v1", "2026-09-23T13:00:00+09:00"),
+                observation("live-google-calendar-occurrences/v1", "2026-09-22T21:00:00-07:00"),
+                observation("live-google-calendar-events/v1", "2026-09-22T21:00:00-07:00"),
+                observation("live-google-calendar-occurrences/v1", "2026-09-23T13:00:00+09:00"),
+            ],
+            "source": [],
+            "ledger_only": ["k1"],
+            "source_only": [],
+            "digest": [],
+            "digest_repeats": [],
+            "source_measured": False,
+        },
+    )
+
+    class Args:
+        person_name = "x"
+        since = None
+        until = None
+        explain = "2026-09-23"
+        database_url = "postgresql://fake"
+        source = []
+        gaps_only = False
+        no_source_read = True
+
+    assert cli.reconcile_command(Args()) == 0
+    printed = capsys.readouterr().out
+
+    assert printed.count("Model Team Weekly") == 1, (
+        "one meeting is one line; six lines is a report about how often the "
+        f"collector ran:\n{printed}"
+    )
+    assert "원장 1건(관측 6행)" in printed, "both numbers, so neither is hidden"
+    assert "관측 6회" in printed
+    assert "오프셋 2종" in printed, (
+        "the same meeting under two UTC offsets is stated, not left to be "
+        "noticed"
+    )
+    # Both routes that saw it, since which one found a meeting is the thing
+    # that decides whether the occurrence sweep is earning its keep.
+    assert "events+occurrences" in printed
