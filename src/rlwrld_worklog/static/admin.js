@@ -1747,6 +1747,7 @@
       stopCollectionPolling();
       if (page === 'bookmarks') loadBookmarks();
       if (page === 'roadmap') loadRoadmap();
+      if (page === 'mapping') loadMapping();
       if (page === 'search') { loadSearchCorpus(); }
       if (page === 'org') loadOrg();
       if (page === 'unmapped') loadUnmapped();
@@ -2622,6 +2623,14 @@
 
     function roadmapItemNode(item) {
       const text = rmEl('span', { className: 'tx', text: rmL(item.t) });
+      // The Korean moved and the other two languages did not. Said on the row
+      // rather than left to read as current.
+      if (item.stale && roadmapState.lang !== 'ko') {
+        text.appendChild(document.createTextNode(' '));
+        text.appendChild(rmEl('span', {
+          className: 'badge wait', text: rmU('staleTag'), title: rmU('staleHint'),
+        }));
+      }
       text.appendChild(document.createTextNode(' '));
       text.appendChild(roadmapLink(item.src, rmU('origin')));
       text.appendChild(roadmapLink(item.det, rmU('detail')));
@@ -2847,7 +2856,249 @@
     $('roadmap-team').addEventListener('change', function () {
       roadmapState.team = this.value; renderRoadmap();
     });
+
+    $('roadmap-refresh').addEventListener('click', async function () {
+      const label = this.textContent;
+      this.disabled = true; this.textContent = rmU('refreshing');
+      try {
+        const result = await api('/api/v1/admin/roadmap/refresh', { method: 'POST', body: '{}' });
+        const moved = result.added + result.changed + result.removed;
+        // The screen is now behind the database either way, so it re-reads.
+        roadmapState.data = null; mappingState.data = null;
+        await loadRoadmap();
+        toast(moved
+          ? `${rmU('changed')}: 추가 ${result.added} · 변경 ${result.changed} · 삭제 ${result.removed}`
+          : rmU('nochange'));
+      } catch (error) {
+        toast(error.message, true);
+      } finally {
+        this.disabled = false; this.textContent = label;
+      }
+    });
     $('roadmap-history-open').addEventListener('click', () => $('roadmap-drawer').classList.remove('hidden'));
     $('roadmap-history-close').addEventListener('click', () => $('roadmap-drawer').classList.add('hidden'));
+
+    // -------------------------------------------------------- 로드맵 매핑
+    // What a roadmap row *is* -- its product, whether it is development or
+    // operations, which horizon it sits in -- is decided here. Every edit
+    // raises an override flag, and that flag is what stops the next refresh
+    // from putting the automatic answer back.
+    const mappingState = { data: null, q: '', team: '', onlyEdited: false };
+
+    function mapSelect(options, value, onChange, { blank } = {}) {
+      const select = document.createElement('select');
+      select.style.width = 'auto';
+      select.style.minWidth = '120px';
+      if (blank) select.appendChild(rmEl('option', { text: blank }));
+      options.forEach((option) => {
+        const node = rmEl('option', { text: option.label });
+        node.value = option.value;
+        select.appendChild(node);
+      });
+      select.value = value == null ? '' : String(value);
+      select.addEventListener('change', () => onChange(select.value, select));
+      return select;
+    }
+
+    function mapInput(value, onCommit) {
+      const input = document.createElement('input');
+      input.value = value || '';
+      input.style.minWidth = '160px';
+      const commit = () => { if (input.value !== (value || '')) onCommit(input.value, input); };
+      input.addEventListener('change', commit);
+      return input;
+    }
+
+    function mapResult(id, message, failed) {
+      const node = $(id);
+      node.className = `result${failed ? ' error' : ' ok'}`;
+      node.textContent = message;
+    }
+
+    async function loadMapping() {
+      try {
+        mappingState.data = await api('/api/v1/admin/roadmap/mapping');
+      } catch (error) {
+        mapResult('mapping-product-result', error.message, true);
+        return;
+      }
+      renderMapping();
+    }
+
+    async function saveProduct(id, changes, label) {
+      try {
+        await api(`/api/v1/admin/roadmap/products/${id}`, {
+          method: 'PATCH', body: JSON.stringify(changes),
+        });
+        mapResult('mapping-product-result', `${label} 저장됨`);
+        await loadMapping();
+      } catch (error) {
+        mapResult('mapping-product-result', error.message, true);
+        await loadMapping();
+      }
+    }
+
+    async function saveItem(key, changes, label) {
+      try {
+        await api(`/api/v1/admin/roadmap/items/${encodeURIComponent(key)}`, {
+          method: 'PATCH', body: JSON.stringify(changes),
+        });
+        mapResult('mapping-item-result', `${label} 저장됨 — 이 칸은 이제 현행화가 건드리지 않습니다`);
+        // The roadmap screen is now behind; make it re-read rather than show
+        // a value the database no longer holds.
+        roadmapState.data = null;
+        await loadMapping();
+      } catch (error) {
+        mapResult('mapping-item-result', error.message, true);
+        await loadMapping();
+      }
+    }
+
+    function renderMapping() {
+      const data = mappingState.data;
+      if (!data) return;
+      const familyOptions = data.families.map((f) => ({ value: f.id, label: f.label.ko }));
+      const teamOptions = data.teams.map((t) => ({ value: t.id, label: t.label.ko }));
+      const productOptions = data.products
+        .map((p) => ({ value: String(p.id), label: p.name }))
+        .sort((a, b) => a.label.localeCompare(b.label));
+      const teamLabel = {};
+      data.teams.forEach((t) => { teamLabel[t.id] = t.label.ko; });
+      const productName = {};
+      data.products.forEach((p) => { productName[p.id] = p.name; });
+
+      // --- products
+      const products = rmClear($('mapping-products'));
+      data.products.forEach((product) => {
+        const row = document.createElement('tr');
+        row.appendChild(rmEl('td', {}, [
+          mapInput(product.name, (value) => saveProduct(product.id, { name: value }, product.name)),
+        ]));
+        row.appendChild(rmEl('td', {}, [
+          mapSelect(familyOptions, product.family_id,
+            (value) => saveProduct(product.id, { family_id: value }, product.name)),
+        ]));
+        row.appendChild(rmEl('td', {}, [
+          mapSelect(teamOptions, product.owner_team_id,
+            (value) => saveProduct(product.id, { owner_team_id: value }, product.name)),
+        ]));
+        row.appendChild(rmEl('td', {}, [
+          mapInput(product.detail_url, (value) =>
+            saveProduct(product.id, { detail_url: value || null }, product.name)),
+        ]));
+        row.appendChild(rmEl('td', {
+          text: product.teams.map((id) => teamLabel[id] || id).join(', ') || '—',
+        }));
+        row.appendChild(rmEl('td', { text: `${product.items} (개발 ${product.dev} · 운영 ${product.ops})` }));
+
+        const remove = rmEl('button', { className: 'button danger', text: '삭제' });
+        // Refused server-side too; disabling it here just says why in advance.
+        remove.disabled = product.items > 0;
+        if (remove.disabled) remove.title = '이 제품을 쓰는 항목이 남아 있습니다';
+        remove.addEventListener('click', async () => {
+          try {
+            await api(`/api/v1/admin/roadmap/products/${product.id}`, { method: 'DELETE' });
+            mapResult('mapping-product-result', `${product.name} 삭제됨`);
+            await loadMapping();
+          } catch (error) {
+            mapResult('mapping-product-result', error.message, true);
+          }
+        });
+        row.appendChild(rmEl('td', {}, [remove]));
+        products.appendChild(row);
+      });
+      $('mapping-product-count').textContent = String(data.products.length);
+
+      const newFamily = rmClear($('mapping-new-family'));
+      familyOptions.forEach((option) => {
+        const node = rmEl('option', { text: option.label }); node.value = option.value;
+        newFamily.appendChild(node);
+      });
+      const newTeam = rmClear($('mapping-new-team'));
+      teamOptions.forEach((option) => {
+        const node = rmEl('option', { text: option.label }); node.value = option.value;
+        newTeam.appendChild(node);
+      });
+
+      const filterTeam = rmClear($('mapping-filter-team'));
+      filterTeam.appendChild(rmEl('option', { text: '전체 팀' }));
+      teamOptions.forEach((option) => {
+        const node = rmEl('option', { text: option.label }); node.value = option.value;
+        filterTeam.appendChild(node);
+      });
+      filterTeam.value = mappingState.team;
+
+      // --- items
+      const items = rmClear($('mapping-items'));
+      const shown = data.items.filter((item) => {
+        if (mappingState.team && item.team !== mappingState.team) return false;
+        if (mappingState.onlyEdited && !item.overrides.length) return false;
+        if (mappingState.q && !item.text_ko.toLowerCase().includes(mappingState.q)) return false;
+        return true;
+      });
+      shown.forEach((item) => {
+        const row = document.createElement('tr');
+        row.appendChild(rmEl('td', { text: item.text_ko, style: 'max-width:420px' }));
+        row.appendChild(rmEl('td', { text: teamLabel[item.team] || item.team }));
+
+        const locked = (field) => item.overrides.includes(field);
+        const cell = (field, control) => {
+          const td = rmEl('td', {}, [control]);
+          if (locked(field)) {
+            td.appendChild(rmEl('span', {
+              className: 'badge wait', text: '손댐', title: '현행화가 이 칸을 덮어쓰지 않습니다',
+              style: 'margin-left:6px',
+            }));
+          }
+          return td;
+        };
+
+        row.appendChild(cell('product', mapSelect(productOptions, item.product_id,
+          (value) => saveItem(item.key, { product_id: Number(value) }, productName[item.product_id] || item.key))));
+        row.appendChild(cell('kind', mapSelect(
+          [{ value: 'dev', label: '개발성' }, { value: 'ops', label: '운영성' }], item.kind,
+          (value) => saveItem(item.key, { kind: value }, '구분'))));
+        row.appendChild(cell('horizon', mapSelect(
+          [
+            { value: 'now', label: '이번달' }, { value: 'next', label: '다음달' },
+            { value: 'soon', label: '곧' }, { value: 'someday', label: '언젠가' },
+          ], item.horizon,
+          (value) => saveItem(item.key, { horizon: value }, '시간축'))));
+        items.appendChild(row);
+      });
+      $('mapping-item-count').textContent = `${shown.length} / ${data.items.length}`;
+    }
+
+    $('mapping-add').addEventListener('click', async () => {
+      const name = $('mapping-new-name').value.trim();
+      if (!name) { mapResult('mapping-product-result', '제품 이름이 필요합니다', true); return; }
+      try {
+        await api('/api/v1/admin/roadmap/products', {
+          method: 'POST',
+          body: JSON.stringify({
+            name,
+            family_id: $('mapping-new-family').value,
+            owner_team_id: $('mapping-new-team').value,
+            detail_url: $('mapping-new-url').value.trim() || null,
+          }),
+        });
+        $('mapping-new-name').value = ''; $('mapping-new-url').value = '';
+        mapResult('mapping-product-result', `${name} 추가됨`);
+        await loadMapping();
+      } catch (error) {
+        mapResult('mapping-product-result', error.message, true);
+      }
+    });
+
+    $('mapping-search').addEventListener('input', function () {
+      mappingState.q = this.value.trim().toLowerCase(); renderMapping();
+    });
+    $('mapping-filter-team').addEventListener('change', function () {
+      mappingState.team = this.value; renderMapping();
+    });
+    $('mapping-only-edited').addEventListener('change', function () {
+      mappingState.onlyEdited = this.checked; renderMapping();
+    });
+
 
     initialize();

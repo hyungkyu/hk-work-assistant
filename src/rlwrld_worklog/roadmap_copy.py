@@ -1,6 +1,10 @@
 # Generated from the first import; edited here from now on.
 
-UI_COPY = {'title': {'ko': 'RLWRLD 플랫폼 팀 로드맵',
+UI_COPY = {'staleTag': {'ko': '번역 대기', 'en': 'not retranslated', 'ja': '翻訳待ち'},
+ 'staleHint': {'ko': '원문이 바뀐 뒤 아직 번역되지 않았습니다',
+               'en': 'the Korean changed after this was translated',
+               'ja': '原文が変わった後、まだ翻訳されていません'},
+'title': {'ko': 'RLWRLD 플랫폼 팀 로드맵',
            'en': 'RLWRLD Platform Team Roadmap',
            'ja': 'RLWRLD プラットフォームチーム ロードマップ'},
  'sub': {'ko': 'Notion 「Platform Team Roadmap」 202609 스냅샷 기준 초안 · 원본 최종 수정 2026-09-06',

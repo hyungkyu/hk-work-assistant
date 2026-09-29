@@ -265,3 +265,9 @@
     .kindtag.added { background: #102b22; color: var(--accent); border: 1px solid #286b52; }
     .kindtag.changed { background: #2b2415; color: var(--warning); border: 1px solid #705a2c; }
     .kindtag.removed { background: #2a1618; color: var(--danger); border: 1px solid #7b3838; }
+
+    /* 로드맵 매핑 — 표 안의 버튼과 건수가 두 줄로 접히지 않게. */
+    #page-mapping .audit td { vertical-align: middle; }
+    #page-mapping .audit td .button { white-space: nowrap; padding: 7px 12px; }
+    #page-mapping .audit td:nth-child(6) { white-space: nowrap; color: var(--muted); }
+    #page-mapping .audit th:first-child, #page-mapping .audit td:first-child { min-width: 180px; }

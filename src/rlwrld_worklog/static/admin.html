@@ -43,6 +43,7 @@
           <button data-page="storage" data-requires="super_admin">저장소 · 백업</button>
           <button data-page="models" data-requires="super_admin">로컬 모델</button>
           <button data-page="security" data-requires="super_admin">보안</button>
+          <button data-page="mapping" data-requires="super_admin">로드맵 매핑</button>
         </div>
         <div class="nav-group">
           <button data-page="audit" data-requires="super_admin">감사 기록</button>
@@ -129,6 +130,7 @@
               <button data-lang="en">English</button>
               <button data-lang="ja">日本語</button>
             </div>
+            <button class="button primary" id="roadmap-refresh" data-requires="super_admin">현행화</button>
             <button class="button" id="roadmap-history-open"></button>
           </div>
         </div>
@@ -471,6 +473,52 @@
         <article class="card">
           <p id="restricted-note">지금 이 계정으로 열 수 있는 화면이 없습니다. 백오피스의 모든 화면이 아직 관리자 전용입니다.</p>
           <div class="actions"><button class="button" id="restricted-logout">로그아웃</button></div>
+        </article>
+      </section>
+
+      <section class="page" id="page-mapping">
+        <h1>로드맵 매핑</h1>
+        <p class="lead">로드맵의 각 줄이 어느 제품·패밀리에 속하고, 개발성인지 운영성인지, 어느 시간축에 놓이는지를 정합니다.
+          여기서 손으로 고친 값은 현행화가 덮어쓰지 않습니다.</p>
+
+        <article class="card">
+          <div class="card-header">
+            <h2>제품</h2>
+            <span class="badge" id="mapping-product-count">0</span>
+          </div>
+          <p class="help">‘걸친 팀’과 건수는 항목에서 계산됩니다. 제품이 팀 하나에만 속하지 않기 때문에
+            (Simulation·Data Contract·Dataset Capture가 두 팀에 걸칩니다) 주관팀은 집계용 기본값일 뿐입니다.</p>
+          <table class="audit">
+            <thead><tr><th>제품</th><th>패밀리</th><th>주관팀</th><th>상세 URL</th><th>걸친 팀</th><th>건수</th><th></th></tr></thead>
+            <tbody id="mapping-products"></tbody>
+          </table>
+          <div class="form-grid" style="margin-top:16px">
+            <div class="field"><label for="mapping-new-name">새 제품 이름</label><input id="mapping-new-name" placeholder="예: Fleet Ops"></div>
+            <div class="field"><label for="mapping-new-family">패밀리</label><select id="mapping-new-family"></select></div>
+            <div class="field"><label for="mapping-new-team">주관팀</label><select id="mapping-new-team"></select></div>
+            <div class="field"><label for="mapping-new-url">상세 URL</label><input id="mapping-new-url" placeholder="비워두면 팀 페이지로"></div>
+          </div>
+          <div class="actions"><button class="button primary" id="mapping-add">제품 추가</button></div>
+          <div class="result" id="mapping-product-result">변경은 즉시 저장되고 감사 기록에 남습니다.</div>
+        </article>
+
+        <article class="card">
+          <div class="card-header">
+            <h2>항목</h2>
+            <span class="badge" id="mapping-item-count">0</span>
+          </div>
+          <p class="help">본문과 팀은 원본이 정본이라 여기서 고치지 않습니다. 손으로 고친 칸에는 표시가 붙고,
+            그 칸은 현행화가 건드리지 않습니다.</p>
+          <div class="work-filters" style="margin-bottom:12px">
+            <input id="mapping-search" type="search" placeholder="본문 검색" style="min-width:240px">
+            <select id="mapping-filter-team"></select>
+            <label class="check"><input type="checkbox" id="mapping-only-edited"> 손댄 것만</label>
+          </div>
+          <table class="audit">
+            <thead><tr><th>본문</th><th>팀</th><th>제품</th><th>구분</th><th>시간축</th></tr></thead>
+            <tbody id="mapping-items"></tbody>
+          </table>
+          <div class="result" id="mapping-item-result">항목 하나를 고치면 그 칸만 잠깁니다.</div>
         </article>
       </section>
 

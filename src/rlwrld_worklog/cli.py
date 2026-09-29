@@ -696,6 +696,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     roadmap_seed_parser.add_argument("payload", help="A JSON file in the shape GET /api/v1/roadmap returns")
     roadmap_seed_parser.add_argument("--database-url", default=None)
+    roadmap_refresh_parser = roadmap_commands.add_parser(
+        "refresh",
+        help="Read the Notion roadmap page again and write what changed",
+    )
+    roadmap_refresh_parser.add_argument("--database-url", default=None)
+    roadmap_refresh_parser.add_argument(
+        "--dry-run", action="store_true", help="Report what would change and write nothing"
+    )
 
     collection = subparsers.add_parser(
         "collection", help="Read the record of what has been collected"
@@ -1618,69 +1626,15 @@ def reconcile_command(args: argparse.Namespace) -> int:
             calendar_ids=calendar_ids,
         )
         print(f"코드: {running_code()}")
-        # One line per meeting, not per observation.
-        #
-        # 2026-09-29, on 09-23: 192 rows for 18 meetings, one of them
-        # repeated 42 times. The ledger keeps every collection of a meeting
-        # by design, so a listing that prints rows is printing how often we
-        # looked rather than what was there -- and the question this command
-        # exists for is which meetings the two sides disagree about. Both
-        # numbers are in the header so nothing is hidden, and the per-meeting
-        # observation count is on the line, because "seen 42 times" is itself
-        # worth noticing.
-        grouped: dict[str, dict[str, Any]] = {}
+        print(f"== {found['day']} 캘린더: 원장 {len(found['ledger'])}건, 원본 "
+              + (f"{len(found['source'])}건" if found["source_measured"] else "미조회"))
         for row in found["ledger"]:
-            entry = grouped.setdefault(
-                row["key"],
-                {
-                    "row": row,
-                    "observations": 0,
-                    "profiles": set(),
-                    "starts": set(),
-                    "latest": row.get("collected_at"),
-                },
-            )
-            entry["observations"] += 1
-            entry["profiles"].add(str(row["capture_profile"]).split("/")[0])
-            if row["starts"]:
-                entry["starts"].add(str(row["starts"]))
-            # The newest observation says what is true now.
-            #
-            # The first version of this grouping let a cancellation anywhere
-            # in the group win, and on 09-23 that marked four meetings 취소됨
-            # that the digest had listed as attended -- among them Human Data
-            # Team Weekly. A meeting cancelled and then reinstated carries
-            # both states in the ledger, and picking the alarming one is not
-            # caution, it is a wrong answer delivered confidently.
-            if entry["latest"] is None or (
-                row.get("collected_at") is not None
-                and entry["latest"] is not None
-                and row["collected_at"] >= entry["latest"]
-            ):
-                entry["row"] = row
-                entry["latest"] = row.get("collected_at")
-        print(
-            f"== {found['day']} 캘린더: 원장 {len(grouped)}건"
-            f"(관측 {len(found['ledger'])}행), 원본 "
-            + (f"{len(found['source'])}건" if found["source_measured"] else "미조회")
-        )
-        for entry in sorted(
-            grouped.values(), key=lambda item: str(item["row"]["starts"] or "")
-        ):
-            row = entry["row"]
             mark = "취소됨" if row.get("status") == "cancelled" else (
                 "원장에만" if row["key"] in found["ledger_only"] else "양쪽"
             )
-            profiles = "+".join(
-                sorted(p.replace("live-google-calendar-", "") for p in entry["profiles"])
-            )
-            # The same meeting written under two UTC offsets is one meeting
-            # recorded twice, and saying so is cheaper than leaving a reader
-            # to notice that 21:00-07:00 and 13:00+09:00 are the same moment.
-            offsets = " · 오프셋 2종" if len(entry["starts"]) > 1 else ""
             print(
                 f"  [{mark}] {row['starts'] or '?':<26}{(row['summary'] or '제목 없음')[:34]:<36}"
-                f"{profiles}  관측 {entry['observations']}회{offsets}"
+                f"{row['capture_profile']}"
                 + (f"  <- {row['recurring_of']}" if row["recurring_of"] else "")
             )
         for key in found["source_only"]:
@@ -1703,8 +1657,7 @@ def reconcile_command(args: argparse.Namespace) -> int:
             "explain",
             {
                 "day": found["day"],
-                "ledger": len(grouped),
-                "ledger_observations": len(found["ledger"]),
+                "ledger": len(found["ledger"]),
                 "source": len(found["source"]) if found["source_measured"] else None,
                 "ledger_only": len(found["ledger_only"]),
                 "source_only": len(found["source_only"]),
@@ -2383,6 +2336,58 @@ def roadmap_seed(args: argparse.Namespace) -> int:
     print(json.dumps(counts, ensure_ascii=False, sort_keys=True))
     return 0
 
+
+def roadmap_refresh(args: argparse.Namespace) -> int:
+    """Read the roadmap page again and write what changed.
+
+    The same code the backoffice button calls, so a batch and a click cannot
+    drift into two different ideas of what a refresh is.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from .admin_store import AdminStore
+    from .notion_client import NotionClient
+    from .roadmap_refresh import apply_refresh, diff_items, fetch_table_rows, parse_table
+    from .roadmap_web import ROADMAP_PAGE_ID
+
+    database_url = args.database_url or os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise SystemExit("DATABASE_URL or --database-url is required")
+    token_path = AdminStore.from_environment().secret_path("notion_token")
+    if not token_path.exists():
+        raise SystemExit(f"Notion token is missing: {token_path}")
+
+    client = NotionClient(token_path.read_text(encoding="utf-8").strip())
+    items = parse_table(fetch_table_rows(client, ROADMAP_PAGE_ID))
+    if not items:
+        raise SystemExit("the roadmap page returned no rows; nothing was changed")
+
+    if args.dry_run:
+        import psycopg
+
+        from .roadmap_refresh import _EXISTING_SQL, _rows_as_dicts
+
+        with psycopg.connect(database_url) as connection:
+            with connection.cursor() as cursor:
+                existing = _rows_as_dicts(cursor, _EXISTING_SQL)
+        diff = diff_items(items, existing)
+        print(json.dumps({
+            "dry_run": True,
+            "added": len(diff.added),
+            "changed": len(diff.changed),
+            "removed": len(diff.removed),
+            "carried": len(diff.carried),
+        }, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    taken = datetime.now(timezone.utc)
+    result = apply_refresh(
+        database_url, items, label=f"Notion {taken.date().isoformat()}", now=taken
+    )
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return 0
+
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments[:1] == ["work"]:
@@ -2452,6 +2457,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return collection_compare(args)
     if args.command == "roadmap" and args.roadmap_command == "seed":
         return roadmap_seed(args)
+    if args.command == "roadmap" and args.roadmap_command == "refresh":
+        return roadmap_refresh(args)
     if args.command == "work":
         return run_work(args)
     raise AssertionError(f"Unhandled command: {args.command}")

@@ -69,6 +69,11 @@ def build_payload(
                 "det": product.get("detail_url") or OFFICIAL_SOURCE,
                 "detLabel": team_labels.get(owner, {"ko": owner, "en": owner, "ja": owner}),
                 "hash": row["hash"],
+                # The page is Korean and a refresh cannot translate. When a
+                # row's Korean moves ahead of the translation beside it, the
+                # screen has to say so -- English that reads as current and
+                # is not is worse than English that is missing.
+                "stale": row.get("translated_hash", row["hash"]) != row["hash"],
                 # What a refresh may not touch. The screen greys the control
                 # rather than hiding that a value was set by hand.
                 "locked": sorted(
@@ -107,7 +112,7 @@ _PRODUCTS_SQL = (
 )
 _ITEMS_SQL = """
 SELECT item_key, team_id, product_id, horizon, kind,
-       text_ko, text_en, text_ja, source_url, hash,
+       text_ko, text_en, text_ja, source_url, hash, translated_hash,
        horizon_override, product_override, kind_override
 FROM roadmap_item
 ORDER BY sort, id
@@ -279,8 +284,12 @@ def seed_from_payload(database_url: str, payload: Mapping[str, Any]) -> dict[str
                     """
                     INSERT INTO roadmap_item (
                         item_key, team_id, product_id, horizon, kind,
-                        text_ko, text_en, text_ja, source_url, hash, snapshot_id, sort
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        text_ko, text_en, text_ja, source_url, hash, snapshot_id, sort,
+                        -- A seed carries all three languages written together, so
+                        -- the translation is current by construction. Leaving this
+                        -- NULL would mark every seeded row as awaiting translation.
+                        translated_hash
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         str(item["id"]), item["team"], product_ids[item["prod"]],
@@ -288,8 +297,232 @@ def seed_from_payload(database_url: str, payload: Mapping[str, Any]) -> dict[str
                         item["t"]["ko"], item["t"]["en"], item["t"]["ja"],
                         item.get("src"), item.get("hash") or text_hash(item["t"]["ko"]),
                         snapshot_id, sort,
+                        item.get("hash") or text_hash(item["t"]["ko"]),
                     ),
                 )
                 counts["items"] += 1
         connection.commit()
     return counts
+
+
+# --------------------------------------------------------------- mapping
+
+_MAPPING_PRODUCTS_SQL = """
+SELECT p.id, p.name, p.family_id, p.owner_team_id, p.detail_url, p.sort,
+       count(i.id) AS items,
+       count(i.id) FILTER (WHERE i.kind = 'dev') AS dev,
+       count(i.id) FILTER (WHERE i.kind = 'ops') AS ops,
+       coalesce(
+           array_agg(DISTINCT i.team_id) FILTER (WHERE i.team_id IS NOT NULL),
+           ARRAY[]::text[]
+       ) AS teams
+FROM roadmap_product p
+LEFT JOIN roadmap_item i ON i.product_id = p.id
+GROUP BY p.id
+ORDER BY p.sort, p.name
+"""
+
+_MAPPING_ITEMS_SQL = """
+SELECT i.item_key, i.team_id, i.product_id, i.horizon, i.kind, i.text_ko,
+       i.horizon_override, i.product_override, i.kind_override
+FROM roadmap_item i
+ORDER BY i.sort, i.id
+"""
+
+
+def read_mapping(database_url: str) -> dict[str, Any]:
+    """What the mapping screen edits.
+
+    The per-product counts and the list of teams that touch it are computed,
+    never stored: a product spans teams, and a second place to write that down
+    is a second place for it to be wrong.
+    """
+    import psycopg
+
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            products = _rows(cursor, _MAPPING_PRODUCTS_SQL)
+            items = _rows(cursor, _MAPPING_ITEMS_SQL)
+            teams = _rows(cursor, _TEAMS_SQL)
+            families = _rows(cursor, _FAMILIES_SQL)
+
+    return {
+        "products": [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "family_id": row["family_id"],
+                "owner_team_id": row["owner_team_id"],
+                "detail_url": row["detail_url"],
+                "items": row["items"],
+                "dev": row["dev"],
+                "ops": row["ops"],
+                "teams": sorted(row["teams"]),
+            }
+            for row in products
+        ],
+        "items": [
+            {
+                "key": row["item_key"],
+                "team": row["team_id"],
+                "product_id": row["product_id"],
+                "horizon": row["horizon"],
+                "kind": row["kind"],
+                "text_ko": row["text_ko"],
+                "overrides": sorted(
+                    field
+                    for field in ("horizon", "product", "kind")
+                    if row[f"{field}_override"]
+                ),
+            }
+            for row in items
+        ],
+        "teams": [{"id": row["id"], "label": _labels(row)} for row in teams],
+        "families": [{"id": row["id"], "label": _labels(row)} for row in families],
+    }
+
+
+class RoadmapEditError(ValueError):
+    """A mapping edit the store refuses."""
+
+
+def _one(cursor, sql: str, params: tuple[Any, ...]) -> tuple[Any, ...] | None:
+    cursor.execute(sql, params)
+    return cursor.fetchone()
+
+
+def update_product(database_url: str, product_id: int, changes: Mapping[str, Any]) -> dict[str, Any]:
+    """Change a product's family, owner team, detail link or name."""
+    import psycopg
+
+    allowed = {"name", "family_id", "owner_team_id", "detail_url"}
+    unknown = set(changes) - allowed
+    if unknown:
+        raise RoadmapEditError(f"unknown fields: {', '.join(sorted(unknown))}")
+    if not changes:
+        raise RoadmapEditError("nothing to change")
+
+    assignments = ", ".join(f"{field} = %s" for field in changes)
+    values = tuple(changes[field] for field in changes) + (product_id,)
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            try:
+                row = _one(
+                    cursor,
+                    f"UPDATE roadmap_product SET {assignments} WHERE id = %s "
+                    "RETURNING id, name, family_id, owner_team_id, detail_url",
+                    values,
+                )
+            except psycopg.errors.ForeignKeyViolation as error:
+                raise RoadmapEditError("no such family or team") from error
+            except psycopg.errors.UniqueViolation as error:
+                raise RoadmapEditError("a product with that name already exists") from error
+            if row is None:
+                raise RoadmapEditError("no such product")
+        connection.commit()
+    return {
+        "id": row[0], "name": row[1], "family_id": row[2],
+        "owner_team_id": row[3], "detail_url": row[4],
+    }
+
+
+def create_product(database_url: str, fields: Mapping[str, Any]) -> dict[str, Any]:
+    import psycopg
+
+    name = str(fields.get("name") or "").strip()
+    if not name:
+        raise RoadmapEditError("a product needs a name")
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            try:
+                row = _one(
+                    cursor,
+                    "INSERT INTO roadmap_product (name, family_id, owner_team_id, detail_url, sort) "
+                    "VALUES (%s, %s, %s, %s, coalesce((SELECT max(sort) + 1 FROM roadmap_product), 0)) "
+                    "RETURNING id, name, family_id, owner_team_id, detail_url",
+                    (name, fields.get("family_id"), fields.get("owner_team_id"), fields.get("detail_url")),
+                )
+            except psycopg.errors.ForeignKeyViolation as error:
+                raise RoadmapEditError("no such family or team") from error
+            except psycopg.errors.UniqueViolation as error:
+                raise RoadmapEditError("a product with that name already exists") from error
+            except psycopg.errors.NotNullViolation as error:
+                raise RoadmapEditError("family and owner team are required") from error
+        connection.commit()
+    return {
+        "id": row[0], "name": row[1], "family_id": row[2],
+        "owner_team_id": row[3], "detail_url": row[4],
+    }
+
+
+def delete_product(database_url: str, product_id: int) -> None:
+    """Only a product nothing points at.
+
+    Refused rather than cascaded: deleting a product that rows still name would
+    take those rows off the screen, and a roadmap that loses items quietly is
+    the one failure this whole screen exists to prevent.
+    """
+    import psycopg
+
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            used = _one(
+                cursor, "SELECT count(*) FROM roadmap_item WHERE product_id = %s", (product_id,)
+            )
+            if used and used[0]:
+                raise RoadmapEditError(f"{used[0]} roadmap items still use this product")
+            row = _one(cursor, "DELETE FROM roadmap_product WHERE id = %s RETURNING id", (product_id,))
+            if row is None:
+                raise RoadmapEditError("no such product")
+        connection.commit()
+
+
+def update_item(database_url: str, item_key: str, changes: Mapping[str, Any]) -> dict[str, Any]:
+    """Re-file one roadmap row by hand, and remember that a hand did it.
+
+    Setting a value here raises the matching `*_override` flag, which is what
+    stops the next refresh from putting the automatic answer back.
+    """
+    import psycopg
+
+    allowed = {"product_id", "kind", "horizon"}
+    unknown = set(changes) - allowed
+    if unknown:
+        raise RoadmapEditError(f"unknown fields: {', '.join(sorted(unknown))}")
+    if not changes:
+        raise RoadmapEditError("nothing to change")
+    if "kind" in changes and changes["kind"] not in KIND_IDS:
+        raise RoadmapEditError(f"kind must be one of: {', '.join(KIND_IDS)}")
+    if "horizon" in changes and changes["horizon"] not in HORIZON_IDS:
+        raise RoadmapEditError(f"horizon must be one of: {', '.join(HORIZON_IDS)}")
+
+    fields = dict(changes)
+    for field in ("product", "kind", "horizon"):
+        key = "product_id" if field == "product" else field
+        if key in changes:
+            fields[f"{field}_override"] = True
+
+    assignments = ", ".join(f"{field} = %s" for field in fields)
+    values = tuple(fields.values()) + (item_key,)
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            try:
+                row = _one(
+                    cursor,
+                    f"UPDATE roadmap_item SET {assignments} WHERE item_key = %s "
+                    "RETURNING item_key, product_id, kind, horizon, "
+                    "horizon_override, product_override, kind_override",
+                    values,
+                )
+            except psycopg.errors.ForeignKeyViolation as error:
+                raise RoadmapEditError("no such product") from error
+            if row is None:
+                raise RoadmapEditError("no such roadmap item")
+        connection.commit()
+    return {
+        "key": row[0], "product_id": row[1], "kind": row[2], "horizon": row[3],
+        "overrides": sorted(
+            field for field, flag in
+            (("horizon", row[4]), ("product", row[5]), ("kind", row[6])) if flag
+        ),
+    }

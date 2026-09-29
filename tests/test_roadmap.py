@@ -258,3 +258,158 @@ def test_an_unreachable_database_says_that_instead(
         roadmap_web.roadmap_route(session_for("company_user"))
     assert refused.value.status_code == 503
     assert "not reachable" in refused.value.detail
+
+
+# --- the mapping editor, against a real database --------------------------
+
+
+@pytest.fixture()
+def seeded() -> str:
+    import json
+
+    source = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "roadmap_seed.json"
+    roadmap.seed_from_payload(DATABASE_URL, json.loads(source.read_text(encoding="utf-8")))
+    return DATABASE_URL
+
+
+@needs_db
+def test_the_mapping_counts_are_computed_not_stored(seeded: str) -> None:
+    """A product spans teams; a second place to write that down would drift."""
+    mapping = roadmap.read_mapping(seeded)
+    by_name = {product["name"]: product for product in mapping["products"]}
+    simulation = by_name["Simulation"]
+    assert sorted(simulation["teams"]) == ["hw", "rp"]
+    assert simulation["items"] == simulation["dev"] + simulation["ops"]
+    assert sum(product["items"] for product in mapping["products"]) == len(mapping["items"])
+
+
+@needs_db
+def test_changing_a_products_family_moves_every_row_with_it(seeded: str) -> None:
+    mapping = roadmap.read_mapping(seeded)
+    product = next(p for p in mapping["products"] if p["name"] == "RRC")
+    roadmap.update_product(seeded, product["id"], {"family_id": "BENCH"})
+    after = roadmap.read_roadmap(seeded)
+    families = {row["fam"] for row in after["items"] if row["prod"] == "RRC"}
+    assert families == {"BENCH"}
+
+
+@needs_db
+def test_a_product_cannot_be_moved_to_a_family_that_does_not_exist(seeded: str) -> None:
+    product = roadmap.read_mapping(seeded)["products"][0]
+    with pytest.raises(roadmap.RoadmapEditError) as refused:
+        roadmap.update_product(seeded, product["id"], {"family_id": "NOPE"})
+    assert "no such family or team" in str(refused.value)
+
+
+@needs_db
+def test_a_product_in_use_is_not_deleted(seeded: str) -> None:
+    """A roadmap that loses rows quietly is what this screen exists to stop."""
+    product = next(p for p in roadmap.read_mapping(seeded)["products"] if p["items"])
+    with pytest.raises(roadmap.RoadmapEditError) as refused:
+        roadmap.delete_product(seeded, product["id"])
+    assert "still use this product" in str(refused.value)
+    assert any(p["id"] == product["id"] for p in roadmap.read_mapping(seeded)["products"])
+
+
+@needs_db
+def test_an_unused_product_can_be_created_and_deleted(seeded: str) -> None:
+    created = roadmap.create_product(
+        seeded, {"name": "임시 제품", "family_id": "RRP", "owner_team_id": "rp"}
+    )
+    assert any(p["id"] == created["id"] for p in roadmap.read_mapping(seeded)["products"])
+    roadmap.delete_product(seeded, created["id"])
+    assert not any(p["id"] == created["id"] for p in roadmap.read_mapping(seeded)["products"])
+
+
+@needs_db
+def test_two_products_cannot_share_a_name(seeded: str) -> None:
+    with pytest.raises(roadmap.RoadmapEditError) as refused:
+        roadmap.create_product(seeded, {"name": "RRC", "family_id": "RRP", "owner_team_id": "rp"})
+    assert "already exists" in str(refused.value)
+
+
+@needs_db
+def test_editing_an_item_raises_the_flag_that_protects_it(seeded: str) -> None:
+    """The point of the whole schema: a hand-made correction survives a refresh."""
+    item = roadmap.read_mapping(seeded)["items"][0]
+    assert item["overrides"] == []
+    changed = roadmap.update_item(seeded, item["key"], {"kind": "ops", "horizon": "someday"})
+    assert changed["kind"] == "ops"
+    assert changed["horizon"] == "someday"
+    assert changed["overrides"] == ["horizon", "kind"]
+    # And it is reported to the screen, so the control can say it was set by hand.
+    payload = roadmap.read_roadmap(seeded)
+    row = next(r for r in payload["items"] if r["id"] == item["key"])
+    assert row["locked"] == ["horizon", "kind"]
+
+
+@needs_db
+def test_an_item_cannot_be_given_a_horizon_that_does_not_exist(seeded: str) -> None:
+    item = roadmap.read_mapping(seeded)["items"][0]
+    with pytest.raises(roadmap.RoadmapEditError) as refused:
+        roadmap.update_item(seeded, item["key"], {"horizon": "someyear"})
+    assert "horizon must be one of" in str(refused.value)
+
+
+@needs_db
+def test_moving_an_item_to_another_product_is_recorded_as_a_hand_move(seeded: str) -> None:
+    mapping = roadmap.read_mapping(seeded)
+    item = mapping["items"][0]
+    other = next(p for p in mapping["products"] if p["id"] != item["product_id"])
+    changed = roadmap.update_item(seeded, item["key"], {"product_id": other["id"]})
+    assert changed["product_id"] == other["id"]
+    assert "product" in changed["overrides"]
+
+
+@needs_db
+def test_an_unknown_field_is_refused_rather_than_ignored(seeded: str) -> None:
+    item = roadmap.read_mapping(seeded)["items"][0]
+    with pytest.raises(roadmap.RoadmapEditError) as refused:
+        roadmap.update_item(seeded, item["key"], {"text_ko": "몰래 고치기"})
+    assert "unknown fields" in str(refused.value)
+
+
+@needs_db
+def test_the_mapping_screen_is_the_owners(seeded: str, config_root: Path) -> None:
+    with pytest.raises(HTTPException) as refused:
+        roadmap_web.mapping_route(session_for("company_user"))
+    assert refused.value.status_code == 403
+
+
+def test_the_refresh_is_the_owners_not_the_companys(config_root: Path) -> None:
+    """Reading the screen and rewriting its rows are different acts."""
+    with pytest.raises(HTTPException) as refused:
+        roadmap_web.refresh_route(session_for("company_user"))
+    assert refused.value.status_code == 403
+
+
+def test_a_refresh_without_a_notion_token_says_so(
+    config_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = session_for("super_admin")
+    session = admin_web.store().read_session(request.cookies[SESSION_COOKIE])
+    request.headers["x-csrf-token"] = session["csrf"]
+    with pytest.raises(HTTPException) as refused:
+        roadmap_web.refresh_route(request)
+    assert refused.value.status_code == 503
+    assert "Notion token" in refused.value.detail
+
+
+def test_a_page_that_returns_no_rows_changes_nothing(
+    config_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Writing an empty refresh would delete the roadmap and call it deliberate."""
+    admin_web.store().save_secret("notion_token", "ntn_synthetic_token_for_tests")
+    request = session_for("super_admin")
+    session = admin_web.store().read_session(request.cookies[SESSION_COOKIE])
+    request.headers["x-csrf-token"] = session["csrf"]
+    monkeypatch.setattr("rlwrld_worklog.roadmap_refresh.fetch_table_rows", lambda c, p: [])
+    applied: list[Any] = []
+    monkeypatch.setattr(
+        "rlwrld_worklog.roadmap_refresh.apply_refresh",
+        lambda *a, **k: applied.append(a) or {},
+    )
+    with pytest.raises(HTTPException) as refused:
+        roadmap_web.refresh_route(request)
+    assert refused.value.status_code == 502
+    assert applied == [], "nothing may be written"
