@@ -145,8 +145,18 @@ def test_the_existing_screens_and_the_work_board_are_untouched(html: str) -> Non
         'id="work-overlay"',
         'id="work-form"',
         'id="audit-body"',
+        'id="event-detail-overlay"',
     ):
         assert marker in html, f"{marker} disappeared from the backoffice page"
+
+
+def test_person_day_uses_digest_names_notes_and_meeting_links(script: str) -> None:
+    assert "event.where || [event.container, event.thread]" in script
+    assert "event.note || event.excerpt" in script
+    assert "item.title !== '회의 참여'" in script
+    assert "link.textContent = '자세히 보기'" in script
+    assert "button.textContent = 'DB 내용 보기'" in script
+    assert "openEventDetail(meetingTitle, summary)" in script
 
 
 def test_the_collection_screen_has_the_four_panels_the_page_promises(html: str) -> None:

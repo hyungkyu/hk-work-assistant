@@ -686,6 +686,17 @@ def build_parser() -> argparse.ArgumentParser:
     # `collection` is a group rather than a top-level `collection-audit`,
     # because reading the collection record is a family of questions and the
     # board already has the same shape in `work audit`.
+    # `roadmap` is a group for the same reason `collection` is: seeding is one
+    # question about the roadmap and the refresh that follows will be another.
+    roadmap_parser = subparsers.add_parser("roadmap", help="The platform roadmap")
+    roadmap_commands = roadmap_parser.add_subparsers(dest="roadmap_command", required=True)
+    roadmap_seed_parser = roadmap_commands.add_parser(
+        "seed",
+        help="Load a first snapshot from a payload file into the roadmap tables",
+    )
+    roadmap_seed_parser.add_argument("payload", help="A JSON file in the shape GET /api/v1/roadmap returns")
+    roadmap_seed_parser.add_argument("--database-url", default=None)
+
     collection = subparsers.add_parser(
         "collection", help="Read the record of what has been collected"
     )
@@ -2335,6 +2346,26 @@ def _work_only(argv: Sequence[str]) -> int:
     return run_work(parser.parse_args(argv))
 
 
+
+def roadmap_seed(args: argparse.Namespace) -> int:
+    """Load the roadmap tables from a payload file.
+
+    A seed, not a refresh: it has no changes to record and nothing of anybody's
+    to preserve. The refresh that has both is a separate command, and it is the
+    one that must respect the override flags.
+    """
+    import json
+
+    from .roadmap import seed_from_payload
+
+    database_url = args.database_url or os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise SystemExit("DATABASE_URL or --database-url is required")
+    payload = json.loads(Path(args.payload).read_text(encoding="utf-8"))
+    counts = seed_from_payload(database_url, payload)
+    print(json.dumps(counts, ensure_ascii=False, sort_keys=True))
+    return 0
+
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments[:1] == ["work"]:
@@ -2402,6 +2433,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return collection_audit(args)
     if args.command == "collection" and args.collection_command == "compare":
         return collection_compare(args)
+    if args.command == "roadmap" and args.roadmap_command == "seed":
+        return roadmap_seed(args)
     if args.command == "work":
         return run_work(args)
     raise AssertionError(f"Unhandled command: {args.command}")

@@ -1111,6 +1111,19 @@
       if (event.target === $('timeline-overlay')) closeTimeline();
     });
 
+    function openEventDetail(title, body) {
+      $('event-detail-title').textContent = title || '저장된 내용';
+      $('event-detail-body').textContent = body || '저장된 내용이 없습니다.';
+      $('event-detail-overlay').classList.remove('hidden');
+      $('event-detail-close').focus();
+    }
+
+    function closeEventDetail() { $('event-detail-overlay').classList.add('hidden'); }
+    $('event-detail-close').addEventListener('click', closeEventDetail);
+    $('event-detail-overlay').addEventListener('click', (event) => {
+      if (event.target === $('event-detail-overlay')) closeEventDetail();
+    });
+
     // ------------------------------------------------------------ 수집 현황
     const COLLECTION_SOURCE_LABELS = {
       slack: 'Slack', notion: 'Notion', 'google-calendar': 'Google Calendar',
@@ -1729,6 +1742,7 @@
       closeWorkEditor();
       closeTimeline();
       $('roadmap-drawer').classList.add('hidden');
+      closeEventDetail();
       stopWorkPolling();
       stopCollectionPolling();
       if (page === 'bookmarks') loadBookmarks();
@@ -2123,23 +2137,57 @@
           const body_ = document.createElement('tbody');
           events.forEach((event) => {
             const row = document.createElement('tr');
-            [event.time, event.event_type, event.title || '제목 없음',
-             [event.container, event.thread].filter(Boolean).join(' · ')]
-              .forEach((value, index) => {
-                const cell = document.createElement('td');
-                if (index === 2 && !event.title) cell.style.color = '#6d7b8e';
-                if (index === 2 && event.permalink) {
+            const isMeeting = event.source === 'google_calendar' || event.source === 'google-calendar';
+            const meetingTitle = isMeeting
+              ? (event.where || (event.title ? `회의: ${event.title}` : '회의'))
+              : (event.title || event.excerpt || '제목 없음');
+            const values = [event.time, event.event_type, meetingTitle,
+              event.where || [event.container, event.thread].filter(Boolean).join(' · ')];
+            values.forEach((value, index) => {
+              const cell = document.createElement('td');
+              if (index === 2 && !event.title && !event.where && !event.excerpt) cell.style.color = '#6d7b8e';
+              if (index === 2 && !isMeeting && event.permalink) {
+                const link = document.createElement('a');
+                link.href = event.permalink;
+                link.target = '_blank';
+                link.rel = 'noopener';
+                link.textContent = value;
+                cell.appendChild(link);
+              } else {
+                cell.textContent = value || '';
+              }
+              if (index === 2 && isMeeting) {
+                const summary = event.note || event.excerpt;
+                if (summary) {
+                  const note = document.createElement('p');
+                  note.className = 'event-summary';
+                  note.textContent = summary;
+                  cell.appendChild(note);
+                }
+                const links = (event.links || []).filter((item) => item && item.url);
+                const notesLink = links.find((item) => item.title !== '회의 참여');
+                const actions = document.createElement('div');
+                actions.className = 'event-links';
+                if (notesLink) {
                   const link = document.createElement('a');
-                  link.href = event.permalink;
+                  link.className = 'button';
+                  link.href = notesLink.url;
                   link.target = '_blank';
                   link.rel = 'noopener';
-                  link.textContent = value;
-                  cell.appendChild(link);
-                } else {
-                  cell.textContent = value;
+                  link.textContent = '자세히 보기';
+                  actions.appendChild(link);
+                } else if (summary) {
+                  const button = document.createElement('button');
+                  button.className = 'button';
+                  button.type = 'button';
+                  button.textContent = 'DB 내용 보기';
+                  button.addEventListener('click', () => openEventDetail(meetingTitle, summary));
+                  actions.appendChild(button);
                 }
-                row.appendChild(cell);
-              });
+                if (actions.childNodes.length) cell.appendChild(actions);
+              }
+              row.appendChild(cell);
+            });
             body_.appendChild(row);
           });
           table.appendChild(body_);
