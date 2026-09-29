@@ -84,6 +84,12 @@ class AdminStore:
         self.credentials = root / "credentials"
         self.settings_path = root / "settings.json"
         self.password_path = self.credentials / "admin-password.json"
+        # A second door, to the same building, that opens onto less of it. The
+        # owner's password is the one that can change settings and read
+        # secrets; this one signs in as an ordinary company user, so the owner
+        # can look at his own backoffice the way everyone else sees it without
+        # handing anybody the password that runs it.
+        self.staff_password_path = self.credentials / "staff-password.json"
         self.session_key_path = self.credentials / "admin-session-key"
         self.agent_generations_path = self.credentials / "agent-session-generations.json"
         self.oauth_pkce_dir = self.credentials / "oauth-pkce"
@@ -194,13 +200,49 @@ class AdminStore:
     def verify_admin_password(self, password: str) -> bool:
         if self.setup_required() or len(password) > 1024:
             return False
+        return self._verify_against(self.password_path, password)
+
+    def staff_password_set(self) -> bool:
+        return self.staff_password_path.exists()
+
+    def set_staff_password(self, password: str, *, actor: str = "owner") -> None:
+        """Set or replace the staff password.
+
+        Unlike the administrator password this one may be replaced. That is the
+        whole difference between the two doors: the owner's password is set
+        once at bootstrap and is a secret about a person, while this is a value
+        that gets handed around and therefore has to be rotatable without
+        touching the install.
+        """
+        self._validate_password(password)
+        salt = secrets.token_bytes(16)
+        digest = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32)
+        record = {"algorithm": "scrypt", "salt": _b64encode(salt), "digest": _b64encode(digest)}
+        replaced = self.staff_password_set()
+        _atomic_private_write(self.staff_password_path, json.dumps(record, sort_keys=True) + "\n")
+        self.audit("admin.staff_password_set", actor=actor, details={"replaced": replaced})
+
+    def clear_staff_password(self, *, actor: str = "owner") -> bool:
+        """Close the second door. Returns whether there was one to close."""
+        if not self.staff_password_set():
+            return False
+        self.staff_password_path.unlink()
+        self.audit("admin.staff_password_cleared", actor=actor)
+        return True
+
+    def verify_staff_password(self, password: str) -> bool:
+        if not self.staff_password_set() or len(password) > 1024:
+            return False
+        return self._verify_against(self.staff_password_path, password)
+
+    def _verify_against(self, path: Path, password: str) -> bool:
         try:
-            record = json.loads(self.password_path.read_text(encoding="utf-8"))
+            record = json.loads(path.read_text(encoding="utf-8"))
             salt = _b64decode(record["salt"])
             expected = _b64decode(record["digest"])
             actual = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32)
             return hmac.compare_digest(actual, expected)
-        except (KeyError, ValueError, TypeError, json.JSONDecodeError):
+        except (KeyError, ValueError, TypeError, OSError, json.JSONDecodeError):
             return False
 
     @staticmethod

@@ -292,6 +292,9 @@ def admin_session_status(request: Request) -> dict[str, Any]:
         "csrf_token": current.get("csrf") if current else None,
         "google_login_available": google_ready,
         "emergency_login_available": emergency_login_enabled(),
+        # Whether a second door exists at all. The screen needs this to say
+        # "set" or "not set" beside the field without ever reading the value.
+        "staff_password_set": store().staff_password_set(),
     }
 
 
@@ -316,17 +319,55 @@ async def emergency_login(request: Request, response: Response) -> dict[str, boo
     if not emergency_login_enabled():
         raise HTTPException(status_code=404, detail="local emergency login is disabled")
     body = await _json_object(request)
-    if not store().verify_admin_password(str(body.get("password", ""))):
+    supplied = str(body.get("password", ""))
+    # Two doors, one form. The administrator password is tried first because it
+    # is the one that exists on every install; the staff password is the second
+    # door, and it opens onto an ordinary company session rather than the
+    # owner's. Both are checked before the refusal so the answer cannot be read
+    # as "that was the wrong one of the two" — a caller learns only that the
+    # value did not open anything.
+    as_admin = store().verify_admin_password(supplied)
+    as_staff = store().verify_staff_password(supplied)
+    if not as_admin and not as_staff:
         raise HTTPException(status_code=401, detail="invalid administrator password")
+    role = "super_admin" if as_admin else "company_user"
+    method = "local_emergency" if as_admin else "local_emergency_staff"
     subject = _emergency_subject(body)
-    token, _ = store().create_session(subject=subject)
+    token, _ = store().create_session(subject=subject, role=role, auth_method=method)
     _set_session_cookie(response, token)
     store().audit(
         "admin.login",
         actor=subject,
-        details={"method": "local_emergency", "actor_declared": subject != EMERGENCY_ACTOR},
+        details={
+            "method": method,
+            "role": role,
+            "actor_declared": subject != EMERGENCY_ACTOR,
+        },
     )
     return {"ok": True}
+
+
+@router.put("/api/v1/admin/staff-password")
+async def set_staff_password(request: Request) -> dict[str, bool]:
+    """Set, replace or clear the staff password. Owner only.
+
+    Clearing is sending an empty password rather than a separate route: the one
+    field on screen is the whole control, and emptying it is how a person says
+    "close that door" without having to find a second button.
+    """
+    current = require_super_admin_session(request)
+    _require_csrf(request, current)
+    body = await _json_object(request)
+    supplied = str(body.get("password", ""))
+    actor = session_actor(current)
+    if not supplied:
+        cleared = store().clear_staff_password(actor=actor)
+        return {"ok": True, "staff_password_set": False, "cleared": cleared}
+    try:
+        store().set_staff_password(supplied, actor=actor)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"ok": True, "staff_password_set": True, "cleared": False}
 
 
 @router.get("/auth/google/login")

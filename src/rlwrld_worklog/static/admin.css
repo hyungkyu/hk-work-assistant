@@ -194,3 +194,69 @@
     .bookmark-note { color: var(--muted); font-size: 12px; margin-top: 3px; }
     .bookmark-actions { display: flex; gap: 6px; }
     .bookmark-actions .button { padding: 6px 10px; font-size: 12px; }
+    /* A label for "nobody else sees this", not a lock. The lock is the
+       server's; this only marks what the padlocked routes already refuse. */
+    .lock { margin-left: 6px; font-size: 11px; opacity: .75; }
+    nav button .lock { float: right; }
+    .card-header .lock { margin-left: 0; }
+
+    /* 로드맵 — 좌측은 개발성/운영성 레인, 우측은 시간축. 가로로 스크롤된다. */
+    #page-roadmap .legend { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 16px; }
+    #page-roadmap .chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line);
+      border-radius: 999px; padding: 4px 11px 4px 8px; font-size: 11.5px; color: var(--muted);
+      background: var(--panel); cursor: pointer; }
+    #page-roadmap .chip.on { color: var(--text); border-color: #3d4a5c; background: var(--panel-2); }
+    #page-roadmap .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+    #page-roadmap section.block { border: 1px solid var(--line); background: var(--panel);
+      border-radius: 14px; margin-bottom: 14px; overflow: hidden; }
+    #page-roadmap .block-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 15px 18px 12px; }
+    #page-roadmap .block-head h2 { font-size: 16.5px; margin: 0; letter-spacing: -.02em; }
+    #page-roadmap .count { color: var(--muted); font-size: 12px; }
+    #page-roadmap .srclinks { margin-left: auto; display: flex; gap: 12px; font-size: 12px; }
+    #page-roadmap .note { border: 1px solid #705a2c; background: #2b2415; color: var(--warning);
+      border-radius: 9px; padding: 9px 12px; font-size: 12.5px; line-height: 1.55; margin: 0 18px 14px; }
+    #page-roadmap .track { overflow-x: auto; overflow-y: hidden; border-top: 1px solid var(--line); }
+    #page-roadmap .grid { display: grid; grid-template-columns: 104px repeat(4, minmax(300px, 1fr)); min-width: 1330px; }
+    #page-roadmap .hcell, #page-roadmap .corner { position: sticky; top: 0; background: #0e141d;
+      border-bottom: 1px solid var(--line); padding: 9px 13px; font-size: 11.5px; letter-spacing: .06em;
+      text-transform: uppercase; color: var(--muted); font-weight: 600; }
+    #page-roadmap .corner { left: 0; z-index: 3; border-right: 1px solid var(--line); }
+    #page-roadmap .hcell[data-h="now"] { color: var(--accent); }
+    #page-roadmap .hcell[data-h="next"] { color: var(--accent-2); }
+    #page-roadmap .hcell[data-h="soon"] { color: var(--warning); }
+    #page-roadmap .hcell[data-h="someday"] { color: #b89cff; }
+    #page-roadmap .lane { position: sticky; left: 0; z-index: 2; background: #0e141d;
+      border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 13px 12px;
+      font-size: 12.5px; font-weight: 600; display: flex; gap: 7px; align-items: flex-start; }
+    #page-roadmap .lane.last, #page-roadmap .cell.last { border-bottom: 0; }
+    #page-roadmap .cell { border-bottom: 1px solid var(--line); border-right: 1px solid #1b232e;
+      padding: 9px 13px 11px; min-width: 0; }
+    #page-roadmap ul { list-style: none; margin: 0; padding: 0; }
+    #page-roadmap .pgrp { display: flex; gap: 6px; align-items: center; margin: 11px 0 3px;
+      font-size: 11.5px; font-weight: 600; color: #c8d2df; }
+    #page-roadmap .pgrp:first-child { margin-top: 2px; }
+    #page-roadmap .pgrp .dot { width: 7px; height: 7px; }
+    #page-roadmap .pname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #page-roadmap .pn { color: #6d7b8e; font-weight: 400; font-size: 10.5px;
+      border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+    #page-roadmap ul.pitems { border-left: 1px solid #222c3a; margin-left: 3px; padding-left: 9px; }
+    #page-roadmap li { display: block; padding: 5px 0; font-size: 12.7px; line-height: 1.52;
+      border-bottom: 1px solid #1a222d; }
+    #page-roadmap li:last-child { border-bottom: 0; }
+    #page-roadmap .tx { min-width: 0; word-break: break-word; }
+    #page-roadmap .lnk { font-size: 10.5px; margin-left: 6px; white-space: nowrap; color: #6f89ad; }
+    #page-roadmap .lnk:hover { color: var(--accent-2); }
+    #page-roadmap .empty { color: #5a6678; font-size: 12px; padding: 5px 0; }
+    .drawer { position: fixed; inset: 0 0 0 auto; width: min(560px, 100%); background: #0e141d;
+      border-left: 1px solid var(--line); z-index: 40; padding: 22px; overflow-y: auto;
+      box-shadow: -20px 0 60px #0008; }
+    .drawer h2 { font-size: 17px; margin: 0 0 4px; }
+    .drawer .button { position: absolute; right: 18px; top: 18px; }
+    .hist { border: 1px solid var(--line); border-radius: 10px; padding: 12px 13px; margin-top: 12px; background: var(--panel); }
+    .hist .when { font-size: 12px; color: var(--muted); margin-bottom: 7px; display: flex; gap: 10px; align-items: baseline; }
+    .hist ul { list-style: none; margin: 0; padding: 0; }
+    .hist li { font-size: 12.5px; padding: 4px 0; }
+    .kindtag { display: inline-block; border-radius: 5px; padding: 1px 6px; font-size: 10.5px; margin-right: 6px; }
+    .kindtag.added { background: #102b22; color: var(--accent); border: 1px solid #286b52; }
+    .kindtag.changed { background: #2b2415; color: var(--warning); border: 1px solid #705a2c; }
+    .kindtag.removed { background: #2a1618; color: var(--danger); border: 1px solid #7b3838; }

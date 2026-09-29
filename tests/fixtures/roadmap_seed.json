@@ -1,0 +1,2537 @@
+{
+ "ui": {
+  "title": {
+   "ko": "RLWRLD 플랫폼 팀 로드맵",
+   "en": "RLWRLD Platform Team Roadmap",
+   "ja": "RLWRLD プラットフォームチーム ロードマップ"
+  },
+  "sub": {
+   "ko": "Notion 「Platform Team Roadmap」 202609 스냅샷 기준 초안 · 원본 최종 수정 2026-09-06",
+   "en": "Draft from the 202609 snapshot of the Notion “Platform Team Roadmap” · source last edited 2026-09-06",
+   "ja": "Notion「Platform Team Roadmap」202609 スナップショットに基づくドラフト · 原本最終更新 2026-09-06"
+  },
+  "byteam": {
+   "ko": "부서별",
+   "en": "By team",
+   "ja": "部署別"
+  },
+  "byproduct": {
+   "ko": "제품별",
+   "en": "By product",
+   "ja": "製品別"
+  },
+  "now": {
+   "ko": "이번달 (2026-09)",
+   "en": "This month (2026-09)",
+   "ja": "今月 (2026-09)"
+  },
+  "next": {
+   "ko": "다음달 (2026-10)",
+   "en": "Next month (2026-10)",
+   "ja": "来月 (2026-10)"
+  },
+  "long": {
+   "ko": "장기 (4Q~)",
+   "en": "Long term (Q4 onward)",
+   "ja": "長期 (4Q〜)"
+  },
+  "items": {
+   "ko": "건",
+   "en": "items",
+   "ja": "件"
+  },
+  "search": {
+   "ko": "항목 검색",
+   "en": "Search items",
+   "ja": "項目を検索"
+  },
+  "allteams": {
+   "ko": "전체 팀",
+   "en": "All teams",
+   "ja": "全チーム"
+  },
+  "allfam": {
+   "ko": "전체 패밀리",
+   "en": "All families",
+   "ja": "全ファミリー"
+  },
+  "empty": {
+   "ko": "해당 항목이 없습니다",
+   "en": "No matching items",
+   "ja": "該当する項目はありません"
+  },
+  "gapnote": {
+   "ko": "이 팀은 공식 로드맵이 비어 있습니다. 8월 플랫폼 팀 위클리에서 일부 확인 가능.",
+   "en": "This team's official roadmap is blank. Partial information exists in the August platform-team weekly.",
+   "ja": "このチームの公式ロードマップは空欄です。8月のプラットフォームチーム週次で一部確認できます。"
+  },
+  "source": {
+   "ko": "원본",
+   "en": "Source",
+   "ja": "原本"
+  },
+  "legend": {
+   "ko": "패밀리",
+   "en": "Family",
+   "ja": "ファミリー"
+  },
+  "total": {
+   "ko": "전체",
+   "en": "Total",
+   "ja": "全体"
+  },
+  "printed": {
+   "ko": "생성",
+   "en": "Generated",
+   "ja": "生成"
+  },
+  "dev": {
+   "ko": "개발성",
+   "en": "Development",
+   "ja": "開発性"
+  },
+  "ops": {
+   "ko": "운영성",
+   "en": "Operational",
+   "ja": "運用性"
+  },
+  "refresh": {
+   "ko": "현행화",
+   "en": "Refresh",
+   "ja": "最新化"
+  },
+  "refreshing": {
+   "ko": "확인 중…",
+   "en": "Checking…",
+   "ja": "確認中…"
+  },
+  "history": {
+   "ko": "변경 이력",
+   "en": "Change history",
+   "ja": "変更履歴"
+  },
+  "nochange": {
+   "ko": "변경 없음",
+   "en": "No change",
+   "ja": "変更なし"
+  },
+  "offline": {
+   "ko": "서버에 연결할 수 없습니다. 백오피스에서 열면 현행화가 동작합니다.",
+   "en": "Cannot reach the server. Refresh works when the page is opened from the back office.",
+   "ja": "サーバーに接続できません。バックオフィスから開くと最新化が動作します。"
+  },
+  "changed": {
+   "ko": "변경됨",
+   "en": "Changed",
+   "ja": "変更あり"
+  },
+  "added": {
+   "ko": "추가",
+   "en": "Added",
+   "ja": "追加"
+  },
+  "removed": {
+   "ko": "삭제",
+   "en": "Removed",
+   "ja": "削除"
+  },
+  "prev": {
+   "ko": "이전 문서",
+   "en": "Previous version",
+   "ja": "以前の版"
+  },
+  "detail": {
+   "ko": "상세",
+   "en": "Detail",
+   "ja": "詳細"
+  },
+  "origin": {
+   "ko": "원본",
+   "en": "Source",
+   "ja": "原本"
+  },
+  "asof": {
+   "ko": "스냅샷",
+   "en": "Snapshot",
+   "ja": "スナップショット"
+  },
+  "closeHist": {
+   "ko": "닫기",
+   "en": "Close",
+   "ja": "閉じる"
+  },
+  "nohist": {
+   "ko": "아직 기록된 변경이 없습니다. 현행화를 한 번 실행하면 이 자리에 쌓입니다.",
+   "en": "No changes recorded yet. They accumulate here once a refresh has run.",
+   "ja": "まだ記録された変更はありません。最新化を一度実行するとここに蓄積されます。"
+  },
+  "rule": {
+   "ko": "‘곧’은 원본에 분기(4Q)가 명시된 항목, ‘언젠가’는 시점 표기가 없는 항목입니다.",
+   "en": "“Soon” holds items the source dates to a quarter (Q4); “someday” holds items with no stated date.",
+   "ja": "「まもなく」は原本に四半期（4Q）が明記された項目、「いつか」は時期の記載がない項目です。"
+  }
+ },
+ "teams": [
+  {
+   "id": "rp",
+   "label": {
+    "ko": "Robotics Platform",
+    "en": "Robotics Platform",
+    "ja": "Robotics Platform"
+   }
+  },
+  {
+   "id": "hd",
+   "label": {
+    "ko": "Human Data",
+    "en": "Human Data",
+    "ja": "Human Data"
+   }
+  },
+  {
+   "id": "infra",
+   "label": {
+    "ko": "Infra & Data",
+    "en": "Infra & Data",
+    "ja": "Infra & Data"
+   }
+  },
+  {
+   "id": "loop",
+   "label": {
+    "ko": "LOOP",
+    "en": "LOOP",
+    "ja": "LOOP"
+   }
+  },
+  {
+   "id": "hw",
+   "label": {
+    "ko": "HW",
+    "en": "HW",
+    "ja": "HW"
+   }
+  }
+ ],
+ "families": [
+  {
+   "id": "RRP",
+   "label": {
+    "ko": "RRP · 로보틱스 런타임 플랫폼",
+    "en": "RRP · Robotics Runtime Platform",
+    "ja": "RRP · ロボティクスランタイムプラットフォーム"
+   },
+   "color": "#68a8ff"
+  },
+  {
+   "id": "RHP",
+   "label": {
+    "ko": "RHP · 로봇 하드웨어 플랫폼",
+    "en": "RHP · Robot Hardware Platform",
+    "ja": "RHP · ロボットハードウェアプラットフォーム"
+   },
+   "color": "#f1c56b"
+  },
+  {
+   "id": "DATA",
+   "label": {
+    "ko": "Data Pipeline · 데이터 수집·계약",
+    "en": "Data Pipeline · capture & contract",
+    "ja": "Data Pipeline · データ収集・契約"
+   },
+   "color": "#65d6a6"
+  },
+  {
+   "id": "INFRA",
+   "label": {
+    "ko": "Data & Infra · 클러스터·스토리지",
+    "en": "Data & Infra · cluster & storage",
+    "ja": "Data & Infra · クラスタ・ストレージ"
+   },
+   "color": "#b89cff"
+  },
+  {
+   "id": "BENCH",
+   "label": {
+    "ko": "DexBench · 평가·시뮬레이션",
+    "en": "DexBench · evaluation & simulation",
+    "ja": "DexBench · 評価・シミュレーション"
+   },
+   "color": "#ff9bd2"
+  },
+  {
+   "id": "LAAS",
+   "label": {
+    "ko": "LaaS · 배포·인증·운영지원",
+    "en": "LaaS · deployment, certification, support",
+    "ja": "LaaS · 配備・認証・運用支援"
+   },
+   "color": "#ff9f7b"
+  },
+  {
+   "id": "CLOUD",
+   "label": {
+    "ko": "Cloud Inference",
+    "en": "Cloud Inference",
+    "ja": "Cloud Inference"
+   },
+   "color": "#7bd7e8"
+  }
+ ],
+ "groups": {
+  "rrc_new": {
+   "ko": "RRC 신규 기능 추가",
+   "en": "New RRC features",
+   "ja": "RRC 新規機能の追加"
+  },
+  "rrc_stab": {
+   "ko": "RRC 내부 기능 안정화",
+   "en": "Stabilising RRC internals",
+   "ja": "RRC 内部機能の安定化"
+  },
+  "hrdexdb": {
+   "ko": "HRDexDB",
+   "en": "HRDexDB",
+   "ja": "HRDexDB"
+  },
+  "misc": {
+   "ko": "기타",
+   "en": "Other",
+   "ja": "その他"
+  },
+  "lt": {
+   "ko": "장기 과제",
+   "en": "Long-term items",
+   "ja": "長期課題"
+  },
+  "gap": {
+   "ko": "미작성",
+   "en": "Not written",
+   "ja": "未作成"
+  },
+  "data": {
+   "ko": "데이터",
+   "en": "Data",
+   "ja": "データ"
+  },
+  "opt": {
+   "ko": "인프라 최적화",
+   "en": "Infrastructure optimisation",
+   "ja": "インフラ最適化"
+  },
+  "ops": {
+   "ko": "운영",
+   "en": "Operations",
+   "ja": "運用"
+  },
+  "common": {
+   "ko": "공통",
+   "en": "Common",
+   "ja": "共通"
+  },
+  "desktop": {
+   "ko": "Desktop",
+   "en": "Desktop",
+   "ja": "Desktop"
+  },
+  "web": {
+   "ko": "Web",
+   "en": "Web",
+   "ja": "Web"
+  },
+  "ship": {
+   "ko": "고객 제공 준비",
+   "en": "Getting customer-ready",
+   "ja": "顧客提供の準備"
+  },
+  "ref": {
+   "ko": "Reference HW 프로젝트",
+   "en": "Reference HW project",
+   "ja": "Reference HW プロジェクト"
+  },
+  "odm": {
+   "ko": "ODM 프로젝트",
+   "en": "ODM project",
+   "ja": "ODM プロジェクト"
+  },
+  "test": {
+   "ko": "HW Test",
+   "en": "HW Test",
+   "ja": "HW Test"
+  },
+  "src": {
+   "ko": "HW Sourcing",
+   "en": "HW Sourcing",
+   "ja": "HW Sourcing"
+  },
+  "dev": {
+   "ko": "HW Develop",
+   "en": "HW Develop",
+   "ja": "HW Develop"
+  },
+  "sim": {
+   "ko": "URDF Simulation",
+   "en": "URDF Simulation",
+   "ja": "URDF Simulation"
+  }
+ },
+ "items": [
+  {
+   "id": 0,
+   "team": "rp",
+   "hz": "now",
+   "grp": "rrc_new",
+   "fam": "RRP",
+   "prod": "RRC",
+   "t": {
+    "ko": "Task orchestrator 설계 및 RRC 인터페이스 설계",
+    "en": "Design the task orchestrator and the RRC interface",
+    "ja": "Task orchestrator の設計および RRC インターフェース設計"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "f389828d5c"
+  },
+  {
+   "id": 1,
+   "team": "rp",
+   "hz": "now",
+   "grp": "rrc_new",
+   "fam": "RRP",
+   "prod": "RRC",
+   "t": {
+    "ko": "RRC 제어 robustness 확보를 위한 new session 설계",
+    "en": "Design a new session model to make RRC control robust",
+    "ja": "RRC 制御の robustness 確保に向けた new session 設計"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "9ddeade3f2"
+  },
+  {
+   "id": 2,
+   "team": "rp",
+   "hz": "now",
+   "grp": "rrc_new",
+   "fam": "RRP",
+   "prod": "RRC",
+   "t": {
+    "ko": "사용성 개선: Entry config 자동 builder 추가 및 UI/UX 개선",
+    "en": "Usability: add an automatic entry-config builder and improve UI/UX",
+    "ja": "使いやすさ改善: Entry config 自動 builder の追加と UI/UX 改善"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "23b6f662f5"
+  },
+  {
+   "id": 3,
+   "team": "rp",
+   "hz": "now",
+   "grp": "rrc_new",
+   "fam": "RRP",
+   "prod": "Motion & Vision",
+   "t": {
+    "ko": "Vision (object 6D estimation) 및 Motion module 탐색",
+    "en": "Explore the vision (object 6D pose estimation) and motion modules",
+    "ja": "Vision（object 6D estimation）および Motion module の探索"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "b1d2daa79b"
+  },
+  {
+   "id": 4,
+   "team": "rp",
+   "hz": "now",
+   "grp": "rrc_new",
+   "fam": "BENCH",
+   "prod": "Simulation",
+   "t": {
+    "ko": "IsaacSim 지원 (DexBench 환경 및 evaluation 이식 방향 확정)",
+    "en": "IsaacSim support — decide how to port the DexBench environment and evaluation",
+    "ja": "IsaacSim 対応（DexBench 環境および evaluation 移植方針の確定）"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "4772991495"
+  },
+  {
+   "id": 5,
+   "team": "rp",
+   "hz": "now",
+   "grp": "rrc_new",
+   "fam": "RRP",
+   "prod": "Motion & Vision",
+   "t": {
+    "ko": "IK 고도화: self collision avoidance 및 nullspace control",
+    "en": "Advance IK: self-collision avoidance and nullspace control",
+    "ja": "IK の高度化: self collision avoidance および nullspace control"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "4100010ced"
+  },
+  {
+   "id": 6,
+   "team": "rp",
+   "hz": "now",
+   "grp": "rrc_new",
+   "fam": "RRP",
+   "prod": "Teleoperation",
+   "t": {
+    "ko": "HIL 및 operator intervention 고도화",
+    "en": "Advance hardware-in-the-loop and operator intervention",
+    "ja": "HIL および operator intervention の高度化"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "0d1fe1cc16"
+  },
+  {
+   "id": 7,
+   "team": "rp",
+   "hz": "now",
+   "grp": "rrc_new",
+   "fam": "RRP",
+   "prod": "Teleoperation",
+   "t": {
+    "ko": "Leader 및 operator feedback 확장 (HMD gamepad, tactile·vision feedback 등)",
+    "en": "Extend leader and operator feedback (HMD gamepad, tactile/vision feedback)",
+    "ja": "Leader および operator feedback の拡張（HMD gamepad、tactile・vision feedback など）"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "38539e754d"
+  },
+  {
+   "id": 8,
+   "team": "rp",
+   "hz": "now",
+   "grp": "rrc_stab",
+   "fam": "RRP",
+   "prod": "RRC",
+   "t": {
+    "ko": "Inference Controller 리팩토링 및 지원 Policy server 정리",
+    "en": "Refactor the inference controller and consolidate the supported policy servers",
+    "ja": "Inference Controller のリファクタリングおよび対応 Policy server の整理"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "b2b277127a"
+  },
+  {
+   "id": 9,
+   "team": "rp",
+   "hz": "now",
+   "grp": "rrc_stab",
+   "fam": "RRP",
+   "prod": "RRC",
+   "t": {
+    "ko": "RRC 배포 최종 프로세스 정비 및 QA 프로세스 개선",
+    "en": "Finalise the RRC release process and improve the QA process",
+    "ja": "RRC デプロイ最終プロセスの整備および QA プロセスの改善"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "cacb4f6ae1"
+  },
+  {
+   "id": 10,
+   "team": "rp",
+   "hz": "now",
+   "grp": "rrc_stab",
+   "fam": "DATA",
+   "prod": "Data Contract",
+   "t": {
+    "ko": "Data freshness 정책 적용",
+    "en": "Apply the data-freshness policy",
+    "ja": "Data freshness ポリシーの適用"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "8e10c2f819"
+  },
+  {
+   "id": 11,
+   "team": "rp",
+   "hz": "now",
+   "grp": "rrc_stab",
+   "fam": "DATA",
+   "prod": "Data Contract",
+   "t": {
+    "ko": "전사 차원의 Data contract 정비 논의 및 적용",
+    "en": "Discuss and apply a company-wide data contract",
+    "ja": "全社レベルの Data contract 整備の議論および適用"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "01c5f57533"
+  },
+  {
+   "id": 12,
+   "team": "rp",
+   "hz": "now",
+   "grp": "misc",
+   "fam": "RRP",
+   "prod": "rldx_serving",
+   "t": {
+    "ko": "rldx_serving 적용 및 버전 관리",
+    "en": "Adopt rldx_serving and manage its versions",
+    "ja": "rldx_serving の適用およびバージョン管理"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "29e027c14e"
+  },
+  {
+   "id": 13,
+   "team": "rp",
+   "hz": "someday",
+   "grp": "misc",
+   "fam": "RHP",
+   "prod": "HW Integration",
+   "t": {
+    "ko": "신규 HW Integration — Wheeled Humanoid / Hand / Leader·Sensor (일정 미정, 확정되는 대로 추가)",
+    "en": "New hardware integration — wheeled humanoid / hand / leader and sensors (schedule TBD, added as it firms up)",
+    "ja": "新規 HW Integration — Wheeled Humanoid / Hand / Leader・Sensor（日程未定、確定次第追加）"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "f1887466fe"
+  },
+  {
+   "id": 14,
+   "team": "rp",
+   "hz": "now",
+   "grp": "hrdexdb",
+   "fam": "DATA",
+   "prod": "HRDexDB",
+   "t": {
+    "ko": "Multi camera 수집 환경 구축 (시간 align 구현)",
+    "en": "Build the multi-camera capture setup (implement time alignment)",
+    "ja": "Multi camera 収集環境の構築（時刻 align の実装）"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "5053021b39"
+  },
+  {
+   "id": 15,
+   "team": "rp",
+   "hz": "now",
+   "grp": "hrdexdb",
+   "fam": "DATA",
+   "prod": "HRDexDB",
+   "t": {
+    "ko": "Robot to camera calibration 기능 개발",
+    "en": "Develop robot-to-camera calibration",
+    "ja": "Robot to camera calibration 機能の開発"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "dd376c6362"
+  },
+  {
+   "id": 16,
+   "team": "rp",
+   "hz": "now",
+   "grp": "hrdexdb",
+   "fam": "DATA",
+   "prod": "HRDexDB",
+   "t": {
+    "ko": "HRDexDB object 추가",
+    "en": "Add objects to HRDexDB",
+    "ja": "HRDexDB への object 追加"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "c6b9d2041b"
+  },
+  {
+   "id": 17,
+   "team": "rp",
+   "hz": "next",
+   "grp": "rrc_new",
+   "fam": "RRP",
+   "prod": "RRC",
+   "t": {
+    "ko": "Task orchestrator 구체화 및 RRC 기본 연동 준비 (신규 세션 적용) — 동기/비동기 API 구분 제공, 연속 모션을 위한 내부 정책 수립",
+    "en": "Firm up the task orchestrator and prepare basic RRC integration on the new session — separate sync/async APIs, and set the internal policy for smooth continuous motion",
+    "ja": "Task orchestrator の具体化および RRC 基本連携の準備（新セッション適用）— 同期/非同期 API の区分提供、連続モーションのための内部方針策定"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "54b83d6a93"
+  },
+  {
+   "id": 18,
+   "team": "rp",
+   "hz": "next",
+   "grp": "rrc_new",
+   "fam": "DATA",
+   "prod": "Dataset Capture",
+   "t": {
+    "ko": "RRC Data 관련 정보 추가 — config 및 runtime 시 외부에서 받은 정보를 dumping 해 dataset 으로 남기는 기능 개발",
+    "en": "Add RRC data capture — dump the config and the information received at runtime and keep it as a dataset",
+    "ja": "RRC Data 関連情報の追加 — config および runtime 時に外部から受け取った情報を dumping し dataset として残す機能の開発"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "3f5c79a43f"
+  },
+  {
+   "id": 19,
+   "team": "rp",
+   "hz": "next",
+   "grp": "rrc_new",
+   "fam": "DATA",
+   "prod": "Dataset Capture",
+   "t": {
+    "ko": "IK target 정보를 추가로 저장할 수 있는 통로 마련",
+    "en": "Open a path for additionally storing IK target information",
+    "ja": "IK target 情報を追加保存できる経路の整備"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "707810c7bd"
+  },
+  {
+   "id": 20,
+   "team": "rp",
+   "hz": "next",
+   "grp": "rrc_new",
+   "fam": "RRP",
+   "prod": "Motion & Vision",
+   "t": {
+    "ko": "Predefined motion 확장 (Predefined grasp table 기반)",
+    "en": "Extend predefined motions (based on the predefined grasp table)",
+    "ja": "Predefined motion の拡張（Predefined grasp table ベース）"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "0b58c84eef"
+  },
+  {
+   "id": 21,
+   "team": "rp",
+   "hz": "next",
+   "grp": "rrc_new",
+   "fam": "RRP",
+   "prod": "Motion & Vision",
+   "t": {
+    "ko": "Vision 모듈 고도화 — Multi cam 기반에서 카메라 환경 간소화, Segmentation 기반 추정, HRDexDB 연동",
+    "en": "Advance the vision module — simplify the camera setup from the multi-cam baseline, segmentation-based estimation, HRDexDB integration",
+    "ja": "Vision モジュールの高度化 — Multi cam ベースからカメラ環境の簡素化、Segmentation ベース推定、HRDexDB 連携"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "3ab875aa34"
+  },
+  {
+   "id": 22,
+   "team": "rp",
+   "hz": "next",
+   "grp": "rrc_new",
+   "fam": "RRP",
+   "prod": "Motion & Vision",
+   "t": {
+    "ko": "Motion 모듈: 기본 blocking motion 추가 (linear, spline 등)",
+    "en": "Motion module: add basic blocking motions (linear, spline, …)",
+    "ja": "Motion モジュール: 基本 blocking motion の追加（linear, spline など）"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "2d70e1a3f3"
+  },
+  {
+   "id": 23,
+   "team": "rp",
+   "hz": "next",
+   "grp": "rrc_stab",
+   "fam": "RRP",
+   "prod": "RRC",
+   "t": {
+    "ko": "API 정비",
+    "en": "Tidy up the API",
+    "ja": "API の整備"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "8b20914b8e"
+  },
+  {
+   "id": 24,
+   "team": "rp",
+   "hz": "next",
+   "grp": "rrc_stab",
+   "fam": "DATA",
+   "prod": "Data Contract",
+   "t": {
+    "ko": "Data contract 논의 결과에 따른 내부 리팩토링 (action, state, sensor …)",
+    "en": "Internal refactoring to follow the data-contract decision (action, state, sensor, …)",
+    "ja": "Data contract 議論結果に基づく内部リファクタリング（action, state, sensor …）"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "0488ea2b32"
+  },
+  {
+   "id": 25,
+   "team": "rp",
+   "hz": "next",
+   "grp": "rrc_stab",
+   "fam": "LAAS",
+   "prod": "Release & Compliance",
+   "t": {
+    "ko": "배포 프로세스 점검 단계 마련 (라이센스 이슈 등)",
+    "en": "Add a review gate to the release process (licence issues and the like)",
+    "ja": "デプロイプロセスの点検ステップ整備（ライセンス課題など）"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "7249b6f385"
+  },
+  {
+   "id": 27,
+   "team": "rp",
+   "hz": "next",
+   "grp": "hrdexdb",
+   "fam": "DATA",
+   "prod": "HRDexDB",
+   "t": {
+    "ko": "DB에 적재된 object 정보를 RRC에 연동할 수 있는 외부 인터페이스 정립",
+    "en": "Establish the external interface that feeds stored object information into RRC",
+    "ja": "DB に格納された object 情報を RRC に連携する外部インターフェースの確立"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "50ad57262f"
+  },
+  {
+   "id": 28,
+   "team": "rp",
+   "hz": "next",
+   "grp": "hrdexdb",
+   "fam": "DATA",
+   "prod": "HRDexDB",
+   "t": {
+    "ko": "Object 추가",
+    "en": "Add objects",
+    "ja": "Object の追加"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "833c8ebf23"
+  },
+  {
+   "id": 29,
+   "team": "rp",
+   "hz": "soon",
+   "grp": "lt",
+   "fam": "RRP",
+   "prod": "RRC",
+   "t": {
+    "ko": "Task orchestrator 기반 RRC 인터페이스 정비 및 연동 (4Q)",
+    "en": "Rework and connect the RRC interface around the task orchestrator (Q4)",
+    "ja": "Task orchestrator ベースの RRC インターフェース整備および連携（4Q）"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "2b682eb7ae"
+  },
+  {
+   "id": 30,
+   "team": "rp",
+   "hz": "soon",
+   "grp": "lt",
+   "fam": "RRP",
+   "prod": "Motion & Vision",
+   "t": {
+    "ko": "Modular approach를 위한 RRC 내부 기술 확보 — Motion: motion planner 고도화 및 실시간 성능 확보, 기본 모션 및 object avoidance (4Q)",
+    "en": "Secure the internal RRC technology for a modular approach — Motion: advance the motion planner and reach real-time performance, basic motions and object avoidance (Q4)",
+    "ja": "Modular approach のための RRC 内部技術の確保 — Motion: motion planner の高度化とリアルタイム性能の確保、基本モーションおよび object avoidance（4Q）"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "58dc442352"
+  },
+  {
+   "id": 31,
+   "team": "rp",
+   "hz": "soon",
+   "grp": "lt",
+   "fam": "RRP",
+   "prod": "Motion & Vision",
+   "t": {
+    "ko": "Modular approach를 위한 RRC 내부 기술 확보 — Vision: 간소화된 환경에서 object 6D pose 확보, HRDexDB 쿼리로 6D pose 추출·활용 (4Q)",
+    "en": "Secure the internal RRC technology for a modular approach — Vision: obtain object 6D pose in a simplified setup, and pull 6D pose out of HRDexDB by query (Q4)",
+    "ja": "Modular approach のための RRC 内部技術の確保 — Vision: 簡素化された環境での object 6D pose 取得、HRDexDB クエリによる 6D pose の抽出・活用（4Q）"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "f5410b444e"
+  },
+  {
+   "id": 32,
+   "team": "rp",
+   "hz": "someday",
+   "grp": "lt",
+   "fam": "LAAS",
+   "prod": "Release & Compliance",
+   "t": {
+    "ko": "RRC 외부 배포를 위한 프로세스 지속 정비",
+    "en": "Keep refining the process for shipping RRC outside the company",
+    "ja": "RRC 外部配布に向けたプロセスの継続的整備"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "23660ec21b"
+  },
+  {
+   "id": 33,
+   "team": "rp",
+   "hz": "someday",
+   "grp": "lt",
+   "fam": "RRP",
+   "prod": "RRC",
+   "t": {
+    "ko": "Multi PC, Robot Controller, Sensor 간 시간 정합성을 맞추기 위한 장치 고안",
+    "en": "Devise a mechanism for time alignment across multiple PCs, robot controllers and sensors",
+    "ja": "Multi PC・Robot Controller・Sensor 間の時刻整合をとる仕組みの考案"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "3312c494c1"
+  },
+  {
+   "id": 34,
+   "team": "rp",
+   "hz": "someday",
+   "grp": "lt",
+   "fam": "RHP",
+   "prod": "HW Integration",
+   "t": {
+    "ko": "신규 HW 지속 테스트 및 Integration",
+    "en": "Keep testing and integrating new hardware",
+    "ja": "新規 HW の継続的テストおよび Integration"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "d44e22e438"
+  },
+  {
+   "id": 35,
+   "team": "rp",
+   "hz": "someday",
+   "grp": "lt",
+   "fam": "DATA",
+   "prod": "HRDexDB",
+   "t": {
+    "ko": "HRDexDB Object 추가 및 RRC 연동",
+    "en": "Add HRDexDB objects and connect them to RRC",
+    "ja": "HRDexDB への Object 追加および RRC 連携"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/35f6cbdff6f680c6b4d3e8e5ff78dde8",
+   "detLabel": {
+    "ko": "Robotics Platform 팀 페이지",
+    "en": "Robotics Platform team page",
+    "ja": "Robotics Platform チームページ"
+   },
+   "hash": "06089dd8dd"
+  },
+  {
+   "id": 39,
+   "team": "infra",
+   "hz": "now",
+   "grp": "data",
+   "fam": "DATA",
+   "prod": "Data Governance",
+   "t": {
+    "ko": "데이터 수집 창구 정리 — 어떤 조직이 어떻게 데이터를 수집하고 어디에 보관하는지 정리",
+    "en": "Tidy up the data intake points — which teams collect what, how, and where it is stored",
+    "ja": "データ収集窓口の整理 — どの組織がどのようにデータを収集し、どこに保管しているかの整理"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ab6cbdff6f6806b9455caf1dcf2af76",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "69669b4e39"
+  },
+  {
+   "id": 40,
+   "team": "infra",
+   "hz": "now",
+   "grp": "data",
+   "fam": "INFRA",
+   "prod": "Dashboard",
+   "t": {
+    "ko": "수집 데이터를 확인할 수 있는 대시보드 제공 — 사내 적재 데이터의 추이 확인",
+    "en": "Provide a dashboard for collected data — track how much data the company has accumulated over time",
+    "ja": "収集データを確認できるダッシュボードの提供 — 社内蓄積データの推移確認"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ab6cbdff6f6806b9455caf1dcf2af76",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "b0a1d8aa26"
+  },
+  {
+   "id": 41,
+   "team": "infra",
+   "hz": "now",
+   "grp": "data",
+   "fam": "DATA",
+   "prod": "Data Contract",
+   "t": {
+    "ko": "Data Contract — 프로세스·관리 방식 협의, 데이터셋 위주로 적용 시작",
+    "en": "Data contract — agree the process and how it is governed, and start applying it to datasets first",
+    "ja": "Data Contract — プロセス・管理方式の合意、データセット中心に適用開始"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3976cbdff6f68199b1e5c6b36e1f292a",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "341153422b"
+  },
+  {
+   "id": 42,
+   "team": "infra",
+   "hz": "now",
+   "grp": "opt",
+   "fam": "INFRA",
+   "prod": "GPU Optimization",
+   "t": {
+    "ko": "RLDX 학습 최적화 — RLDX 학습이 인프라를 효율적으로 쓰도록 코드 최적화",
+    "en": "Optimise RLDX training — tune the code so RLDX training uses the infrastructure efficiently",
+    "ja": "RLDX 学習の最適化 — RLDX 学習がインフラを効率的に使えるようコードを最適化"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3976cbdff6f6801b95aad08c4cd4f8c6",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "94393b3196"
+  },
+  {
+   "id": 43,
+   "team": "infra",
+   "hz": "now",
+   "grp": "ops",
+   "fam": "INFRA",
+   "prod": "Operations",
+   "t": {
+    "ko": "인프라팀 연내 로드맵의 사내 공유",
+    "en": "Share the infra team's roadmap for the rest of the year across the company",
+    "ja": "インフラチームの年内ロードマップの社内共有"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ab6cbdff6f6806b9455caf1dcf2af76",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "9d0e708c66"
+  },
+  {
+   "id": 44,
+   "team": "infra",
+   "hz": "now",
+   "grp": "ops",
+   "fam": "INFRA",
+   "prod": "Operations",
+   "t": {
+    "ko": "GPU Dedication / Priority 에 대한 간편한 절차·규정 제공",
+    "en": "Provide a simple procedure and policy for GPU dedication and priority",
+    "ja": "GPU Dedication / Priority に関する簡便な手続き・規程の提供"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ab6cbdff6f6806b9455caf1dcf2af76",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "9c29aecc1e"
+  },
+  {
+   "id": 45,
+   "team": "infra",
+   "hz": "now",
+   "grp": "ops",
+   "fam": "INFRA",
+   "prod": "Operations",
+   "t": {
+    "ko": "인프라 릴리즈 사이클 운영을 위한 준비",
+    "en": "Prepare to run the infrastructure on a release cycle",
+    "ja": "インフラのリリースサイクル運用に向けた準備"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ab6cbdff6f6806b9455caf1dcf2af76",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "c30074d15d"
+  },
+  {
+   "id": 46,
+   "team": "infra",
+   "hz": "now",
+   "grp": "ops",
+   "fam": "INFRA",
+   "prod": "Operations",
+   "t": {
+    "ko": "클러스터 운영 데이터 수집 정비 — 클러스터에 영향을 주지 않고 일관된 방법으로 수집되도록",
+    "en": "Rework cluster telemetry collection so it is consistent and does not disturb the cluster",
+    "ja": "クラスタ運用データ収集の整備 — クラスタに影響を与えず一貫した方法で収集されるように"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ab6cbdff6f6806b9455caf1dcf2af76",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "ba393b0298"
+  },
+  {
+   "id": 47,
+   "team": "infra",
+   "hz": "now",
+   "grp": "ops",
+   "fam": "INFRA",
+   "prod": "Operations",
+   "t": {
+    "ko": "클러스터 어뷰징 방지를 위한 Credit 시스템 적용 — 초과 시 우선순위 최하위, 추가 Credit 발급 요청 필요",
+    "en": "Apply a credit system against cluster abuse — going over drops you to the lowest priority and requires a request for more credit",
+    "ja": "クラスタのアビューズ防止のための Credit システム適用 — 超過時は優先度最下位、追加 Credit 発行の申請が必要"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ab6cbdff6f6806b9455caf1dcf2af76",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "d930d0b32c"
+  },
+  {
+   "id": 48,
+   "team": "infra",
+   "hz": "next",
+   "grp": "data",
+   "fam": "DATA",
+   "prod": "Data Governance",
+   "t": {
+    "ko": "실험 코드와 데이터의 분리 on Slurm",
+    "en": "Separate experiment code from data on Slurm",
+    "ja": "Slurm における実験コードとデータの分離"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ab6cbdff6f6806b9455caf1dcf2af76",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "66195784e3"
+  },
+  {
+   "id": 49,
+   "team": "infra",
+   "hz": "next",
+   "grp": "ops",
+   "fam": "INFRA",
+   "prod": "Operations",
+   "t": {
+    "ko": "릴리즈 사이클 기반의 인프라 운영",
+    "en": "Run the infrastructure on the release cycle",
+    "ja": "リリースサイクルに基づくインフラ運用"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ab6cbdff6f6806b9455caf1dcf2af76",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "db6f3fdaf7"
+  },
+  {
+   "id": 50,
+   "team": "infra",
+   "hz": "next",
+   "grp": "ops",
+   "fam": "INFRA",
+   "prod": "Operations",
+   "t": {
+    "ko": "고도화(단순화)된 스케쥴링 로직 적용",
+    "en": "Apply the reworked — and simplified — scheduling logic",
+    "ja": "高度化（単純化）されたスケジューリングロジックの適用"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ab6cbdff6f6806b9455caf1dcf2af76",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "2973ad1915"
+  },
+  {
+   "id": 51,
+   "team": "infra",
+   "hz": "next",
+   "grp": "ops",
+   "fam": "INFRA",
+   "prod": "GPU Optimization",
+   "t": {
+    "ko": "GPU 자원 확보 의사결정 실행 — H200 16노드 국책과제 종료 이후 대응",
+    "en": "Execute the decision on securing GPU capacity — covering what happens after the H200 16-node national project ends",
+    "ja": "GPU リソース確保の意思決定の実行 — H200 16ノード国家プロジェクト終了後への対応"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3976cbdff6f6801b95aad08c4cd4f8c6",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "5c5228faf9"
+  },
+  {
+   "id": 52,
+   "team": "infra",
+   "hz": "someday",
+   "grp": "data",
+   "fam": "DATA",
+   "prod": "Foundry",
+   "t": {
+    "ko": "Foundry 의 전사 정착",
+    "en": "Establish Foundry company-wide",
+    "ja": "Foundry の全社定着"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ab6cbdff6f6806b9455caf1dcf2af76",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "5cc23ea227"
+  },
+  {
+   "id": 53,
+   "team": "infra",
+   "hz": "someday",
+   "grp": "data",
+   "fam": "DATA",
+   "prod": "Data Contract",
+   "t": {
+    "ko": "Data Contract 전사 정착 및 Foundry 연동",
+    "en": "Establish the data contract company-wide and connect it to Foundry",
+    "ja": "Data Contract の全社定着および Foundry 連携"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3976cbdff6f68199b1e5c6b36e1f292a",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "cb8acbea33"
+  },
+  {
+   "id": 54,
+   "team": "infra",
+   "hz": "someday",
+   "grp": "opt",
+   "fam": "INFRA",
+   "prod": "GPU Optimization",
+   "t": {
+    "ko": "GPU 사용 코드가 GPU를 효율적으로 쓰도록 하는 시스템·문화 생성",
+    "en": "Create the system and the culture that make GPU-using code use the GPU efficiently",
+    "ja": "GPU を使うコードが GPU を効率的に使えるようにするシステム・文化の醸成"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3976cbdff6f6801b95aad08c4cd4f8c6",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "ddfd6f9c05"
+  },
+  {
+   "id": 55,
+   "team": "infra",
+   "hz": "someday",
+   "grp": "ops",
+   "fam": "INFRA",
+   "prod": "Operations",
+   "t": {
+    "ko": "Slurm 에서 k8s 로의 이전",
+    "en": "Migrate from Slurm to Kubernetes",
+    "ja": "Slurm から k8s への移行"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ab6cbdff6f6806b9455caf1dcf2af76",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "6593c179f0"
+  },
+  {
+   "id": 56,
+   "team": "infra",
+   "hz": "someday",
+   "grp": "ops",
+   "fam": "INFRA",
+   "prod": "Operations",
+   "t": {
+    "ko": "멀티 클러스터를 소비자 레벨에서 인지하지 않은 채로 사용할 수 있도록 플랫폼 정비",
+    "en": "Rework the platform so multiple clusters are invisible at the consumer level",
+    "ja": "マルチクラスタを利用者レベルで意識せずに使えるようプラットフォームを整備"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ab6cbdff6f6806b9455caf1dcf2af76",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "90dad6c917"
+  },
+  {
+   "id": 57,
+   "team": "infra",
+   "hz": "someday",
+   "grp": "ops",
+   "fam": "INFRA",
+   "prod": "Operations",
+   "t": {
+    "ko": "에이전트 친화적인 인프라 환경 제공",
+    "en": "Provide an agent-friendly infrastructure environment",
+    "ja": "エージェントフレンドリーなインフラ環境の提供"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ab6cbdff6f6806b9455caf1dcf2af76",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "bd58b9df91"
+  },
+  {
+   "id": 58,
+   "team": "infra",
+   "hz": "someday",
+   "grp": "ops",
+   "fam": "INFRA",
+   "prod": "Storage",
+   "t": {
+    "ko": "Storage Quota 적용",
+    "en": "Apply storage quotas",
+    "ja": "Storage Quota の適用"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ab6cbdff6f6806b9455caf1dcf2af76",
+   "detLabel": {
+    "ko": "Infrastructure 팀 페이지",
+    "en": "Infrastructure team page",
+    "ja": "Infrastructure チームページ"
+   },
+   "hash": "5837117869"
+  },
+  {
+   "id": 59,
+   "team": "loop",
+   "hz": "now",
+   "grp": "common",
+   "fam": "RRP",
+   "prod": "LOOP",
+   "t": {
+    "ko": "내부에서 테스트 가능한 첫 버전 준비 — Desktop 과 Web 2가지 형태로 서비스 개발 진행",
+    "en": "Prepare the first internally testable version — develop the service in two forms, desktop and web",
+    "ja": "社内でテスト可能な初版の準備 — Desktop と Web の2形態でサービス開発を進行"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3bb6cbdff6f6802b88c7d25358771a58",
+   "detLabel": {
+    "ko": "LOOP 로드맵 8~10월",
+    "en": "LOOP roadmap Aug–Oct",
+    "ja": "LOOP ロードマップ 8〜10月"
+   },
+   "hash": "71e0fb2a08"
+  },
+  {
+   "id": 60,
+   "team": "loop",
+   "hz": "now",
+   "grp": "common",
+   "fam": "RRP",
+   "prod": "LOOP",
+   "t": {
+    "ko": "공통: Email/Password 기반 사용자 인증",
+    "en": "Common: email/password user authentication",
+    "ja": "共通: Email/Password ベースのユーザー認証"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3bb6cbdff6f6802b88c7d25358771a58",
+   "detLabel": {
+    "ko": "LOOP 로드맵 8~10월",
+    "en": "LOOP roadmap Aug–Oct",
+    "ja": "LOOP ロードマップ 8〜10月"
+   },
+   "hash": "cb31ff932b"
+  },
+  {
+   "id": 61,
+   "team": "loop",
+   "hz": "now",
+   "grp": "desktop",
+   "fam": "RRP",
+   "prod": "LOOP Desktop",
+   "t": {
+    "ko": "로봇과 리더 디바이스 셋업(브링업) 지원",
+    "en": "Support robot and leader-device setup (bring-up)",
+    "ja": "ロボットとリーダーデバイスのセットアップ（ブリングアップ）支援"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3bb6cbdff6f6802b88c7d25358771a58",
+   "detLabel": {
+    "ko": "LOOP 로드맵 8~10월",
+    "en": "LOOP roadmap Aug–Oct",
+    "ja": "LOOP ロードマップ 8〜10月"
+   },
+   "hash": "dd760489c2"
+  },
+  {
+   "id": 62,
+   "team": "loop",
+   "hz": "now",
+   "grp": "desktop",
+   "fam": "DATA",
+   "prod": "Dataset Capture",
+   "t": {
+    "ko": "텔레오퍼레이션 데이터 수집과 자동 업로드",
+    "en": "Teleoperation data collection with automatic upload",
+    "ja": "テレオペレーションデータの収集と自動アップロード"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ba6cbdff6f680429ab1e5361332c34c",
+   "detLabel": {
+    "ko": "LOOP 로드맵 8~10월",
+    "en": "LOOP roadmap Aug–Oct",
+    "ja": "LOOP ロードマップ 8〜10月"
+   },
+   "hash": "64867758bc"
+  },
+  {
+   "id": 63,
+   "team": "loop",
+   "hz": "now",
+   "grp": "desktop",
+   "fam": "RRP",
+   "prod": "LOOP Desktop",
+   "t": {
+    "ko": "체크포인트 및 RLDX-1 Policy 런타임 다운로드 지원",
+    "en": "Support runtime download of checkpoints and the RLDX-1 policy",
+    "ja": "チェックポイントおよび RLDX-1 Policy のランタイムダウンロード対応"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3bb6cbdff6f6802b88c7d25358771a58",
+   "detLabel": {
+    "ko": "LOOP 로드맵 8~10월",
+    "en": "LOOP roadmap Aug–Oct",
+    "ja": "LOOP ロードマップ 8〜10月"
+   },
+   "hash": "e2938a13e5"
+  },
+  {
+   "id": 64,
+   "team": "loop",
+   "hz": "now",
+   "grp": "desktop",
+   "fam": "BENCH",
+   "prod": "Evaluation",
+   "t": {
+    "ko": "체크포인트 평가, 평가 데이터 수집과 자동 업로드",
+    "en": "Checkpoint evaluation, with evaluation data collected and uploaded automatically",
+    "ja": "チェックポイント評価、評価データの収集と自動アップロード"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ba6cbdff6f680429ab1e5361332c34c",
+   "detLabel": {
+    "ko": "LOOP 로드맵 8~10월",
+    "en": "LOOP roadmap Aug–Oct",
+    "ja": "LOOP ロードマップ 8〜10月"
+   },
+   "hash": "bc71a6e432"
+  },
+  {
+   "id": 65,
+   "team": "loop",
+   "hz": "now",
+   "grp": "web",
+   "fam": "DATA",
+   "prod": "Dataset Capture",
+   "t": {
+    "ko": "데이터셋 조회",
+    "en": "Dataset browsing",
+    "ja": "データセットの閲覧"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ba6cbdff6f680429ab1e5361332c34c",
+   "detLabel": {
+    "ko": "LOOP 로드맵 8~10월",
+    "en": "LOOP roadmap Aug–Oct",
+    "ja": "LOOP ロードマップ 8〜10月"
+   },
+   "hash": "314d9d8422"
+  },
+  {
+   "id": 66,
+   "team": "loop",
+   "hz": "now",
+   "grp": "web",
+   "fam": "RRP",
+   "prod": "LOOP Web",
+   "t": {
+    "ko": "RLDX-1 기반 모델 학습 지원",
+    "en": "Support RLDX-1-based model training",
+    "ja": "RLDX-1 ベースのモデル学習の支援"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3bb6cbdff6f6802b88c7d25358771a58",
+   "detLabel": {
+    "ko": "LOOP 로드맵 8~10월",
+    "en": "LOOP roadmap Aug–Oct",
+    "ja": "LOOP ロードマップ 8〜10月"
+   },
+   "hash": "f5b22da73d"
+  },
+  {
+   "id": 67,
+   "team": "loop",
+   "hz": "now",
+   "grp": "web",
+   "fam": "BENCH",
+   "prod": "Evaluation",
+   "t": {
+    "ko": "체크포인트 성능(성공률) 비교",
+    "en": "Compare checkpoint performance (success rate)",
+    "ja": "チェックポイント性能（成功率）の比較"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ba6cbdff6f680429ab1e5361332c34c",
+   "detLabel": {
+    "ko": "LOOP 로드맵 8~10월",
+    "en": "LOOP roadmap Aug–Oct",
+    "ja": "LOOP ロードマップ 8〜10月"
+   },
+   "hash": "84d847bfef"
+  },
+  {
+   "id": 68,
+   "team": "loop",
+   "hz": "next",
+   "grp": "ship",
+   "fam": "RRP",
+   "prod": "LOOP",
+   "t": {
+    "ko": "고객에게 제공 가능한 버전 준비 — QA 및 시스템 안정성 확보",
+    "en": "Prepare a customer-ready version — QA and system stability",
+    "ja": "顧客に提供可能なバージョンの準備 — QA およびシステム安定性の確保"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3bb6cbdff6f6802b88c7d25358771a58",
+   "detLabel": {
+    "ko": "LOOP 로드맵 8~10월",
+    "en": "LOOP roadmap Aug–Oct",
+    "ja": "LOOP ロードマップ 8〜10月"
+   },
+   "hash": "be3c49f17c"
+  },
+  {
+   "id": 69,
+   "team": "loop",
+   "hz": "next",
+   "grp": "ship",
+   "fam": "LAAS",
+   "prod": "Install & Setup",
+   "t": {
+    "ko": "시스템 설치 및 초기 설정을 위한 도구·가이드 마련",
+    "en": "Build the tooling and guides for installation and first-time setup",
+    "ja": "システムインストールおよび初期設定のためのツール・ガイドの整備"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ba6cbdff6f680429ab1e5361332c34c",
+   "detLabel": {
+    "ko": "LOOP 로드맵 8~10월",
+    "en": "LOOP roadmap Aug–Oct",
+    "ja": "LOOP ロードマップ 8〜10月"
+   },
+   "hash": "3e56fc8497"
+  },
+  {
+   "id": 70,
+   "team": "loop",
+   "hz": "next",
+   "grp": "ship",
+   "fam": "LAAS",
+   "prod": "Monitoring",
+   "t": {
+    "ko": "시스템 성능·오류 모니터링 환경 구성",
+    "en": "Set up performance and error monitoring",
+    "ja": "システム性能・エラーモニタリング環境の構成"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ba6cbdff6f680429ab1e5361332c34c",
+   "detLabel": {
+    "ko": "LOOP 로드맵 8~10월",
+    "en": "LOOP roadmap Aug–Oct",
+    "ja": "LOOP ロードマップ 8〜10月"
+   },
+   "hash": "13d96cae37"
+  },
+  {
+   "id": 71,
+   "team": "loop",
+   "hz": "someday",
+   "grp": "lt",
+   "fam": "RRP",
+   "prod": "LOOP Web",
+   "t": {
+    "ko": "더 다양한 모델과 학습 형태 지원 — GR00T, π0 등 Policy 확대, Multi-node Training, Hyperparameter Sweep",
+    "en": "Support more models and training modes — more policies such as GR00T and π0, multi-node training, hyper-parameter sweeps",
+    "ja": "より多様なモデルと学習形態への対応 — GR00T、π0 などの Policy 拡大、Multi-node Training、Hyperparameter Sweep"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3bb6cbdff6f6802b88c7d25358771a58",
+   "detLabel": {
+    "ko": "LOOP 로드맵 8~10월",
+    "en": "LOOP roadmap Aug–Oct",
+    "ja": "LOOP ロードマップ 8〜10月"
+   },
+   "hash": "537bb0ef0a"
+  },
+  {
+   "id": 72,
+   "team": "loop",
+   "hz": "someday",
+   "grp": "lt",
+   "fam": "DATA",
+   "prod": "Dataset Capture",
+   "t": {
+    "ko": "더 다양한 데이터 활용 방식 지원 — Dataset Curation, Augmentation 등 수집 데이터를 학습에 적합하게 만드는 과정 지원",
+    "en": "Support more ways of using data — dataset curation, augmentation and the rest of turning collected data into training-ready data",
+    "ja": "より多様なデータ活用方式への対応 — Dataset Curation、Augmentation など収集データを学習に適した形にする工程の支援"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ba6cbdff6f680429ab1e5361332c34c",
+   "detLabel": {
+    "ko": "LOOP 로드맵 8~10월",
+    "en": "LOOP roadmap Aug–Oct",
+    "ja": "LOOP ロードマップ 8〜10月"
+   },
+   "hash": "23ccc38a45"
+  },
+  {
+   "id": 73,
+   "team": "loop",
+   "hz": "someday",
+   "grp": "lt",
+   "fam": "RRP",
+   "prod": "LOOP",
+   "t": {
+    "ko": "실험 자동화 — CLI / SDK / Agent 를 통한 반복 실험 자동화",
+    "en": "Automate experiments — repeat experiments via CLI, SDK or agent",
+    "ja": "実験の自動化 — CLI / SDK / Agent による反復実験の自動化"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3bb6cbdff6f6802b88c7d25358771a58",
+   "detLabel": {
+    "ko": "LOOP 로드맵 8~10월",
+    "en": "LOOP roadmap Aug–Oct",
+    "ja": "LOOP ロードマップ 8〜10月"
+   },
+   "hash": "bfcedd56d6"
+  },
+  {
+   "id": 74,
+   "team": "loop",
+   "hz": "someday",
+   "grp": "lt",
+   "fam": "CLOUD",
+   "prod": "Cloud Inference",
+   "t": {
+    "ko": "Cloud Inference",
+    "en": "Cloud inference",
+    "ja": "Cloud Inference"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ba6cbdff6f680429ab1e5361332c34c",
+   "detLabel": {
+    "ko": "LOOP 로드맵 8~10월",
+    "en": "LOOP roadmap Aug–Oct",
+    "ja": "LOOP ロードマップ 8〜10月"
+   },
+   "hash": "c6564e513a"
+  },
+  {
+   "id": 75,
+   "team": "loop",
+   "hz": "someday",
+   "grp": "lt",
+   "fam": "DATA",
+   "prod": "Mannequin",
+   "t": {
+    "ko": "Human Data Pipeline 지원",
+    "en": "Support the human-data pipeline",
+    "ja": "Human Data Pipeline の支援"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3ba6cbdff6f680429ab1e5361332c34c",
+   "detLabel": {
+    "ko": "LOOP 로드맵 8~10월",
+    "en": "LOOP roadmap Aug–Oct",
+    "ja": "LOOP ロードマップ 8〜10月"
+   },
+   "hash": "6b85cd370b"
+  },
+  {
+   "id": 76,
+   "team": "hw",
+   "hz": "now",
+   "grp": "ref",
+   "fam": "RHP",
+   "prod": "Reference HW",
+   "t": {
+    "ko": "Deploy HW Requirement 작성 + Reference HW 선정·구입 + 추가 리서치 2종 (Suzhou 견학 이후)",
+    "en": "Write the deploy HW requirement, pick and buy the reference hardware, and add two more research items (after the Suzhou visit)",
+    "ja": "Deploy HW Requirement の作成 + Reference HW の選定・購入 + 追加リサーチ2件（蘇州視察後）"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "8de0e174cf"
+  },
+  {
+   "id": 77,
+   "team": "hw",
+   "hz": "now",
+   "grp": "ref",
+   "fam": "LAAS",
+   "prod": "Certification",
+   "t": {
+    "ko": "Deploy 위한 나라별(한국/일본/미국) 인증·규제 확인",
+    "en": "Check certification and regulation by country for deployment (Korea, Japan, US)",
+    "ja": "Deploy に向けた国別（韓国/日本/米国）の認証・規制の確認"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "37d9274000"
+  },
+  {
+   "id": 78,
+   "team": "hw",
+   "hz": "now",
+   "grp": "odm",
+   "fam": "RHP",
+   "prod": "ODM",
+   "t": {
+    "ko": "ODM 양산 파트너 검증 프로세스 수립 + 1차 업체 후보 선정",
+    "en": "Establish the vetting process for ODM mass-production partners and shortlist the first candidates",
+    "ja": "ODM 量産パートナーの検証プロセス確立 + 一次候補企業の選定"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "7f751c1ddf"
+  },
+  {
+   "id": 79,
+   "team": "hw",
+   "hz": "now",
+   "grp": "test",
+   "fam": "RHP",
+   "prod": "HW Test",
+   "t": {
+    "ko": "핸드 테스트 개선 + 휴머노이드 테스트 프로세스 수립",
+    "en": "Improve hand testing and establish the humanoid test process",
+    "ja": "ハンドテストの改善 + ヒューマノイドテストプロセスの確立"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "c530ae0ed7"
+  },
+  {
+   "id": 80,
+   "team": "hw",
+   "hz": "now",
+   "grp": "test",
+   "fam": "RHP",
+   "prod": "HW Test",
+   "t": {
+    "ko": "Agibot G2 테스트",
+    "en": "Test the Agibot G2",
+    "ja": "Agibot G2 のテスト"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "c11933d8c5"
+  },
+  {
+   "id": 81,
+   "team": "hw",
+   "hz": "now",
+   "grp": "src",
+   "fam": "RHP",
+   "prod": "HW Sourcing",
+   "t": {
+    "ko": "Quester Glove (분기별 핸드 1종, Wheeled Humanoid 1종 기준)",
+    "en": "Quester Glove (against the quarterly cap of one hand and one wheeled humanoid)",
+    "ja": "Quester Glove（四半期ごとにハンド1種、Wheeled Humanoid 1種の枠）"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "f2ce61221d"
+  },
+  {
+   "id": 82,
+   "team": "hw",
+   "hz": "now",
+   "grp": "src",
+   "fam": "RHP",
+   "prod": "HW Sourcing",
+   "t": {
+    "ko": "PAXINI DEXCAP3",
+    "en": "PAXINI DEXCAP3",
+    "ja": "PAXINI DEXCAP3"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "7722ba5205"
+  },
+  {
+   "id": 83,
+   "team": "hw",
+   "hz": "now",
+   "grp": "src",
+   "fam": "RHP",
+   "prod": "HW Sourcing",
+   "t": {
+    "ko": "Xynova Prima 1 (검토 중)",
+    "en": "Xynova Prima 1 (under consideration)",
+    "ja": "Xynova Prima 1（検討中）"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "53711fdc99"
+  },
+  {
+   "id": 84,
+   "team": "hw",
+   "hz": "now",
+   "grp": "dev",
+   "fam": "RHP",
+   "prod": "ALDEX",
+   "t": {
+    "ko": "ALDEX 엄지 설계",
+    "en": "Design the ALDEX thumb",
+    "ja": "ALDEX 親指の設計"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "cec54eed7a"
+  },
+  {
+   "id": 85,
+   "team": "hw",
+   "hz": "now",
+   "grp": "dev",
+   "fam": "RHP",
+   "prod": "RLWRLD Hand",
+   "t": {
+    "ko": "RLWRLD 핸드 모터 + 기어가공 + 볼스크류 업체 추가 리서치 → 최소 1곳씩 확보",
+    "en": "Research more suppliers for the RLWRLD hand's motors, gear machining and ball screws — secure at least one of each",
+    "ja": "RLWRLD ハンドのモーター + ギア加工 + ボールねじの追加サプライヤ調査 → 各最低1社の確保"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "36757d37e9"
+  },
+  {
+   "id": 86,
+   "team": "hw",
+   "hz": "now",
+   "grp": "dev",
+   "fam": "RHP",
+   "prod": "ALLEX",
+   "t": {
+    "ko": "ALLEX 1/2/3호기 Paxini 텍타일 센서 부착 준비 (손끝 가공품 발주, 부싱, 센서, 보드, 배선)",
+    "en": "Prepare to fit Paxini tactile sensors to ALLEX units 1/2/3 (order machined fingertips, bushings, sensors, boards, wiring)",
+    "ja": "ALLEX 1/2/3号機への Paxini タクタイルセンサー装着準備（指先加工品の発注、ブッシング、センサー、ボード、配線）"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "600c71b11c"
+  },
+  {
+   "id": 87,
+   "team": "hw",
+   "hz": "now",
+   "grp": "dev",
+   "fam": "BENCH",
+   "prod": "All Hands Up",
+   "t": {
+    "ko": "ALL HANDS UP 업데이트",
+    "en": "Update All Hands Up",
+    "ja": "ALL HANDS UP の更新"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "b903415a49"
+  },
+  {
+   "id": 88,
+   "team": "hw",
+   "hz": "next",
+   "grp": "test",
+   "fam": "RHP",
+   "prod": "HW Test",
+   "t": {
+    "ko": "휴머노이드 테스트 프로세스 개선",
+    "en": "Improve the humanoid test process",
+    "ja": "ヒューマノイドテストプロセスの改善"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "f960e68f55"
+  },
+  {
+   "id": 89,
+   "team": "hw",
+   "hz": "next",
+   "grp": "test",
+   "fam": "RHP",
+   "prod": "HW Test",
+   "t": {
+    "ko": "Wheeled Humanoid repeatability·내구도·POC 가능성 중심 테스트 — Agibot G2, Simplexity IX Pro, Realman S2",
+    "en": "Test wheeled humanoids for repeatability, durability and PoC viability — Agibot G2, Simplexity IX Pro, Realman S2",
+    "ja": "Wheeled Humanoid の repeatability・耐久性・POC 可能性を中心としたテスト — Agibot G2、Simplexity IX Pro、Realman S2"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "efa829bbe8"
+  },
+  {
+   "id": 90,
+   "team": "hw",
+   "hz": "next",
+   "grp": "test",
+   "fam": "LAAS",
+   "prod": "Client Support",
+   "t": {
+    "ko": "CJ대한통운에 HW List 제공",
+    "en": "Provide the HW list to CJ Logistics",
+    "ja": "CJ大韓通運への HW List 提供"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "5ea458118f"
+  },
+  {
+   "id": 91,
+   "team": "hw",
+   "hz": "next",
+   "grp": "src",
+   "fam": "RHP",
+   "prod": "HW Sourcing",
+   "t": {
+    "ko": "Wheeled Humanoid 2종 (분기 캡 예외)",
+    "en": "Two wheeled humanoids (an exception to the quarterly cap)",
+    "ja": "Wheeled Humanoid 2種（四半期上限の例外）"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "e15ac0a731"
+  },
+  {
+   "id": 92,
+   "team": "hw",
+   "hz": "next",
+   "grp": "dev",
+   "fam": "RHP",
+   "prod": "ALDEX",
+   "t": {
+    "ko": "ALDEX 완성",
+    "en": "Complete ALDEX",
+    "ja": "ALDEX の完成"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "a464b36332"
+  },
+  {
+   "id": 93,
+   "team": "hw",
+   "hz": "next",
+   "grp": "dev",
+   "fam": "RHP",
+   "prod": "RLWRLD Hand",
+   "t": {
+    "ko": "RLWRLD 핸드 가능한 configuration 선정 + 상세설계 진행",
+    "en": "Select the feasible RLWRLD hand configuration and move into detailed design",
+    "ja": "RLWRLD ハンドの実現可能な configuration の選定 + 詳細設計の進行"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "e5750f9a8a"
+  },
+  {
+   "id": 94,
+   "team": "hw",
+   "hz": "next",
+   "grp": "dev",
+   "fam": "RHP",
+   "prod": "ALLEX",
+   "t": {
+    "ko": "ALLEX 1/2/3호기 Paxini 텍타일 센서 부착",
+    "en": "Fit Paxini tactile sensors to ALLEX units 1/2/3",
+    "ja": "ALLEX 1/2/3号機への Paxini タクタイルセンサー装着"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "fa976ccd53"
+  },
+  {
+   "id": 95,
+   "team": "hw",
+   "hz": "next",
+   "grp": "sim",
+   "fam": "BENCH",
+   "prod": "Simulation",
+   "t": {
+    "ko": "URDF Simulation — DexBench Object 3D asset 의 affordance 정리",
+    "en": "URDF simulation — organise the affordances of DexBench object 3D assets",
+    "ja": "URDF Simulation — DexBench Object 3D asset の affordance 整理"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "52019f8887"
+  },
+  {
+   "id": 96,
+   "team": "hw",
+   "hz": "someday",
+   "grp": "lt",
+   "fam": "RHP",
+   "prod": "Reference HW",
+   "t": {
+    "ko": "RLWRLD HW 요구사항 관리 및 고도화 (Deploy HW Requirement + ODM 검증 requirement)",
+    "en": "Manage and advance the RLWRLD hardware requirements (deploy HW requirement plus ODM vetting requirement)",
+    "ja": "RLWRLD HW 要件の管理および高度化（Deploy HW Requirement + ODM 検証 requirement）"
+   },
+   "kind": "ops",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "184117a720"
+  },
+  {
+   "id": 97,
+   "team": "hw",
+   "hz": "someday",
+   "grp": "lt",
+   "fam": "RHP",
+   "prod": "ODM",
+   "t": {
+    "ko": "RLWRLD HW 요구사항을 충족하는 HW 발굴·관리 및 ODM wheeled humanoid 제작",
+    "en": "Find and manage hardware that meets the RLWRLD requirements, and build the ODM wheeled humanoid",
+    "ja": "RLWRLD HW 要件を満たす HW の発掘・管理および ODM wheeled humanoid の製作"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "552374d4c4"
+  },
+  {
+   "id": 98,
+   "team": "hw",
+   "hz": "someday",
+   "grp": "lt",
+   "fam": "RHP",
+   "prod": "RLWRLD Hand",
+   "t": {
+    "ko": "RLWRLD 핸드 + 1:1 matching Exo 제작",
+    "en": "Build the RLWRLD hand and its 1:1 matching exo",
+    "ja": "RLWRLD ハンド + 1:1 matching Exo の製作"
+   },
+   "kind": "dev",
+   "src": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+   "det": "https://app.notion.com/p/3956cbdff6f680dbbde7e79be6382309",
+   "detLabel": {
+    "ko": "Hardware 팀 페이지",
+    "en": "Hardware team page",
+    "ja": "Hardware チームページ"
+   },
+   "hash": "f6aa52356d"
+  }
+ ],
+ "source": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+ "generated": "2026-09-28",
+ "horizons": [
+  {
+   "id": "now",
+   "label": {
+    "ko": "이번달 · 2026-09",
+    "en": "This month · 2026-09",
+    "ja": "今月 · 2026-09"
+   }
+  },
+  {
+   "id": "next",
+   "label": {
+    "ko": "다음달 · 2026-10",
+    "en": "Next month · 2026-10",
+    "ja": "来月 · 2026-10"
+   }
+  },
+  {
+   "id": "soon",
+   "label": {
+    "ko": "곧 · 분기 명시",
+    "en": "Soon · quarter stated",
+    "ja": "まもなく · 四半期明示"
+   }
+  },
+  {
+   "id": "someday",
+   "label": {
+    "ko": "언젠가 · 일정 미정",
+    "en": "Someday · no date",
+    "ja": "いつか · 日程未定"
+   }
+  }
+ ],
+ "kinds": [
+  {
+   "id": "dev",
+   "label": {
+    "ko": "개발성",
+    "en": "Development",
+    "ja": "開発性"
+   },
+   "color": "#68a8ff"
+  },
+  {
+   "id": "ops",
+   "label": {
+    "ko": "운영성",
+    "en": "Operational",
+    "ja": "運用性"
+   },
+   "color": "#65d6a6"
+  }
+ ],
+ "teamNotes": {
+  "hd": {
+   "ko": "공식 로드맵 미작성 — Platform Team Roadmap 표의 Human Data 행이 이번달·다음달·장기 모두 공란입니다. 8월 플랫폼 팀 위클리에서 일부만 확인됩니다.",
+   "en": "No roadmap written — the Human Data row of the Platform Team Roadmap is blank across this month, next month and long term. Only partial information exists in the August platform weekly.",
+   "ja": "公式ロードマップ未作成 — Platform Team Roadmap の Human Data 行は今月・来月・長期ともに空欄です。8月のプラットフォーム週次で一部のみ確認できます。"
+  }
+ },
+ "snapshot": {
+  "id": "2026-09-28T09:40+09:00",
+  "label": "202609 · Notion 최종 수정 2026-09-06"
+ }
+}

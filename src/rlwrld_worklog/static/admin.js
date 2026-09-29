@@ -1,5 +1,40 @@
-    const state = { csrf: null, setupRequired: false, settings: {}, secrets: {} };
+    const state = { csrf: null, setupRequired: false, settings: {}, secrets: {}, role: null };
     const $ = (id) => document.getElementById(id);
+
+    const isOwner = () => state.role === 'super_admin';
+
+    // The padlock is a label, not a lock. What actually refuses a request is
+    // `require_super_admin_session` on the server; this only tells the owner
+    // which of the things in front of him nobody else can see, and takes those
+    // things off the screen for everybody else.
+    function applyRoleVisibility() {
+      const owner = isOwner();
+      document.querySelectorAll('[data-requires="super_admin"]').forEach((node) => {
+        node.classList.toggle('hidden', !owner);
+        const existing = node.querySelector('.lock');
+        if (owner && !existing) {
+          const mark = document.createElement('span');
+          mark.className = 'lock';
+          mark.textContent = '🔒';
+          mark.title = '나만 보이는 화면입니다';
+          node.appendChild(mark);
+        } else if (!owner && existing) {
+          existing.remove();
+        }
+      });
+      // A group heading with every entry under it hidden is a label for
+      // nothing, and reads as a screen that failed to load.
+      document.querySelectorAll('.nav-group').forEach((group) => {
+        const entries = Array.from(group.querySelectorAll('button[data-page]'));
+        group.classList.toggle('hidden', entries.length > 0 && entries.every((b) => b.classList.contains('hidden')));
+      });
+    }
+
+    function visiblePages() {
+      return Array.from(document.querySelectorAll('nav button[data-page]'))
+        .filter((button) => !button.disabled && !button.classList.contains('hidden'))
+        .map((button) => button.dataset.page);
+    }
 
     function toast(message, error = false) {
       const node = $('toast');
@@ -51,10 +86,15 @@
       }
       try {
         const session = await api('/api/v1/admin/session');
-        if (!session.authorized) return showAuth(session);
+        // A company session is let in and shown less, rather than bounced back
+        // to the login screen. That is the whole point of the second door.
+        if (!session.authenticated) return showAuth(session);
         state.csrf = session.csrf_token;
+        state.role = session.role;
+        applyRoleVisibility();
+        renderStaffPassword(session.staff_password_set);
         $('auth-overlay').classList.add('hidden');
-        await loadSettings();
+        if (isOwner()) await loadSettings();
         // The hash router decides which screen to open and which loader to
         // run, so a shared link, a reload and a first visit all agree.
         applyHash();
@@ -70,11 +110,14 @@
       try {
         await api(state.setupRequired ? '/api/v1/admin/bootstrap' : '/api/v1/admin/login', { method: 'POST', body: JSON.stringify({ password }) });
         const session = await api('/api/v1/admin/session');
-        if (!session.authorized) return showAuth(session);
+        if (!session.authenticated) return showAuth(session);
         state.csrf = session.csrf_token;
+        state.role = session.role;
+        applyRoleVisibility();
+        renderStaffPassword(session.staff_password_set);
         $('auth-overlay').classList.add('hidden');
         $('admin-password').value = ''; $('admin-password-confirm').value = ''; $('auth-notice').textContent = '';
-        await loadSettings();
+        if (isOwner()) await loadSettings();
         // The hash router decides which screen to open and which loader to
         // run, so a shared link, a reload and a first visit all agree.
         applyHash();
@@ -1606,9 +1649,13 @@
     const DEFAULT_PAGE = 'work';
     let applyingHash = false;
 
+    // The screen that is actually open. Read off the menu this used to say
+    // `work` while the restricted notice was on screen, because that notice has
+    // no menu entry — and the address bar then said something untrue.
+    let activePage = DEFAULT_PAGE;
+
     function currentPage() {
-      const active = document.querySelector('nav button.active');
-      return active ? active.dataset.page : DEFAULT_PAGE;
+      return activePage;
     }
 
     function hashState() {
@@ -1636,11 +1683,15 @@
     }
 
     function selectPage(page) {
+      activePage = page;
       document.querySelectorAll('nav button').forEach((node) => node.classList.remove('active'));
       document.querySelectorAll('.page').forEach((node) => node.classList.remove('active'));
       const button = document.querySelector(`nav button[data-page="${page}"]`);
       if (button) button.classList.add('active');
-      const section = $(`page-${page}`);
+      // The restricted notice is a screen without a menu entry -- it is where a
+      // session lands when none of the entries are its to click -- so it is not
+      // named `page-…` and does not count as an unreachable section.
+      const section = page === 'restricted' ? $('restricted-page') : $(`page-${page}`);
       if (section) section.classList.add('active');
     }
 
@@ -1649,7 +1700,12 @@
       const [rawPage, rawQuery] = raw.split('?');
       // An unknown or absent hash falls back to the default screen, and the
       // address bar is corrected rather than left saying something untrue.
-      const page = HASH_PAGES.includes(rawPage) ? rawPage : DEFAULT_PAGE;
+      // A page the session may not open is not a page it can land on, however
+      // the address bar got there. With nothing left to open, the restricted
+      // notice is the screen -- an empty shell would read as a broken page.
+      const allowed = visiblePages();
+      let page = HASH_PAGES.includes(rawPage) ? rawPage : DEFAULT_PAGE;
+      if (!allowed.includes(page)) page = allowed.length ? allowed[0] : 'restricted';
       const parameters = new URLSearchParams(rawQuery || '');
       applyingHash = true;
       try {
@@ -1672,9 +1728,11 @@
       // abandoned would look like their unsaved input had come back.
       closeWorkEditor();
       closeTimeline();
+      $('roadmap-drawer').classList.add('hidden');
       stopWorkPolling();
       stopCollectionPolling();
       if (page === 'bookmarks') loadBookmarks();
+      if (page === 'roadmap') loadRoadmap();
       if (page === 'search') { loadSearchCorpus(); }
       if (page === 'org') loadOrg();
       if (page === 'unmapped') loadUnmapped();
@@ -1685,7 +1743,7 @@
       if (page === 'collection') { loadCollection({ coverage: true }); startCollectionPolling(); }
       if (page === 'schedules' && typeof loadSchedules === 'function') loadSchedules();
       if (page === 'server' && typeof loadServerStatus === 'function') loadServerStatus();
-      if (!HASH_PAGES.includes(rawPage)) writeHash({ replace: true });
+      if (!HASH_PAGES.includes(rawPage) || page !== rawPage) writeHash({ replace: true });
     }
 
     window.addEventListener('hashchange', applyHash);
@@ -2410,11 +2468,338 @@
     $('unmapped-state').addEventListener('change', loadUnmapped);
     $('search-q').addEventListener('keydown', (event) => { if (event.key === 'Enter') runSearch(); });
 
-    $('logout').addEventListener('click', async () => {
+    async function signOut() {
       stopWorkPolling();
       stopCollectionPolling();
       try { await api('/api/v1/admin/logout', { method: 'POST', body: '{}' }); } catch (_) {}
-      state.csrf = null; const session = await api('/api/v1/admin/session'); showAuth(session);
+      state.csrf = null; state.role = null; applyRoleVisibility();
+      const session = await api('/api/v1/admin/session'); showAuth(session);
+    }
+
+    $('logout').addEventListener('click', signOut);
+    $('restricted-logout').addEventListener('click', signOut);
+
+    function renderStaffPassword(isSet) {
+      const badge = $('staff-password-status');
+      badge.textContent = isSet ? '설정됨' : '미설정';
+      badge.className = `badge${isSet ? ' ok' : ''}`;
+    }
+
+    $('staff-password-save').addEventListener('click', async () => {
+      const value = $('staff-password').value;
+      const result = $('staff-password-result');
+      try {
+        const body = await api('/api/v1/admin/staff-password', {
+          method: 'PUT', body: JSON.stringify({ password: value }),
+        });
+        $('staff-password').value = '';
+        renderStaffPassword(body.staff_password_set);
+        result.className = 'result ok';
+        result.textContent = body.staff_password_set
+          ? '저장했습니다. 같은 로그인 화면에서 이 비밀번호로 일반 사용자로 들어올 수 있습니다.'
+          : '해제했습니다. 이제 관리자 비밀번호만 통합니다.';
+        toast(body.staff_password_set ? '일반 사용자 비밀번호 저장' : '일반 사용자 비밀번호 해제');
+      } catch (error) {
+        result.className = 'result error';
+        result.textContent = error.message;
+      }
     });
+
+    // ------------------------------------------------------------- 로드맵
+    // The dataset comes from GET /api/v1/roadmap, which returns the same shape
+    // the generated HTML file used to inline. The renderer did not change when
+    // the source did -- only where the first load reads from.
+    //
+    // Built with DOM nodes rather than markup strings, like every other screen
+    // here: this body text comes from Notion, and Notion is the last place a
+    // page should be taking markup from.
+    const roadmapState = {
+      data: null, lang: 'ko', view: 'team', q: '', team: '',
+      fams: {}, kinds: { dev: true, ops: true },
+    };
+
+    const rmL = (value) => (value && (value[roadmapState.lang] || value.ko)) || '';
+    const rmU = (key) => rmL(roadmapState.data.ui[key]);
+
+    function rmEl(tag, options = {}, children = []) {
+      const node = document.createElement(tag);
+      if (options.className) node.className = options.className;
+      if (options.text !== undefined) node.textContent = options.text;
+      if (options.title) node.title = options.title;
+      if (options.dataset) Object.assign(node.dataset, options.dataset);
+      if (options.style) node.setAttribute('style', options.style);
+      if (options.href) { node.href = options.href; node.target = '_blank'; node.rel = 'noreferrer'; }
+      children.filter(Boolean).forEach((child) => node.appendChild(child));
+      return node;
+    }
+
+    const rmDot = (color, style) => rmEl('span', { className: 'dot', style: `background:${color}${style || ''}` });
+
+    function rmClear(node) {
+      while (node.firstChild) node.removeChild(node.firstChild);
+      return node;
+    }
+
+    async function loadRoadmap() {
+      if (!roadmapState.data) {
+        try {
+          roadmapState.data = await api('/api/v1/roadmap');
+        } catch (error) {
+          const box = rmClear($('roadmap-out'));
+          box.appendChild(rmEl('article', { className: 'card' }, [
+            rmEl('p', { className: 'help', text: error.message }),
+          ]));
+          return;
+        }
+        roadmapState.data.families.forEach((family) => { roadmapState.fams[family.id] = true; });
+      }
+      renderRoadmap();
+    }
+
+    function roadmapVisible(item) {
+      if (!roadmapState.fams[item.fam]) return false;
+      if (!roadmapState.kinds[item.kind]) return false;
+      if (roadmapState.team && item.team !== roadmapState.team) return false;
+      if (roadmapState.q) {
+        const hay = `${item.t.ko} ${item.t.en} ${item.t.ja} ${item.prod} ${item.fam}`.toLowerCase();
+        if (!hay.includes(roadmapState.q)) return false;
+      }
+      return true;
+    }
+
+    function roadmapLink(href, label) {
+      const link = rmEl('a', { className: 'lnk', href, text: `${label} ↗` });
+      return link;
+    }
+
+    function roadmapItemNode(item) {
+      const text = rmEl('span', { className: 'tx', text: rmL(item.t) });
+      text.appendChild(document.createTextNode(' '));
+      text.appendChild(roadmapLink(item.src, rmU('origin')));
+      text.appendChild(roadmapLink(item.det, rmU('detail')));
+      return rmEl('li', {}, [text]);
+    }
+
+    // The same tag on every row reads as noise, so the tag becomes a heading
+    // and the rows sit under it. By team that tag is the product; by product,
+    // the team.
+    function roadmapCellNode(list, tag, last) {
+      const cell = rmEl('div', { className: `cell${last ? ' last' : ''}` });
+      if (!list.length) {
+        cell.appendChild(rmEl('div', { className: 'empty', text: '—' }));
+        return cell;
+      }
+      const families = {};
+      roadmapState.data.families.forEach((family) => { families[family.id] = family; });
+      const order = []; const byTag = {};
+      list.forEach((item) => {
+        const key = tag(item);
+        if (!byTag[key]) { byTag[key] = []; order.push(key); }
+        byTag[key].push(item);
+      });
+      order.forEach((key) => {
+        const group = byTag[key];
+        const family = families[group[0].fam];
+        cell.appendChild(rmEl('div', { className: 'pgrp' }, [
+          rmDot(family.color),
+          rmEl('span', { className: 'pname', text: key }),
+          group.length > 1 ? rmEl('span', { className: 'pn', text: String(group.length) }) : null,
+        ]));
+        cell.appendChild(rmEl('ul', { className: 'pitems' }, group.map(roadmapItemNode)));
+      });
+      return cell;
+    }
+
+    function roadmapTrackNode(rows, tag) {
+      const data = roadmapState.data;
+      const grid = rmEl('div', { className: 'grid' }, [rmEl('div', { className: 'corner' })]);
+      data.horizons.forEach((horizon) => {
+        grid.appendChild(rmEl('div', {
+          className: 'hcell', dataset: { h: horizon.id }, text: rmL(horizon.label),
+        }));
+      });
+      rows.forEach((row, index) => {
+        const last = index === rows.length - 1;
+        const kind = data.kinds.find((entry) => entry.id === row.kind);
+        grid.appendChild(rmEl('div', { className: `lane${last ? ' last' : ''}` }, [
+          rmDot(kind.color, ';margin-top:5px'),
+          rmEl('span', { text: rmL(kind.label) }),
+        ]));
+        data.horizons.forEach((horizon) => {
+          grid.appendChild(roadmapCellNode(row.items.filter((item) => item.hz === horizon.id), tag, last));
+        });
+      });
+      return rmEl('div', { className: 'track' }, [grid]);
+    }
+
+    function roadmapRows(list) {
+      return roadmapState.data.kinds
+        .map((kind) => ({ kind: kind.id, items: list.filter((item) => item.kind === kind.id) }))
+        .filter((row) => row.items.length);
+    }
+
+    function roadmapHead(title, count, links) {
+      return rmEl('div', { className: 'block-head' }, [
+        ...(links && links.dot ? [rmDot(links.dot, ';align-self:center')] : []),
+        rmEl('h2', { text: title }),
+        rmEl('span', { className: 'count', text: count }),
+        links && links.nodes ? rmEl('span', { className: 'srclinks' }, links.nodes) : null,
+      ]);
+    }
+
+    function renderRoadmap() {
+      const data = roadmapState.data;
+      if (!data) return;
+
+      $('roadmap-title').textContent = rmU('title');
+      $('roadmap-sub').textContent = rmU('sub');
+      $('roadmap-rule').textContent = rmU('rule');
+      const source = $('roadmap-source');
+      source.textContent = `${rmU('origin')}: Notion`;
+      source.href = data.source;
+      $('roadmap-q').placeholder = rmU('search');
+      $('roadmap-history-open').textContent = rmU('history') + (data.history.length ? ` (${data.history.length})` : '');
+      $('roadmap-history-close').textContent = rmU('closeHist');
+      $('roadmap-history-title').textContent = rmU('history');
+      const viewButtons = $('roadmap-view').querySelectorAll('button');
+      viewButtons[0].textContent = rmU('byteam');
+      viewButtons[1].textContent = rmU('byproduct');
+
+      const teamSelect = rmClear($('roadmap-team'));
+      teamSelect.appendChild(rmEl('option', { text: rmU('allteams') }));
+      data.teams.forEach((team) => {
+        const option = rmEl('option', { text: rmL(team.label) });
+        option.value = team.id;
+        teamSelect.appendChild(option);
+      });
+      teamSelect.value = roadmapState.team;
+
+      const legend = rmClear($('roadmap-legend'));
+      data.kinds.forEach((kind) => {
+        legend.appendChild(rmEl('span', {
+          className: `chip${roadmapState.kinds[kind.id] ? ' on' : ''}`, dataset: { kind: kind.id },
+        }, [rmDot(kind.color), rmEl('span', { text: rmL(kind.label) })]));
+      });
+      legend.appendChild(rmEl('span', { style: 'width:12px' }));
+      data.families.forEach((family) => {
+        legend.appendChild(rmEl('span', {
+          className: `chip${roadmapState.fams[family.id] ? ' on' : ''}`, dataset: { fam: family.id },
+        }, [rmDot(family.color), rmEl('span', { text: rmL(family.label) })]));
+      });
+
+      const shown = data.items.filter(roadmapVisible);
+      const teamLabels = {};
+      data.teams.forEach((team) => { teamLabels[team.id] = team.label; });
+      const out = rmClear($('roadmap-out'));
+
+      if (roadmapState.view === 'team') {
+        data.teams.forEach((team) => {
+          const mine = shown.filter((item) => item.team === team.id);
+          const note = data.teamNotes[team.id];
+          if (!mine.length && !note) return;
+          const first = mine.length ? mine[0] : null;
+          const block = rmEl('section', { className: 'block' }, [
+            roadmapHead(rmL(team.label), `${mine.length} ${rmU('items')}`, first ? {
+              nodes: [
+                rmEl('a', { href: first.src, text: `${rmU('origin')} ↗` }),
+                rmEl('a', { href: first.det, text: `${rmL(first.detLabel)} ↗` }),
+              ],
+            } : null),
+          ]);
+          if (note) block.appendChild(rmEl('div', { className: 'note', text: rmL(note) }));
+          if (mine.length) block.appendChild(roadmapTrackNode(roadmapRows(mine), (item) => item.prod));
+          out.appendChild(block);
+        });
+      } else {
+        data.families.forEach((family) => {
+          const inFamily = shown.filter((item) => item.fam === family.id);
+          if (!inFamily.length) return;
+          const products = [];
+          inFamily.forEach((item) => { if (!products.includes(item.prod)) products.push(item.prod); });
+          products.sort();
+          const block = rmEl('section', { className: 'block' }, [
+            roadmapHead(rmL(family.label), `${inFamily.length} ${rmU('items')} · ${products.length}`, { dot: family.color }),
+          ]);
+          products.forEach((product) => {
+            const rows = inFamily.filter((item) => item.prod === product);
+            const head = rmEl('div', {
+              className: 'block-head', style: 'padding:12px 18px 8px;border-top:1px solid #1b232e',
+            }, [
+              rmEl('h2', { text: product, style: 'font-size:13.5px;color:#c8d2df' }),
+              rmEl('span', { className: 'count', text: String(rows.length) }),
+              rmEl('span', { className: 'srclinks' }, [
+                rmEl('a', { href: rows[0].det, text: `${rmU('detail')} ↗` }),
+              ]),
+            ]);
+            block.appendChild(head);
+            block.appendChild(roadmapTrackNode(roadmapRows(rows), (item) => rmL(teamLabels[item.team])));
+          });
+          out.appendChild(block);
+        });
+      }
+
+      if (!out.firstChild) {
+        out.appendChild(rmEl('section', { className: 'block' }, [
+          rmEl('div', { className: 'note', style: 'margin:16px 18px', text: rmU('empty') }),
+        ]));
+      }
+
+      $('roadmap-foot').textContent =
+        `${rmU('total')} ${shown.length} / ${data.items.length} ${rmU('items')}`
+        + ` · ${rmU('asof')} ${data.snapshot.label} · ${rmU('printed')} ${data.generated}`;
+      renderRoadmapHistory();
+    }
+
+    function renderRoadmapHistory() {
+      const data = roadmapState.data;
+      const body = rmClear($('roadmap-history-body'));
+      if (!data.history.length) {
+        body.appendChild(rmEl('p', { className: 'help', text: rmU('nohist') }));
+        return;
+      }
+      const teamLabels = {};
+      data.teams.forEach((team) => { teamLabels[team.id] = team.label; });
+      data.history.forEach((entry) => {
+        const when = rmEl('div', { className: 'when' }, [rmEl('strong', { text: entry.at })]);
+        if (entry.prev) when.appendChild(rmEl('a', { href: entry.prev, text: `${rmU('prev')} ↗` }));
+        const list = rmEl('ul', {}, entry.changes.map((change) => {
+          const label = change.team && teamLabels[change.team] ? `${rmL(teamLabels[change.team])} · ` : '';
+          const text = rmEl('span', { className: 'tx' }, [
+            rmEl('span', { className: `kindtag ${change.type}`, text: rmU(change.type) }),
+          ]);
+          text.appendChild(document.createTextNode(label + change.text));
+          return rmEl('li', {}, [text]);
+        }));
+        body.appendChild(rmEl('div', { className: 'hist' }, [when, list]));
+      });
+    }
+
+    $('roadmap-lang').addEventListener('click', (event) => {
+      const button = event.target.closest('button'); if (!button) return;
+      roadmapState.lang = button.dataset.lang;
+      event.currentTarget.querySelectorAll('button').forEach((node) => node.classList.toggle('on', node === button));
+      renderRoadmap();
+    });
+    $('roadmap-view').addEventListener('click', (event) => {
+      const button = event.target.closest('button'); if (!button) return;
+      roadmapState.view = button.dataset.view;
+      event.currentTarget.querySelectorAll('button').forEach((node) => node.classList.toggle('on', node === button));
+      renderRoadmap();
+    });
+    $('roadmap-legend').addEventListener('click', (event) => {
+      const chip = event.target.closest('.chip'); if (!chip) return;
+      if (chip.dataset.kind) roadmapState.kinds[chip.dataset.kind] = !roadmapState.kinds[chip.dataset.kind];
+      else if (chip.dataset.fam) roadmapState.fams[chip.dataset.fam] = !roadmapState.fams[chip.dataset.fam];
+      else return;
+      renderRoadmap();
+    });
+    $('roadmap-q').addEventListener('input', function () {
+      roadmapState.q = this.value.trim().toLowerCase(); renderRoadmap();
+    });
+    $('roadmap-team').addEventListener('change', function () {
+      roadmapState.team = this.value; renderRoadmap();
+    });
+    $('roadmap-history-open').addEventListener('click', () => $('roadmap-drawer').classList.remove('hidden'));
+    $('roadmap-history-close').addEventListener('click', () => $('roadmap-drawer').classList.add('hidden'));
 
     initialize();

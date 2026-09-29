@@ -13,39 +13,39 @@
       <nav id="nav">
         <div class="nav-group">
           <span class="nav-label">바로가기</span>
-          <button data-page="bookmarks">북마크</button>
+          <button data-page="bookmarks" data-requires="super_admin">북마크</button>
         </div>
         <div class="nav-group">
           <span class="nav-label">업무</span>
-          <button data-page="work" class="active">업무 현황</button>
-          <button data-page="roadmap" disabled title="원본 시스템과 필드가 정해지면 활성화됩니다">로드맵</button>
+          <button data-page="work" data-requires="super_admin" class="active">업무 현황</button>
+          <button data-page="roadmap">로드맵</button>
         </div>
         <div class="nav-group">
           <span class="nav-label">다이제스트</span>
-          <button data-page="org">조직도</button>
-          <button data-page="person">일자별</button>
-          <button data-page="unmapped">미확인 계정</button>
+          <button data-page="org" data-requires="super_admin">조직도</button>
+          <button data-page="person" data-requires="super_admin">일자별</button>
+          <button data-page="unmapped" data-requires="super_admin">미확인 계정</button>
         </div>
         <div class="nav-group">
           <span class="nav-label">말투</span>
-          <button data-page="pairs">질문·답변 검수</button>
+          <button data-page="pairs" data-requires="super_admin">질문·답변 검수</button>
         </div>
         <div class="nav-group">
           <span class="nav-label">운영</span>
-          <button data-page="collection">수집 현황</button>
-          <button data-page="search">검색</button>
-          <button data-page="server">서버 상태</button>
-          <button data-page="schedules">스케줄</button>
+          <button data-page="collection" data-requires="super_admin">수집 현황</button>
+          <button data-page="search" data-requires="super_admin">검색</button>
+          <button data-page="server" data-requires="super_admin">서버 상태</button>
+          <button data-page="schedules" data-requires="super_admin">스케줄</button>
         </div>
         <div class="nav-group">
           <span class="nav-label">설정</span>
-          <button data-page="connections">연결</button>
-          <button data-page="storage">저장소 · 백업</button>
-          <button data-page="models">로컬 모델</button>
-          <button data-page="security">보안</button>
+          <button data-page="connections" data-requires="super_admin">연결</button>
+          <button data-page="storage" data-requires="super_admin">저장소 · 백업</button>
+          <button data-page="models" data-requires="super_admin">로컬 모델</button>
+          <button data-page="security" data-requires="super_admin">보안</button>
         </div>
         <div class="nav-group">
-          <button data-page="audit">감사 기록</button>
+          <button data-page="audit" data-requires="super_admin">감사 기록</button>
         </div>
       </nav>
       <div class="sidebar-footer"><button class="button" id="logout">로그아웃</button></div>
@@ -114,15 +114,28 @@
       </section>
 
       <section class="page" id="page-roadmap">
-        <h1>로드맵</h1>
-        <p class="lead">아직 준비 중입니다.</p>
-        <article class="card">
-          <div class="card-header"><h2>준비 중</h2><span class="badge wait">비활성</span></div>
-          <p>원본 시스템과 표시할 필드가 아직 정해지지 않아 기능을 만들지 않았습니다. 자리만 잡아 두었고,
-             원본과 필드가 확정되면 이 화면에 붙입니다.</p>
-          <p class="help">확정이 필요한 것: 로드맵의 원본 시스템(예: Notion 데이터베이스 또는 업무 저장소 자체),
-             항목 단위와 기간 필드, 팀·부서 구분, 업무 현황과의 연결 방식.</p>
-        </article>
+        <h1 id="roadmap-title">로드맵</h1>
+        <p class="lead"><span id="roadmap-sub"></span> · <a id="roadmap-source" target="_blank" rel="noreferrer"></a></p>
+        <div class="collection-toolbar">
+          <div class="seg" id="roadmap-view">
+            <button data-view="team" class="on"></button>
+            <button data-view="product"></button>
+          </div>
+          <div class="work-filters">
+            <input id="roadmap-q" type="search" style="min-width:200px">
+            <select id="roadmap-team"></select>
+            <div class="seg" id="roadmap-lang">
+              <button data-lang="ko" class="on">한국어</button>
+              <button data-lang="en">English</button>
+              <button data-lang="ja">日本語</button>
+            </div>
+            <button class="button" id="roadmap-history-open"></button>
+          </div>
+        </div>
+        <p class="help" id="roadmap-rule"></p>
+        <div class="legend" id="roadmap-legend"></div>
+        <div id="roadmap-out"></div>
+        <p class="help" id="roadmap-foot"></p>
       </section>
 
       <section class="page" id="page-search">
@@ -439,6 +452,26 @@
           <p class="help">서비스는 검증된 회사 도메인 계정만, 백오피스는 위 슈퍼 관리자 계정과 로컬 비상 관리자만 접근합니다.</p>
           <div class="actions"><button class="button primary save-settings">설정 저장</button></div>
         </article>
+        <article class="card">
+          <div class="card-header"><h2>일반 사용자 비밀번호</h2><span class="badge" id="staff-password-status">미설정</span></div>
+          <p class="help">같은 로그인 화면에서 이 비밀번호를 쓰면 <strong>일반 사용자</strong>로 들어옵니다. 관리자 전용 화면은 보이지 않습니다. 내가 보는 화면과 남이 보는 화면을 나란히 확인할 때 씁니다. 비워서 저장하면 그 문을 닫습니다.</p>
+          <div class="form-grid">
+            <div class="field full"><label for="staff-password">일반 사용자 비밀번호</label><input id="staff-password" type="password" autocomplete="new-password" placeholder="12자 이상 · 비우면 해제"></div>
+          </div>
+          <div class="actions"><button class="button primary" id="staff-password-save">저장</button></div>
+          <div class="result" id="staff-password-result">관리자 비밀번호와는 별개의 값입니다.</div>
+        </article>
+      </section>
+
+      <!-- Where a company_user lands while every screen still belongs to the
+           owner. An empty shell reads as a broken page; this says which it is. -->
+      <section class="page" id="restricted-page">
+        <h1>열람 권한</h1>
+        <p class="lead">일반 사용자 세션입니다.</p>
+        <article class="card">
+          <p id="restricted-note">지금 이 계정으로 열 수 있는 화면이 없습니다. 백오피스의 모든 화면이 아직 관리자 전용입니다.</p>
+          <div class="actions"><button class="button" id="restricted-logout">로그아웃</button></div>
+        </article>
       </section>
 
       <section class="page" id="page-audit">
@@ -463,6 +496,11 @@
       <div class="notice" id="auth-notice"></div>
     </form>
   </div>
+  <aside class="drawer hidden" id="roadmap-drawer">
+    <button class="button" id="roadmap-history-close"></button>
+    <h2 id="roadmap-history-title"></h2>
+    <div id="roadmap-history-body"></div>
+  </aside>
   <div class="overlay hidden" id="work-overlay">
     <form class="work-dialog" id="work-form">
       <h1 id="work-dialog-title">업무 추가</h1>

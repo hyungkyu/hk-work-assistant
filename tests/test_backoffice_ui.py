@@ -92,7 +92,12 @@ def test_the_menu_is_grouped_and_ordered_as_the_operator_asked() -> None:
 
 
 def test_the_landing_screen_after_login_is_the_work_board(html: str, script: str) -> None:
-    assert '<button data-page="work" class="active">업무 현황</button>' in html
+    # The entry, not its attribute order. `data-requires="super_admin"` was
+    # added to every owner-only entry after this test was written, and pinning
+    # the exact spelling turned that into a landing-screen failure, which it
+    # is not. What this line is for is that 업무 현황 is the one entry marked
+    # active in the markup.
+    assert re.search(r'<button data-page="work"[^>]*\bclass="active"[^>]*>업무 현황</button>', html)
     assert html.count('class="page active"') == 1
     assert 'class="page active" id="page-work"' in html
     # Both login paths now hand control to the hash router, which opens the
@@ -105,15 +110,20 @@ def test_the_landing_screen_after_login_is_the_work_board(html: str, script: str
     assert "const DEFAULT_PAGE = 'work';" in script
 
 
-def test_the_roadmap_is_a_disabled_placeholder_with_no_behaviour(
-    html: str, script: str
-) -> None:
-    assert '<button data-page="roadmap" disabled' in html
+def test_the_roadmap_is_a_real_screen_now(html: str, script: str) -> None:
+    """It was a disabled placeholder until 2026-09-29.
+
+    What replaced it: a screen fed by GET /api/v1/roadmap, and the first entry
+    in this menu a company user may open -- which is why it is the one entry
+    without `data-requires="super_admin"`.
+    """
+    assert '<button data-page="roadmap">로드맵</button>' in html
     assert 'id="page-roadmap"' in html
-    assert "if (!button || button.disabled) return;" in script
-    # A placeholder must not have grown a loader, an endpoint, or a poll.
-    assert "loadRoadmap" not in script
-    assert "roadmap" not in script.replace("data-page=\"roadmap\"", "")
+    assert "if (page === 'roadmap') loadRoadmap();" in script
+    assert "api('/api/v1/roadmap')" in script
+    # The dataset is not inlined into the page any more; that was the point.
+    assert "roadmapState" in script
+    assert 'id="payload"' not in html
 
 
 def test_every_navigation_entry_has_exactly_one_page_section(html: str) -> None:
