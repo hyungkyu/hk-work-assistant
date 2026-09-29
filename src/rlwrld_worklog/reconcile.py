@@ -435,12 +435,16 @@ _EXPLAIN_SQL = """
            coalesce(raw_payload->'start'->>'dateTime', raw_payload->'start'->>'date') AS starts,
            capture_profile,
            raw_payload->>'recurringEventId' AS recurring_of,
-           raw_payload->>'status' AS status
+           raw_payload->>'status' AS status,
+           -- When this observation was taken. A meeting cancelled and then
+           -- reinstated has both states in the ledger, and only the order
+           -- says which one is true now.
+           collected_at
       FROM ledger_records
      WHERE source = 'google_calendar'
        AND {window}
        AND {predicate}
-     ORDER BY 4, 1
+     ORDER BY 4, 1, collected_at
 """
 
 
@@ -502,6 +506,7 @@ def explain_calendar_day(
                         "capture_profile": row[4],
                         "recurring_of": row[5],
                         "status": row[6],
+                        "collected_at": row[7],
                         "key": row[1] or row[0],
                     }
                 )

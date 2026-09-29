@@ -1632,16 +1632,33 @@ def reconcile_command(args: argparse.Namespace) -> int:
         for row in found["ledger"]:
             entry = grouped.setdefault(
                 row["key"],
-                {"row": row, "observations": 0, "profiles": set(), "starts": set()},
+                {
+                    "row": row,
+                    "observations": 0,
+                    "profiles": set(),
+                    "starts": set(),
+                    "latest": row.get("collected_at"),
+                },
             )
             entry["observations"] += 1
             entry["profiles"].add(str(row["capture_profile"]).split("/")[0])
             if row["starts"]:
                 entry["starts"].add(str(row["starts"]))
-            # A cancellation anywhere in a meeting's observations is what the
-            # count acts on, so it wins over the rest of the group.
-            if row.get("status") == "cancelled":
+            # The newest observation says what is true now.
+            #
+            # The first version of this grouping let a cancellation anywhere
+            # in the group win, and on 09-23 that marked four meetings 취소됨
+            # that the digest had listed as attended -- among them Human Data
+            # Team Weekly. A meeting cancelled and then reinstated carries
+            # both states in the ledger, and picking the alarming one is not
+            # caution, it is a wrong answer delivered confidently.
+            if entry["latest"] is None or (
+                row.get("collected_at") is not None
+                and entry["latest"] is not None
+                and row["collected_at"] >= entry["latest"]
+            ):
                 entry["row"] = row
+                entry["latest"] = row.get("collected_at")
         print(
             f"== {found['day']} 캘린더: 원장 {len(grouped)}건"
             f"(관측 {len(found['ledger'])}행), 원본 "

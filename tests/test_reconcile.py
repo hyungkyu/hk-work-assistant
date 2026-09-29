@@ -463,6 +463,7 @@ def test_explain_lists_meetings_not_observations(monkeypatch, capsys):
             "capture_profile": profile,
             "recurring_of": "weekly",
             "status": "confirmed",
+            "collected_at": 1,
         }
 
     monkeypatch.setattr(
@@ -514,3 +515,129 @@ def test_explain_lists_meetings_not_observations(monkeypatch, capsys):
     # Both routes that saw it, since which one found a meeting is the thing
     # that decides whether the occurrence sweep is earning its keep.
     assert "events+occurrences" in printed
+
+
+def test_a_reinstated_meeting_is_not_reported_as_cancelled(monkeypatch, capsys):
+    """Four meetings on 09-23 read 취소됨 while the digest listed them.
+
+    My own regression, one day old. The first grouping let a cancellation
+    anywhere in a meeting's observations decide the line, and a meeting
+    cancelled and then put back carries both states in the ledger. Human Data
+    Team Weekly showed as cancelled on a day HK sat in it.
+
+    Picking the alarming state is not caution. It is a wrong answer delivered
+    confidently, in a listing whose entire job is to stop somebody guessing.
+    The newest observation decides.
+    """
+    from rlwrld_worklog import cli, digest, reconcile as reconcile_module
+
+    monkeypatch.setattr(
+        digest,
+        "resolve_people",
+        lambda url, names: {"resolved": {"x": "p_1"}, "unresolved": [], "ambiguous": {}},
+    )
+
+    def observation(status: str, collected_at: int) -> dict:
+        return {
+            "key": "k1",
+            "entity_id": "k1",
+            "summary": "Human Data Team Weekly",
+            "starts": "2026-09-23T14:30:00+09:00",
+            "capture_profile": "live-google-calendar-events/v1",
+            "recurring_of": "weekly",
+            "status": status,
+            "collected_at": collected_at,
+        }
+
+    monkeypatch.setattr(
+        reconcile_module,
+        "explain_calendar_day",
+        lambda url, person, day, **kwargs: {
+            "day": day.isoformat(),
+            # Cancelled first, then reinstated -- and the listing is handed
+            # them in that order, so only the timestamp can tell them apart.
+            "ledger": [observation("cancelled", 1), observation("confirmed", 2)],
+            "source": [],
+            "ledger_only": ["k1"],
+            "source_only": [],
+            "digest": [],
+            "digest_repeats": [],
+            "source_measured": False,
+        },
+    )
+
+    class Args:
+        person_name = "x"
+        since = None
+        until = None
+        explain = "2026-09-23"
+        database_url = "postgresql://fake"
+        source = []
+        gaps_only = False
+        no_source_read = True
+
+    assert cli.reconcile_command(Args()) == 0
+    printed = capsys.readouterr().out
+    assert "취소됨" not in printed, (
+        "the newest observation says it is on; reporting the older "
+        f"cancellation is a confident wrong answer:\n{printed}"
+    )
+
+
+def test_a_meeting_cancelled_after_it_was_created_still_reads_cancelled(
+    monkeypatch, capsys
+):
+    """The other direction, so the fix is not just "never say cancelled".
+
+    Robot Team Weekly on 09-23 was cancelled and stayed cancelled, and the
+    digest correctly left it out. A listing that stopped saying 취소됨 at all
+    would hide exactly the row that explains why 원장 16 and 다이제스트 15
+    differ by one.
+    """
+    from rlwrld_worklog import cli, digest, reconcile as reconcile_module
+
+    monkeypatch.setattr(
+        digest,
+        "resolve_people",
+        lambda url, names: {"resolved": {"x": "p_1"}, "unresolved": [], "ambiguous": {}},
+    )
+
+    def observation(status: str, collected_at: int) -> dict:
+        return {
+            "key": "k2",
+            "entity_id": "k2",
+            "summary": "Robot Team Weekly meeting (all)",
+            "starts": "2026-09-23T13:00:00+09:00",
+            "capture_profile": "live-google-calendar-events/v1",
+            "recurring_of": "weekly",
+            "status": status,
+            "collected_at": collected_at,
+        }
+
+    monkeypatch.setattr(
+        reconcile_module,
+        "explain_calendar_day",
+        lambda url, person, day, **kwargs: {
+            "day": day.isoformat(),
+            "ledger": [observation("confirmed", 1), observation("cancelled", 2)],
+            "source": [],
+            "ledger_only": [],
+            "source_only": [],
+            "digest": [],
+            "digest_repeats": [],
+            "source_measured": False,
+        },
+    )
+
+    class Args:
+        person_name = "x"
+        since = None
+        until = None
+        explain = "2026-09-23"
+        database_url = "postgresql://fake"
+        source = []
+        gaps_only = False
+        no_source_read = True
+
+    assert cli.reconcile_command(Args()) == 0
+    assert "취소됨" in capsys.readouterr().out
