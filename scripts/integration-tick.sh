@@ -105,17 +105,46 @@ if ! git -C "$work" merge -q --ff-only origin/main 2>/dev/null; then
 fi
 head_sha=$(git -C "$work" rev-parse --short HEAD 2>/dev/null || echo unknown)
 
-if [ -x "$work/.venv/bin/python" ]; then
-  py="$work/.venv/bin/python"
-elif [ -x "$root/.venv/bin/python" ]; then
-  py="$root/.venv/bin/python"
-elif command -v python3 >/dev/null 2>&1; then
-  py=python3
-else
-  outcome="untested"
-  detail="no python found; nothing was run"
-  finish
+# The clone gets its own interpreter, and there is deliberately no fallback
+# to the carrier's.
+#
+# The first version fell back to "$root/.venv", which holds an editable
+# install pointing at the carrier's working tree. So the run imported code
+# from one checkout and collected tests from another, and reported three
+# failures that said nothing about either -- the same two-sides-asking-
+# different-questions mistake this repository keeps finding, this time in the
+# batch built to catch it.
+#
+# Installing costs a couple of minutes once. A result that mixes two
+# checkouts costs more than that every time somebody believes it.
+py="$work/.venv/bin/python"
+if [ ! -x "$py" ]; then
+  if ! python3 -m venv "$work/.venv" >/dev/null 2>&1; then
+    outcome="untested"
+    detail="could not create a virtualenv in $work; refusing to test one checkout with another's interpreter"
+    finish
+  fi
+  # `pytest` is not a declared dependency on purpose (CONTRIBUTING.md), so it
+  # is named here rather than arriving by accident.
+  install=$("$py" -m pip install -q -e "$work" pytest 2>&1)
+  if [ $? -ne 0 ]; then
+    outcome="untested"
+    detail=$(printf '%s' "$install" | tail -5)
+    finish
+  fi
 fi
+
+# And prove it: an interpreter that imports the package from anywhere but this
+# clone would make every result here meaningless, quietly.
+imported=$("$py" -c 'import rlwrld_worklog; print(rlwrld_worklog.__file__)' 2>&1)
+case "$imported" in
+  "$work"/*) : ;;
+  *)
+    outcome="untested"
+    detail="rlwrld_worklog imports from $imported, which is outside $work"
+    finish
+    ;;
+esac
 
 # Schema first. A migration that landed with the code has to be applied here
 # before the suite can mean anything, and applying it to `worklog_dev` is also
@@ -135,8 +164,13 @@ skipped=$(printf '%s' "$summary" | grep -oE '[0-9]+ skipped' | grep -oE '[0-9]+'
 
 if [ "$status" -ne 0 ]; then
   outcome="red"
-  detail=$(printf '%s' "$log" | grep -E '^(FAILED|ERROR)' | head -20)
-  [ -n "$detail" ] || detail="$summary"
+  # The names AND why. A state file that lists which tests failed and not how
+  # costs a round trip to the person at the keyboard every single time, and
+  # this batch reports to somebody who cannot open a terminal here.
+  detail=$(printf '%s\n%s' \
+    "$(printf '%s' "$log" | grep -E '^(FAILED|ERROR)' | head -20)" \
+    "$(printf '%s' "$log" | grep -E '^E ' | head -30)")
+  [ -n "$(printf '%s' "$detail" | tr -d '[:space:]')" ] || detail="$summary"
   finish
 fi
 

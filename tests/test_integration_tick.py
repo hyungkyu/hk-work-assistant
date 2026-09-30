@@ -158,3 +158,55 @@ def test_the_unit_reads_the_url_from_outside_the_repository() -> None:
 
     timer = (ROOT / "deploy" / "systemd" / "hkwa-integration.timer").read_text()
     assert "OnUnitInactiveSec=30min" in timer
+
+
+def test_it_refuses_to_test_one_checkout_with_another_s_interpreter(stage) -> None:
+    """The first run of this batch reported three failures that meant nothing.
+
+    It fell back to the carrier's `.venv`, which holds an editable install
+    pointing at the carrier's working tree -- so it imported code from one
+    checkout and collected tests from another. Three reds that described
+    neither. The same mistake this repository keeps finding, two sides asking
+    different questions, this time inside the batch built to catch it.
+
+    There is no fallback now. Either the clone has its own interpreter with
+    the package installed from the clone, or the run says it did not test
+    anything. An untested run that says so is worth more than a result
+    assembled from two checkouts.
+    """
+    work = stage["work"]
+    subprocess.run(
+        ["git", "clone", "-q", str(stage["origin"]), str(work)], check=True
+    )
+    # A virtualenv that exists but whose interpreter resolves the package
+    # somewhere else -- which is exactly what the carrier's venv looks like
+    # from in here, because its editable install points at the carrier's own
+    # working tree. The stub only has to answer the import check the way that
+    # interpreter would.
+    venv = work / ".venv" / "bin"
+    venv.mkdir(parents=True)
+    shim = venv / "python"
+    shim.write_text(
+        "#!/bin/sh\n"
+        "echo /somewhere/else/rlwrld_worklog/__init__.py\n"
+        "exit 0\n"
+    )
+    shim.chmod(0o755)
+
+    found = _run(stage, WORKLOG_INTEGRATION_DATABASE_URL="postgresql://example/dev")
+
+    assert found["outcome"] == "untested"
+    assert found["passed"] == 0, "nothing may be counted as passing"
+
+
+def test_a_red_run_says_why_not_only_which(stage) -> None:
+    """A report that names failures without their reasons costs a round trip.
+
+    This batch reports to somebody who is not at this keyboard. "Three tests
+    failed" sends them to a terminal; the assertion line often does not.
+    """
+    script = SCRIPT.read_text(encoding="utf-8")
+    assert "grep -E '^E '" in script, (
+        "the red detail carries pytest's assertion lines, not just the "
+        "FAILED names"
+    )
