@@ -585,7 +585,10 @@ def test_a_screen_another_session_is_building_is_not_reachable_yet(html: str) ->
     준비 중, so it ships disabled. The session that builds the screen removes
     the attribute as its last step.
     """
-    for page in ("gpu", "menu"):
+    # GPU 가격 came off this list on 2026-10-01, when the screen behind it
+    # landed and the attribute came off with it -- which is the step this
+    # test exists to make deliberate rather than accidental.
+    for page in ("menu",):
         entry = re.search(rf'<button data-page="{page}"[^>]*>', html)
         assert entry, f"no menu entry for {page}"
         assert "disabled" in entry.group(0), (
@@ -661,3 +664,54 @@ def test_the_menu_editor_says_which_order_it_is_showing(html: str, script: str) 
     """Saved-but-not-showing and never-saved look identical otherwise."""
     assert 'id="menu-state"' in html and 'id="menu-badge"' in html
     assert "코드 순서로 보여주는 중입니다" in script
+def test_the_gpu_price_screen_is_built_and_its_menu_entry_is_live(
+    html: str, script: str
+) -> None:
+    """The last step: the button mori shipped disabled is reachable now."""
+    entry = re.search(r'<button data-page="gpu"[^>]*>', html)
+    assert entry and "disabled" not in entry.group(0)
+    assert "if (page === 'gpu') loadCloudPricing(null);" in script
+    assert "준비 중입니다" not in html[html.index('id="page-gpu"'):html.index('id="page-menu"')]
+
+
+def test_the_gpu_price_routes_are_mounted() -> None:
+    from rlwrld_worklog.web import app
+
+    paths = set(app.openapi()["paths"])
+    assert {
+        "/api/v1/admin/cloud-pricing",
+        "/api/v1/admin/cloud-pricing/refresh",
+        "/api/v1/admin/cloud-pricing/snapshots/{snapshot_id}",
+    } <= paths
+
+
+def test_the_price_screen_shows_the_original_beside_the_converted(
+    html: str, script: str
+) -> None:
+    """Two columns, because they are two different kinds of fact: the left is
+    what the provider published, the right is ours and only as good as the
+    rate printed above it."""
+    assert "원가" in html and "환율 적용" in html
+    assert 'id="cp-asof-body"' in html
+    # The rate, and both of the times that bound it.
+    assert "'가져온 시각'" in script
+    assert "'이 요금이 생긴 시각'" in script
+    assert "fx.as_of" in script
+    assert "1 ${fx.base} = ${cpNumber(fx.rate, 2)} ${fx.quote}" in script
+
+
+def test_a_price_we_could_not_convert_leaves_the_won_column_empty(script: str) -> None:
+    """Filling it with the original would be a lie told by a table cell."""
+    assert "if (value === null || value === undefined) return '—';" in script
+
+
+def test_the_refresh_button_says_which_of_the_two_things_happened(
+    html: str, script: str
+) -> None:
+    """HK's rule is visible on screen, not only in the database: a refresh
+    either moves prices into a new snapshot or moves only the date."""
+    assert "if (result.changed) {" in script
+    assert "달라진 요금이 없어 가져온 시각과 환율만 새로 적었습니다." in script
+    # A provider that failed is named rather than quietly shortening the table.
+    assert "에서 받지 못했습니다" in script
+    assert 'id="cp-runs-body"' in html

@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from psycopg.rows import dict_row
 
 from .admin_web import require_company_session, router as admin_router
+from .cloud_pricing_web import admin_router as cloud_pricing_router
 from .collection_web import router as collection_router
 from .menu_web import router as menu_router
 from .org_web import router as org_router
@@ -26,6 +27,7 @@ app = FastAPI(
 app.include_router(admin_router)
 app.include_router(work_router)
 app.include_router(collection_router)
+app.include_router(cloud_pricing_router)
 app.include_router(org_router)
 app.include_router(menu_router)
 app.include_router(roadmap_router)
