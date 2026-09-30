@@ -1750,10 +1750,12 @@
       closeWorkEditor();
       closeTimeline();
       $('roadmap-drawer').classList.add('hidden');
+      $('cp-drawer').classList.add('hidden');
       closeEventDetail();
       stopWorkPolling();
       stopCollectionPolling();
       if (page === 'bookmarks') loadBookmarks();
+      if (page === 'gpu') loadCloudPricing(null);
       if (page === 'roadmap') loadRoadmap();
       if (page === 'mapping') loadMapping();
       if (page === 'search') { loadSearchCorpus(); }
@@ -3285,5 +3287,263 @@
       mappingState.onlyEdited = this.checked; renderMapping();
     });
 
+
+    // ------------------------------------------------- 클라우드 요금
+    // Two numbers per row, and they are not the same kind of fact. The left
+    // one is what the provider published; the right one is ours, produced by
+    // multiplying by a rate we fetched separately. So the rate and both
+    // timestamps sit at the top of the screen rather than in a tooltip: a
+    // converted price with nothing next to it is a number nobody can check.
+    const cpState = { data: null, category: 'gpu', q: '', provider: '', viewing: null };
+
+    const CP_STATE_TEXT = {
+      empty: '아직 한 번도 가져오지 않았습니다. "다시 가져오기"를 누르세요.',
+      loading: '불러오는 중…',
+    };
+
+    function cpNumber(value, decimals) {
+      return Number(value).toLocaleString('ko-KR', {
+        minimumFractionDigits: decimals, maximumFractionDigits: decimals,
+      });
+    }
+
+    // Won is shown whole above 100 and to two places below it, because
+    // storage is quoted per GiB and ₩20 and ₩19.89 are different answers.
+    function cpWon(value) {
+      if (value === null || value === undefined) return '—';
+      const amount = Number(value);
+      if (!isFinite(amount)) return '—';
+      return `₩${cpNumber(amount, amount >= 100 ? 0 : 2)}`;
+    }
+
+    function cpOriginal(row) {
+      const amount = Number(row.amount);
+      if (!isFinite(amount)) return row.amount;
+      if (row.currency === 'KRW') return `₩${cpNumber(amount, amount >= 100 ? 0 : 2)}`;
+      if (row.currency === 'USD') return `$${cpNumber(amount, amount >= 1 ? 2 : 4)}`;
+      return `${row.amount} ${row.currency}`;
+    }
+
+    const cpTime = (value) => (value ? new Date(value).toLocaleString('ko-KR') : '—');
+
+    function cpProviderLabel(id) {
+      const found = (cpState.data.providers || []).find((p) => p.id === id);
+      return found ? found.label : id;
+    }
+
+    function cpSpec(spec) {
+      if (!spec) return '';
+      return Object.entries(spec)
+        .filter(([, value]) => value !== null && value !== undefined && value !== '')
+        .map(([key, value]) => `${key} ${value}`)
+        .join(' · ');
+    }
+
+    async function loadCloudPricing(snapshotId) {
+      const path = snapshotId
+        ? `/api/v1/admin/cloud-pricing/snapshots/${snapshotId}`
+        : '/api/v1/admin/cloud-pricing';
+      $('cp-state').textContent = CP_STATE_TEXT.loading;
+      try {
+        cpState.data = await api(path);
+        cpState.viewing = snapshotId || null;
+      } catch (error) {
+        cpState.data = null;
+        $('cp-state').textContent = error.message;
+        rmClear($('cp-body'));
+        rmClear($('cp-asof-body'));
+        rmClear($('cp-runs-body'));
+        return;
+      }
+      renderCloudPricing();
+    }
+
+    function cpRenderAsOf() {
+      const snapshot = cpState.data.snapshot;
+      const body = rmClear($('cp-asof-body'));
+      const row = (label, value, hint) => {
+        const tr = document.createElement('tr');
+        const head = rmEl('td', { text: label, style: 'color:var(--muted);white-space:nowrap' });
+        const cell = rmEl('td', { text: value });
+        if (hint) cell.appendChild(rmEl('span', { className: 'help', text: ` ${hint}`, style: 'margin-left:8px' }));
+        tr.appendChild(head); tr.appendChild(cell);
+        return tr;
+      };
+      if (!snapshot) {
+        $('cp-asof-badge').textContent = '없음';
+        body.appendChild(row('상태', CP_STATE_TEXT.empty));
+        return;
+      }
+      const fx = snapshot.fx;
+      $('cp-asof-badge').textContent = cpTime(snapshot.refreshed_at);
+      // Both dates, because they answer different questions: one is how old
+      // the prices are, the other is how long ago we checked.
+      body.appendChild(row('가져온 시각', cpTime(snapshot.refreshed_at), '마지막으로 확인한 때'));
+      body.appendChild(row('이 요금이 생긴 시각', cpTime(snapshot.taken_at), '이때 이후로 값이 바뀌지 않았습니다'));
+      if (fx) {
+        body.appendChild(row(
+          '환율',
+          `1 ${fx.base} = ${cpNumber(fx.rate, 2)} ${fx.quote}`,
+          `${fx.source} · 고시 ${cpTime(fx.as_of)}`,
+        ));
+      } else {
+        body.appendChild(row('환율', '없음', '환율을 받지 못해 환산값을 비워 둡니다'));
+      }
+    }
+
+    function cpRenderRuns() {
+      const runs = cpState.data.runs || [];
+      const body = rmClear($('cp-runs-body'));
+      const failed = runs.filter((run) => run.outcome !== 'ok').length;
+      $('cp-runs-badge').textContent = failed ? `${failed}곳 실패` : `${runs.length}곳 정상`;
+      $('cp-runs-card').classList.toggle('hidden', runs.length === 0);
+      runs.forEach((run) => {
+        const tr = document.createElement('tr');
+        tr.appendChild(rmEl('td', { text: cpProviderLabel(run.provider) }));
+        tr.appendChild(rmEl('td', {}, [
+          rmEl('span', {
+            className: `kindtag ${run.outcome === 'ok' ? 'added' : 'removed'}`,
+            text: run.outcome === 'ok' ? '정상' : '실패',
+          }),
+        ]));
+        tr.appendChild(rmEl('td', { text: String(run.row_count ?? 0) }));
+        tr.appendChild(rmEl('td', { text: run.detail || '' }));
+        body.appendChild(tr);
+      });
+    }
+
+    function cpVisible(row) {
+      if (row.category !== cpState.category) return false;
+      if (cpState.provider && row.provider !== cpState.provider) return false;
+      if (cpState.q) {
+        const hay = `${row.label} ${row.sku} ${cpSpec(row.spec)}`.toLowerCase();
+        if (!hay.includes(cpState.q)) return false;
+      }
+      return true;
+    }
+
+    function renderCloudPricing() {
+      const data = cpState.data;
+      if (!data) return;
+
+      const select = $('cp-provider');
+      if (select.options.length <= 1) {
+        (data.providers || []).forEach((provider) => {
+          const option = rmEl('option', { text: provider.label });
+          option.value = provider.id;
+          select.appendChild(option);
+        });
+      }
+
+      cpRenderAsOf();
+      cpRenderRuns();
+
+      const shown = (data.rows || []).filter(cpVisible);
+      const body = rmClear($('cp-body'));
+      shown.forEach((row) => {
+        const tr = document.createElement('tr');
+        tr.appendChild(rmEl('td', { text: cpProviderLabel(row.provider) }));
+        tr.appendChild(rmEl('td', { text: row.label }));
+        tr.appendChild(rmEl('td', { className: 'help', text: cpSpec(row.spec) }));
+        tr.appendChild(rmEl('td', { text: row.unit }));
+        tr.appendChild(rmEl('td', {
+          text: cpOriginal(row), style: 'text-align:right;white-space:nowrap',
+        }));
+        // An empty conversion is left empty rather than filled with the
+        // original: a number in the 원화 column that is not won would be a lie
+        // told by a table cell.
+        tr.appendChild(rmEl('td', {
+          text: cpWon(row.krw),
+          className: row.krw === null ? 'help' : '',
+          style: 'text-align:right;white-space:nowrap',
+        }));
+        body.appendChild(tr);
+      });
+
+      $('cp-count-badge').textContent = `${shown.length} / ${(data.rows || []).length}`;
+      $('cp-table-title').textContent = cpState.category === 'gpu' ? 'GPU 요금' : '스토리지 요금';
+      $('cp-history-open').textContent = `히스토리${data.history && data.history.length ? ` (${data.history.length})` : ''}`;
+
+      if (!data.snapshot) {
+        $('cp-state').textContent = CP_STATE_TEXT.empty;
+      } else if (cpState.viewing) {
+        $('cp-state').textContent = `지난 요금표를 보고 있습니다 (#${cpState.viewing}). 환산값은 그때의 환율로 계산된 것입니다.`;
+      } else {
+        $('cp-state').textContent = '';
+      }
+      $('cp-foot').textContent = shown.length || !data.snapshot ? '' : '이 조건에 맞는 요금이 없습니다.';
+      cpRenderHistory();
+    }
+
+    function cpRenderHistory() {
+      const history = cpState.data.history || [];
+      const body = rmClear($('cp-history-body'));
+      if (cpState.viewing) {
+        const back = rmEl('button', { className: 'button primary', text: '현재 요금표로 돌아가기' });
+        back.addEventListener('click', () => { $('cp-drawer').classList.add('hidden'); loadCloudPricing(null); });
+        body.appendChild(rmEl('div', { className: 'hist' }, [back]));
+      }
+      if (!history.length) {
+        body.appendChild(rmEl('p', { className: 'help', text: '아직 지난 요금표가 없습니다.' }));
+        return;
+      }
+      history.forEach((entry) => {
+        const open = rmEl('button', {
+          className: 'button',
+          text: entry.id === (cpState.data.snapshot && cpState.data.snapshot.id) ? '지금 보는 것' : '열기',
+        });
+        open.disabled = entry.id === (cpState.data.snapshot && cpState.data.snapshot.id);
+        open.addEventListener('click', () => {
+          $('cp-drawer').classList.add('hidden');
+          loadCloudPricing(entry.id);
+        });
+        const when = rmEl('div', { className: 'when' }, [
+          rmEl('strong', { text: cpTime(entry.taken_at) }),
+          rmEl('span', { className: 'help', text: `${entry.changes}건 변경 · 확인 ${cpTime(entry.refreshed_at)}` }),
+          open,
+        ]);
+        body.appendChild(rmEl('div', { className: 'hist' }, [when]));
+      });
+    }
+
+    $('cp-category').addEventListener('click', (event) => {
+      const button = event.target.closest('button'); if (!button) return;
+      cpState.category = button.dataset.category;
+      event.currentTarget.querySelectorAll('button').forEach((node) => node.classList.toggle('on', node === button));
+      renderCloudPricing();
+    });
+    $('cp-q').addEventListener('input', function () {
+      cpState.q = this.value.trim().toLowerCase(); renderCloudPricing();
+    });
+    $('cp-provider').addEventListener('change', function () {
+      cpState.provider = this.value; renderCloudPricing();
+    });
+    $('cp-history-open').addEventListener('click', () => $('cp-drawer').classList.remove('hidden'));
+    $('cp-history-close').addEventListener('click', () => $('cp-drawer').classList.add('hidden'));
+
+    $('cp-refresh').addEventListener('click', async function () {
+      const label = this.textContent;
+      // AWS publishes a 200MB price list; this can take a few seconds, and a
+      // button that looks idle invites a second press.
+      this.disabled = true; this.textContent = '가져오는 중…';
+      try {
+        const result = await api('/api/v1/admin/cloud-pricing/refresh', { method: 'POST', body: '{}' });
+        await loadCloudPricing(null);
+        const failed = (result.runs || []).filter((run) => run.outcome !== 'ok');
+        if (result.changed) {
+          toast(`요금이 바뀌었습니다: 추가 ${result.added} · 변경 ${result.updated} · 삭제 ${result.removed}`);
+        } else {
+          toast('달라진 요금이 없어 가져온 시각과 환율만 새로 적었습니다.');
+        }
+        if (failed.length) {
+          toast(`${failed.map((run) => cpProviderLabel(run.provider)).join(', ')} 에서 받지 못했습니다`, true);
+        }
+        if (result.fx_error) toast(`환율을 받지 못했습니다: ${result.fx_error}`, true);
+      } catch (error) {
+        toast(error.message, true);
+      } finally {
+        this.disabled = false; this.textContent = label;
+      }
+    });
 
     initialize();

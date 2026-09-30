@@ -1,0 +1,741 @@
+{
+ "props": {
+  "pageProps": {
+   "dehydratedState": {
+    "queries": [
+     {
+      "queryKey": [
+       "useMetaData"
+      ],
+      "state": {
+       "data": [
+        {
+         "id": 2,
+         "title": "Compute",
+         "formulas": [
+          {
+           "title": "Virtual Machine",
+           "description": "",
+           "inputs": [
+            {
+             "id": 2,
+             "title": "운영체계 (OS)",
+             "type": "select",
+             "items": [
+              {
+               "id": 167,
+               "title": "Ubuntu 20.04",
+               "productType": "general_with_time",
+               "productPricing": [
+                {
+                 "unitPrice": 0,
+                 "monthlyPrice": 0,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "시간",
+                  "title": "Linux",
+                  "pricingType": "time_based"
+                 }
+                }
+               ]
+              },
+              {
+               "id": 168,
+               "title": "Ubuntu 20.04 - NVIDIA",
+               "productType": "general_with_time",
+               "productPricing": [
+                {
+                 "unitPrice": 0,
+                 "monthlyPrice": 0,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "시간",
+                  "title": "Linux",
+                  "pricingType": "time_based"
+                 }
+                }
+               ]
+              },
+              {
+               "id": 169,
+               "title": "Ubuntu 22.04",
+               "productType": "general_with_time",
+               "productPricing": [
+                {
+                 "unitPrice": 0,
+                 "monthlyPrice": 0,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "시간",
+                  "title": "Linux",
+                  "pricingType": "time_based"
+                 }
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": 1,
+             "title": "인스턴스 타입",
+             "type": "select",
+             "items": [
+              {
+               "id": 65,
+               "title": "gn1i.xlarge",
+               "productType": "instance",
+               "productPricing": [
+                {
+                 "unitPrice": 648,
+                 "monthlyPrice": 466560,
+                 "pricePer": 1,
+                 "metadata": {
+                  "cpu": "4",
+                  "unit": "시간",
+                  "title": "gn1i.xlarge",
+                  "memory": "16",
+                  "network": "최대 10",
+                  "accelerator": "T4 x1",
+                  "pricingType": "hour_per"
+                 }
+                }
+               ]
+              },
+              {
+               "id": 67,
+               "title": "gn1i.2xlarge",
+               "productType": "instance",
+               "productPricing": [
+                {
+                 "unitPrice": 856,
+                 "monthlyPrice": 616320,
+                 "pricePer": 1,
+                 "metadata": {
+                  "cpu": "8",
+                  "unit": "시간",
+                  "title": "gn1i.2xlarge",
+                  "memory": "32",
+                  "network": "최대 10",
+                  "accelerator": "T4 x1",
+                  "pricingType": "hour_per"
+                 }
+                }
+               ]
+              },
+              {
+               "id": 69,
+               "title": "gn1i.4xlarge",
+               "productType": "instance",
+               "productPricing": [
+                {
+                 "unitPrice": 1272,
+                 "monthlyPrice": 915840,
+                 "pricePer": 1,
+                 "metadata": {
+                  "cpu": "16",
+                  "unit": "시간",
+                  "title": "gn1i.4xlarge",
+                  "memory": "64",
+                  "network": "최대 10",
+                  "accelerator": "T4 x1",
+                  "pricingType": "hour_per"
+                 }
+                }
+               ]
+              },
+              {
+               "id": 72,
+               "title": "gn1i.8xlarge",
+               "productType": "instance",
+               "productPricing": [
+                {
+                 "unitPrice": 2104,
+                 "monthlyPrice": 1514880,
+                 "pricePer": 1,
+                 "metadata": {
+                  "cpu": "32",
+                  "unit": "시간",
+                  "title": "gn1i.8xlarge",
+                  "memory": "128",
+                  "network": "25",
+                  "accelerator": "T4 x1",
+                  "pricingType": "hour_per"
+                 }
+                }
+               ]
+              },
+              {
+               "id": 73,
+               "title": "gn1i.12xlarge",
+               "productType": "instance",
+               "productPricing": [
+                {
+                 "unitPrice": 4256,
+                 "monthlyPrice": 3064320,
+                 "pricePer": 1,
+                 "metadata": {
+                  "cpu": "48",
+                  "unit": "시간",
+                  "title": "gn1i.12xlarge",
+                  "memory": "192",
+                  "network": "25",
+                  "accelerator": "T4 x4",
+                  "pricingType": "hour_per"
+                 }
+                }
+               ]
+              },
+              {
+               "id": 74,
+               "title": "gn1i.16xlarge",
+               "productType": "instance",
+               "productPricing": [
+                {
+                 "unitPrice": 3768,
+                 "monthlyPrice": 2712960,
+                 "pricePer": 1,
+                 "metadata": {
+                  "cpu": "64",
+                  "unit": "시간",
+                  "title": "gn1i.16xlarge",
+                  "memory": "256",
+                  "network": "50",
+                  "accelerator": "T4 x1",
+                  "pricingType": "hour_per"
+                 }
+                }
+               ]
+              },
+              {
+               "id": 1,
+               "title": "m3az.large",
+               "productType": "instance",
+               "productPricing": [
+                {
+                 "unitPrice": 325,
+                 "monthlyPrice": 234000,
+                 "pricePer": 1,
+                 "metadata": {
+                  "cpu": "2",
+                  "unit": "시간",
+                  "title": "m3az.large",
+                  "memory": "8",
+                  "network": "최대 10",
+                  "pricingType": "hour_per"
+                 }
+                }
+               ]
+              },
+              {
+               "id": 2,
+               "title": "m3az.xlarge",
+               "productType": "instance",
+               "productPricing": [
+                {
+                 "unitPrice": 650,
+                 "monthlyPrice": 468000,
+                 "pricePer": 1,
+                 "metadata": {
+                  "cpu": "4",
+                  "unit": "시간",
+                  "title": "m3az.xlarge",
+                  "memory": "16",
+                  "network": "최대 10",
+                  "pricingType": "hour_per"
+                 }
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": 3,
+             "title": "볼륨 사용량 (SSD)",
+             "type": "input",
+             "items": [
+              {
+               "id": 50,
+               "title": "SSD",
+               "productType": "general",
+               "productPricing": [
+                {
+                 "unitPrice": 0.16,
+                 "monthlyPrice": 115.2,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "GB",
+                  "title": "SSD",
+                  "pricingType": "time_based"
+                 }
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": 4,
+             "title": "인스턴스 개수",
+             "type": "multiply",
+             "items": []
+            }
+           ]
+          },
+          {
+           "title": "Bare Metal Server",
+           "description": "",
+           "inputs": [
+            {
+             "id": 9,
+             "title": "운영체계 (OS)",
+             "type": "select",
+             "items": [
+              {
+               "id": 167,
+               "title": "Ubuntu 20.04",
+               "productType": "general_with_time",
+               "productPricing": [
+                {
+                 "unitPrice": 0,
+                 "monthlyPrice": 0,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "시간",
+                  "title": "Linux",
+                  "pricingType": "time_based"
+                 }
+                }
+               ]
+              },
+              {
+               "id": 168,
+               "title": "Ubuntu 20.04 - NVIDIA",
+               "productType": "general_with_time",
+               "productPricing": [
+                {
+                 "unitPrice": 0,
+                 "monthlyPrice": 0,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "시간",
+                  "title": "Linux",
+                  "pricingType": "time_based"
+                 }
+                }
+               ]
+              },
+              {
+               "id": 169,
+               "title": "Ubuntu 22.04",
+               "productType": "general_with_time",
+               "productPricing": [
+                {
+                 "unitPrice": 0,
+                 "monthlyPrice": 0,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "시간",
+                  "title": "Linux",
+                  "pricingType": "time_based"
+                 }
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": 10,
+             "title": "인스턴스 타입",
+             "type": "select",
+             "items": [
+              {
+               "id": 83,
+               "title": "p1i.baremetal",
+               "productType": "instance",
+               "productPricing": [
+                {
+                 "unitPrice": 16996,
+                 "monthlyPrice": 12237120,
+                 "pricePer": 1,
+                 "metadata": {
+                  "cpu": "56",
+                  "unit": "시간",
+                  "title": "p1i.baremetal",
+                  "memory": "512",
+                  "network": "50",
+                  "accelerator": "NVIDIA Tesla V100 x4",
+                  "pricingType": "hour_per"
+                 }
+                }
+               ]
+              },
+              {
+               "id": 82,
+               "title": "p2a.baremetal",
+               "productType": "instance",
+               "productPricing": [
+                {
+                 "unitPrice": 51296,
+                 "monthlyPrice": 36933120,
+                 "pricePer": 1,
+                 "metadata": {
+                  "cpu": "128",
+                  "unit": "시간",
+                  "title": "p2a.baremetal",
+                  "memory": "1536",
+                  "network": "50",
+                  "accelerator": "NVIDIA A100 x8",
+                  "pricingType": "hour_per"
+                 }
+                }
+               ]
+              },
+              {
+               "id": 84,
+               "title": "m1ie.baremetal",
+               "productType": "instance",
+               "productPricing": [
+                {
+                 "unitPrice": 6720,
+                 "monthlyPrice": 4838400,
+                 "pricePer": 1,
+                 "metadata": {
+                  "cpu": "96",
+                  "unit": "시간",
+                  "title": "m1ie.baremetal",
+                  "memory": "512",
+                  "network": "50",
+                  "pricingType": "hour_per"
+                 }
+                }
+               ]
+              },
+              {
+               "id": 83,
+               "title": "p1i.baremetal",
+               "productType": "instance",
+               "productPricing": [
+                {
+                 "unitPrice": 16996,
+                 "monthlyPrice": 12237120,
+                 "pricePer": 1,
+                 "metadata": {
+                  "cpu": "56",
+                  "unit": "시간",
+                  "title": "p1i.baremetal",
+                  "memory": "512",
+                  "network": "50",
+                  "accelerator": "NVIDIA Tesla V100 x4",
+                  "pricingType": "hour_per"
+                 }
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": 11,
+             "title": "인스턴스 개수",
+             "type": "multiply",
+             "items": []
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "id": 4,
+         "title": "Storage",
+         "formulas": [
+          {
+           "title": "Block Storage",
+           "description": "",
+           "inputs": [
+            {
+             "id": 43,
+             "title": "볼륨 타입",
+             "type": "select",
+             "items": [
+              {
+               "id": 50,
+               "title": "SSD",
+               "productType": "general",
+               "productPricing": [
+                {
+                 "unitPrice": 0.16,
+                 "monthlyPrice": 115.2,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "GB",
+                  "title": "SSD",
+                  "pricingType": "time_based"
+                 }
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": 44,
+             "title": "볼륨 사용량",
+             "type": "multiply",
+             "items": []
+            },
+            {
+             "id": 45,
+             "title": "스냅샷 사용량",
+             "type": "input",
+             "items": [
+              {
+               "id": 121,
+               "title": "Snapshot",
+               "productType": "general",
+               "productPricing": [
+                {
+                 "unitPrice": 0.08,
+                 "monthlyPrice": 57.6,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "GiB",
+                  "title": "Snapshot",
+                  "pricingType": "time_based"
+                 }
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": 46,
+             "title": "인스턴스 이미지",
+             "type": "input",
+             "items": [
+              {
+               "id": 122,
+               "title": "Instance Image",
+               "productType": "general",
+               "productPricing": [
+                {
+                 "unitPrice": 0.08,
+                 "monthlyPrice": 57.6,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "GiB",
+                  "title": "Instance Image",
+                  "pricingType": "time_based"
+                 }
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "title": "File Storage",
+           "description": "",
+           "inputs": [
+            {
+             "id": 72,
+             "title": "(Basic) File System 사용량",
+             "type": "input",
+             "items": [
+              {
+               "id": 123,
+               "title": "Basic",
+               "productType": "general",
+               "productPricing": [
+                {
+                 "unitPrice": 0.2,
+                 "monthlyPrice": 144,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "GiB",
+                  "title": "Basic",
+                  "pricingType": "time_based"
+                 }
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": 49,
+             "title": "(Basic) Backup 사용량",
+             "type": "input",
+             "items": [
+              {
+               "id": 124,
+               "title": "Backup",
+               "productType": "general",
+               "productPricing": [
+                {
+                 "unitPrice": 0.088,
+                 "monthlyPrice": 63.36,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "GiB",
+                  "title": "Backup",
+                  "pricingType": "time_based"
+                 }
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": 73,
+             "title": "(Infinite) 프로토콜 기본 요금",
+             "type": "select",
+             "items": [
+              {
+               "id": 194,
+               "title": "SMB",
+               "productType": "general_with_time",
+               "productPricing": [
+                {
+                 "unitPrice": 276.48,
+                 "monthlyPrice": 199065.6,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "시간",
+                  "title": "SMB Basic Fee",
+                  "pricingType": "time_based"
+                 }
+                }
+               ]
+              },
+              {
+               "id": 195,
+               "title": "NFS",
+               "productType": "general_with_time",
+               "productPricing": [
+                {
+                 "unitPrice": 276.48,
+                 "monthlyPrice": 199065.6,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "시간",
+                  "title": "NFS Basic Fee",
+                  "pricingType": "time_based"
+                 }
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": 74,
+             "title": "(Infinite) 사용량",
+             "type": "input",
+             "items": [
+              {
+               "id": 196,
+               "title": "SMB-over",
+               "productType": "tiered",
+               "productPricing": [
+                {
+                 "unitPrice": 0,
+                 "monthlyPrice": 0,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "GB",
+                  "title": "SMB-over",
+                  "usageRange": "0(GB)초과 1,024(GB)이하",
+                  "pricingType": "time_based"
+                 }
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "title": "Object Storage",
+           "description": "",
+           "inputs": [
+            {
+             "id": 61,
+             "title": "데이터 저장량",
+             "type": "input",
+             "items": [
+              {
+               "id": 184,
+               "title": "Standard",
+               "productType": "tiered",
+               "productPricing": [
+                {
+                 "unitPrice": 0.0375,
+                 "monthlyPrice": 27,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "GiB/시간",
+                  "title": "Standard",
+                  "usageRange": "1PiB 이하",
+                  "pricingType": "time_based"
+                 }
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": 62,
+             "title": "API 호출 수 (PUT, COPY, POST, LIST)",
+             "type": "input",
+             "items": [
+              {
+               "id": 185,
+               "title": "Standard-PUT",
+               "productType": "general",
+               "productPricing": [
+                {
+                 "unitPrice": 0.0042,
+                 "monthlyPrice": 3.024,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "건",
+                  "title": "Standard-PUT",
+                  "pricingType": "usage_based"
+                 }
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "id": 63,
+             "title": "API 호출 수 (GET 및 기타 요청)",
+             "type": "input",
+             "items": [
+              {
+               "id": 186,
+               "title": "Standard-GET 및 기타 모든 요청",
+               "productType": "general",
+               "productPricing": [
+                {
+                 "unitPrice": 0.0004,
+                 "monthlyPrice": 0.288,
+                 "pricePer": 1,
+                 "metadata": {
+                  "unit": "건",
+                  "title": "Standard-GET",
+                  "pricingType": "usage_based"
+                 }
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ }
+}

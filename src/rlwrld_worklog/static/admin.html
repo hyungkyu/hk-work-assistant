@@ -22,12 +22,10 @@
         </div>
         <div class="nav-group">
           <span class="nav-label">정보</span>
-          <!-- GPU 가격 동향. The screen behind this button is built by another
-               session; the button stays disabled until that session removes
-               the attribute, so a half-built page is never reachable from a
-               menu somebody is already using. -->
-          <button data-page="gpu" data-requires="super_admin" disabled
-                  title="다른 세션이 작업 중입니다">GPU 가격</button>
+          <!-- GPU 가격 동향. The screen landed 2026-10-01 and the attribute
+               came off with it; mori's rule was that the session building the
+               screen removes it as its last step. -->
+          <button data-page="gpu" data-requires="super_admin">GPU 가격</button>
         </div>
         <div class="nav-group">
           <span class="nav-label">다이제스트</span>
@@ -419,7 +417,52 @@
            ------------------------------------------------------------------ -->
       <section class="page" id="page-gpu">
         <h1>GPU 가격</h1>
-        <p class="lead">준비 중입니다.</p>
+        <p class="lead">AWS · Nebius · Kakao Cloud · Naver Cloud · VESSL.ai 가 공개한 GPU·스토리지 요금입니다.
+          왼쪽이 공급자가 적어 둔 <strong>원가</strong>이고, 오른쪽이 그 옆의 환율로 바꾼 원화입니다 —
+          환산값은 같이 적힌 환율만큼만 믿을 수 있습니다.</p>
+        <div class="collection-toolbar">
+          <div class="seg" id="cp-category">
+            <button data-category="gpu" class="on">GPU</button>
+            <button data-category="storage">스토리지</button>
+          </div>
+          <div class="work-filters">
+            <input id="cp-q" type="search" style="min-width:200px" placeholder="이름으로 거르기">
+            <select id="cp-provider"><option value="">모든 공급자</option></select>
+            <button class="button primary" id="cp-refresh">다시 가져오기</button>
+            <button class="button" id="cp-history-open">히스토리</button>
+          </div>
+        </div>
+        <p class="work-state" id="cp-state">불러오는 중…</p>
+        <div class="card" id="cp-asof-card" style="margin-bottom:16px">
+          <div class="card-header"><h2>가져온 시각과 환율</h2><span class="badge" id="cp-asof-badge">-</span></div>
+          <div style="overflow-x:auto">
+            <table class="audit">
+              <tbody id="cp-asof-body"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card" id="cp-runs-card" style="margin-bottom:16px">
+          <div class="card-header"><h2>공급자별 수집 결과</h2><span class="badge" id="cp-runs-badge">-</span></div>
+          <div style="overflow-x:auto">
+            <table class="audit">
+              <thead><tr><th>공급자</th><th>결과</th><th>행</th><th>비고</th></tr></thead>
+              <tbody id="cp-runs-body"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header"><h2 id="cp-table-title">요금</h2><span class="badge" id="cp-count-badge">-</span></div>
+          <div style="overflow-x:auto">
+            <table class="audit">
+              <thead><tr>
+                <th>공급자</th><th>이름</th><th>사양</th><th>단위</th>
+                <th style="text-align:right">원가</th><th style="text-align:right">환율 적용</th>
+              </tr></thead>
+              <tbody id="cp-body"></tbody>
+            </table>
+          </div>
+        </div>
+        <p class="help" id="cp-foot"></p>
       </section>
 
       <!-- ------------------------------------------------------------------
@@ -591,6 +634,13 @@
       <div class="notice" id="auth-notice"></div>
     </form>
   </div>
+  <aside class="drawer hidden" id="cp-drawer">
+    <button class="button" id="cp-history-close">닫기</button>
+    <h2>요금 히스토리</h2>
+    <p class="help">요금이 달라진 날만 남습니다. 달라진 것이 없는 날은 새 문서를 만들지 않고
+      가져온 시각과 환율만 바꿉니다.</p>
+    <div id="cp-history-body"></div>
+  </aside>
   <aside class="drawer hidden" id="roadmap-drawer">
     <button class="button" id="roadmap-history-close"></button>
     <h2 id="roadmap-history-title"></h2>
