@@ -582,30 +582,134 @@ class AdminStore:
     MAX_BOOKMARKS = 300
     MAX_BOOKMARK_URL = 2000
     DEFAULT_BOOKMARK_GROUP = "기타"
-    # The addresses the screen starts with. They are the file's initial
-    # content, not a floor: every write below persists the whole list, so
-    # deleting or renaming one of these sticks. The two 인프라 entries are the
-    # ones the operator named; the rest are the systems this deployment is
-    # already configured against (Slack, Notion, the GitHub organisation), so
-    # the screen is useful on its first open rather than empty.
+    # The addresses the screen starts with, read off what people actually
+    # paste in Slack rather than guessed. `rlwrld.co` is the internal
+    # service domain -- inside the office network or on Tailscale only --
+    # and the bare IPs and infra-node names are Tailscale-only.
+    #
+    # They are the file's initial content, not a floor: every write below
+    # persists the whole list, so deleting or renaming one of these sticks.
+    # scripts/bookmarks-seed-sync.py is how an install that already has a
+    # bookmarks.json picks up entries added here later.
     SEEDED_BOOKMARKS: tuple[dict[str, str], ...] = (
         {
             "id": "bm_infra_gpu",
             "group": "인프라",
-            "label": "GPU",
+            "label": "GPU 대시보드",
             "url": "http://infra-node:8888/",
+            "note": "카카오·AWS SKT·네이버 세 클러스터의 GPU 현황·배치·사용량",
+        },
+        {
+            "id": "bm_infra_gpu_reserved",
+            "group": "인프라",
+            "label": "GPU — dedicated · reserved",
+            "url": "http://infra-node:8889/",
             "note": "",
         },
         {
-            "id": "bm_infra_storage",
+            "id": "bm_infra_gpu_legacy",
             "group": "인프라",
-            "label": "스토리지 (foundary)",
-            "url": (
-                "https://lightdash.tailadd0bc.ts.net/projects/"
-                "59d50c1e-87b1-4ced-b95d-c5322aeebc67/dashboards/"
-                "29c31d00-076e-47c8-9b84-5da3074c9bb9/view"
-            ),
-            "note": "Lightdash 대시보드",
+            "label": "GPU — 레거시 대시보드",
+            "url": "http://infra-node:8090/",
+            "note": "",
+        },
+        {
+            "id": "bm_infra_slurm",
+            "group": "인프라",
+            "label": "Slurm · MLXP job 현황",
+            "url": "http://210.109.83.131:8888/",
+            "note": "running·pending job",
+        },
+        {
+            "id": "bm_data_foundry",
+            "group": "데이터 · 스토리지",
+            "label": "Foundry",
+            "url": "https://foundry.rlwrld.co/",
+            "note": "AWS·Kakao·Naver 오브젝트 스토리지를 한 논리 경로로",
+        },
+        {
+            "id": "bm_infra_storage",
+            "group": "데이터 · 스토리지",
+            "label": "Lightdash",
+            "url": "https://lightdash.rlwrld.co/",
+            "note": "전사 대시보드 통합 중. 예전 ts.net 주소에서 이사했다",
+        },
+        {
+            "id": "bm_data_fsx",
+            "group": "데이터 · 스토리지",
+            "label": "FSx 용량 인벤토리",
+            "url": "https://fsx-inventory.rlwrld.co/",
+            "note": "",
+        },
+        {
+            "id": "bm_dash_host",
+            "group": "대시보드",
+            "label": "사내 대시보드",
+            "url": "https://dashboard.rlwrld.co/",
+            "note": "",
+        },
+        {
+            "id": "bm_dash_hw",
+            "group": "대시보드",
+            "label": "HW 스펙 · POC",
+            "url": "https://hwdashboard.rlwrld.co/",
+            "note": "",
+        },
+        {
+            "id": "bm_dash_ops",
+            "group": "대시보드",
+            "label": "장비 · 자산 관리",
+            "url": "https://ops.rlwrld.co/",
+            "note": "",
+        },
+        {
+            "id": "bm_dash_rd",
+            "group": "대시보드",
+            "label": "RD Resource",
+            "url": "https://rd-resource.rlwrld.co/",
+            "note": "",
+        },
+        {
+            "id": "bm_tool_tree",
+            "group": "도구",
+            "label": "TREE — 작업 배포가능성 판정",
+            "url": "https://tree.tailadd0bc.ts.net/",
+            "note": "",
+        },
+        {
+            "id": "bm_tool_trackio",
+            "group": "도구",
+            "label": "trackio — 실험 추적",
+            "url": "http://100.57.101.80:10001/",
+            "note": "",
+        },
+        {
+            "id": "bm_tool_slides",
+            "group": "도구",
+            "label": "SlideSearcher",
+            "url": "https://slidesearcher.rlwrld.co/",
+            "note": "사내 PPT 검색",
+        },
+        {
+            "id": "bm_tool_rxview",
+            "group": "도구",
+            "label": "RX 데이터 뷰어",
+            "url": "http://100.127.185.54/",
+            "note": "",
+        },
+        {
+            "id": "bm_doc_rrc",
+            "group": "문서",
+            "label": "RRC 매뉴얼 · 런북",
+            "url": "https://rrc.rlwrld.co/",
+            "note": "",
+        },
+        {
+            "id": "bm_doc_roadmap",
+            "group": "문서",
+            "label": "Platform Team Roadmap",
+            "url": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
+            "note": "로드맵 백오피스의 원본",
         },
         {
             "id": "bm_tool_slack",
@@ -626,7 +730,7 @@ class AdminStore:
             "group": "협업 도구",
             "label": "GitHub — RLWRLD 조직",
             "url": "https://github.com/RLWRLD",
-            "note": "제품별 저장소는 여기 아래에 하나씩 추가",
+            "note": "",
         },
         {
             "id": "bm_tool_drive",
@@ -635,15 +739,7 @@ class AdminStore:
             "url": "https://drive.google.com/",
             "note": "",
         },
-        {
-            "id": "bm_doc_roadmap",
-            "group": "문서",
-            "label": "Platform Team Roadmap",
-            "url": "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d",
-            "note": "로드맵 백오피스의 원본",
-        },
     )
-
     @staticmethod
     def _clean_bookmark_url(value: str) -> str:
         """Accept only an http(s) address, because the page turns this into a link.

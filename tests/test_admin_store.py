@@ -320,11 +320,17 @@ def test_a_fresh_install_opens_on_a_grouped_list_not_an_empty_one(
     store = AdminStore(tmp_path / "config")
     assert not store.bookmarks_path.exists()
     groups = [(group["group"], len(group["bookmarks"])) for group in store.bookmark_groups()]
-    assert groups == [("인프라", 2), ("협업 도구", 4), ("문서", 1)]
-    assert [entry["label"] for entry in store.bookmark_groups()[0]["bookmarks"]] == [
-        "GPU",
-        "스토리지 (foundary)",
+    assert groups == [
+        ("인프라", 4),
+        ("데이터 · 스토리지", 3),
+        ("대시보드", 4),
+        ("도구", 4),
+        ("문서", 2),
+        ("협업 도구", 4),
     ]
+    assert [entry["label"] for entry in store.bookmark_groups()[0]["bookmarks"]][0] == (
+        "GPU 대시보드"
+    )
 
 
 def test_every_seeded_bookmark_passes_the_same_check_a_typed_one_does(
@@ -453,3 +459,63 @@ def test_a_malformed_bookmark_row_is_skipped_not_fatal(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert [entry["id"] for entry in store.load_bookmarks()] == ["y"]
+
+
+def test_no_seeded_bookmark_points_at_an_address_that_moved() -> None:
+    """Lightdash left tailadd0bc.ts.net for lightdash.rlwrld.co on 2026-09-28.
+
+    The seed list shipped the old address for two days. `rlwrld.co` is the
+    internal service domain, so a seed still naming the tailnet host for a
+    service that moved there is a stale link nobody notices until they click
+    it.
+    """
+    retired = ("lightdash.tailadd0bc.ts.net",)
+    for entry in AdminStore.SEEDED_BOOKMARKS:
+        for host in retired:
+            assert host not in entry["url"], f"{entry['id']} still points at {host}"
+
+
+def test_the_seed_sync_script_adds_only_what_is_missing(tmp_path: Path) -> None:
+    """The other half of "seeds are not a floor".
+
+    An install that already wrote bookmarks.json never sees a seed added
+    later, so the script exists; it must be safe to run twice and must not
+    move an entry the operator may have edited unless asked.
+    """
+    import importlib.util
+
+    root = Path(__file__).resolve().parents[1] / "scripts" / "bookmarks-seed-sync.py"
+    spec = importlib.util.spec_from_file_location("bookmarks_seed_sync", root)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    config = tmp_path / "config"
+    store = AdminStore(config)
+    # Write the file with one seed removed and one seed's address left stale.
+    kept = [
+        dict(entry, added_at="", added_by="")
+        for entry in AdminStore.SEEDED_BOOKMARKS
+        if entry["id"] != "bm_doc_rrc"
+    ]
+    for entry in kept:
+        if entry["id"] == "bm_infra_storage":
+            entry["url"] = "https://lightdash.tailadd0bc.ts.net/"
+    store._write_bookmarks(kept)
+
+    assert module.main(["--config-root", str(config)]) == 0
+    after = {entry["id"]: entry for entry in AdminStore(config).load_bookmarks()}
+    # The missing one is added; the moved one is left where it was.
+    assert any(entry["url"] == "https://rrc.rlwrld.co/" for entry in after.values())
+    assert after["bm_infra_storage"]["url"] == "https://lightdash.tailadd0bc.ts.net/"
+
+    # Twice adds nothing.
+    before = len(after)
+    assert module.main(["--config-root", str(config)]) == 0
+    assert len(AdminStore(config).load_bookmarks()) == before
+
+    # --refresh is what moves it.
+    assert module.main(["--config-root", str(config), "--refresh"]) == 0
+    moved = {entry["id"]: entry for entry in AdminStore(config).load_bookmarks()}
+    assert moved["bm_infra_storage"]["url"] == "https://lightdash.rlwrld.co/"
+    assert len(moved) == before
