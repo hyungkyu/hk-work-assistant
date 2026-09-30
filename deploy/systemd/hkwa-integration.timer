@@ -1,9 +1,13 @@
 [Unit]
-Description=Half-hourly integration test of origin/main
+Description=Ten-minute integration test of origin/main
 
 [Timer]
 OnBootSec=12min
-OnUnitInactiveSec=30min
+# Ten minutes, not thirty. Production now waits for this verdict before it
+# deploys anything, so the interval is the worst case between a green commit
+# and it reaching the running system. A 45-second test run is cheap; half an
+# hour of a fix sitting verified-but-undeployed is not.
+OnUnitInactiveSec=10min
 Persistent=true
 AccuracySec=60s
 Unit=hkwa-integration.service

@@ -180,38 +180,40 @@ def test_every_rule_that_cost_a_day_is_written_down_not_remembered():
         assert rule in doc, f"the rule about {rule!r} is only in somebody's memory"
 
 
-def test_the_session_protocol_states_the_rules_a_session_needs():
-    """One file four sessions can read, since none of them can read each other.
+def test_the_work_protocol_states_the_whole_chain():
+    """One document four sessions can read, since none of them can read each other.
 
-    2026-09-30: two sessions edited cli.py the same day without either being
-    able to see the other, and the collision went unnoticed for 26 minutes.
-    Measuring the patches afterwards showed the shape of it -- every patch
-    that went through the carrier landed without a collision, and the one
-    piece of work that bypassed it caused the stall.
+    HK, 2026-09-30: 업무목록 -> 깃헙 -> 데브 -> 프로덕션 으로 이어지는게
+    되고, 그 매뉴얼/프로토콜을 문서로 정리하고.
 
-    So the protocol is short and its rules are load-bearing. This test names
-    them, because the failure mode for a document like this is quiet erosion
-    during an unrelated edit.
+    Each link in that chain has one file that says its state, and the reason
+    this document exists is that on 2026-09-30 two sessions edited one file
+    without either being able to see the other -- for 26 minutes. Every rule
+    in it came from something that already happened, which is also why the
+    failure mode here is quiet erosion during an unrelated edit. This names
+    what has to survive.
     """
     doc = (
-        Path(__file__).resolve().parents[1] / "docs" / "session-protocol.md"
+        Path(__file__).resolve().parents[1] / "docs" / "work-protocol.md"
     ).read_text(encoding="utf-8")
     for rule in (
-        # Branch per session: the one rule that alone prevents the incident.
-        "main 을 체크아웃하고 작업하지 않는다",
-        # One road onto main, so everything is serialized and tested.
-        "git format-patch -1 -o incoming/",
-        # Whichever road onto main a session takes, the suite runs first.
-        "푸시 전에 이 기계에서 전체 테스트가 초록이어야 한다",
-        # Announce at the start, which three P0 items already asked for.
-        "착수할 때 보드에 올린다",
-        # Fetch before you start: the other half of the 2026-09-30 incident.
-        "git fetch origin",
-        # And the tier that re-checks whatever actually landed.
-        "incoming/last-integration.json",
-        "Refs wi_",
-        # Read the receipt before theorising about a fix that "did not work".
+        # The chain, and the file that speaks for each link.
+        "업무목록",
+        "통합데브",
         "incoming/last-run.json",
+        "incoming/last-integration.json",
+        "incoming/last-deploy.json",
+        # Announce at the start, which three P0 items had already asked for.
+        "Refs wi_",
+        # Fetch first: my own half of the 2026-09-30 collision.
+        "git fetch origin",
+        # Branch from origin/main, not local main: the carrier rewrites shas,
+        # so a cloud session's local main is permanently divergent.
+        "git switch -c <세션이름>/<작업> origin/main",
+        # Branch per session: the one rule that alone prevents it.
+        "main 을 체크아웃하고 작업하지 않는다",
+        # The two-line difference that decides whether 70 tests run.
+        "WORKLOG_TEST_DATABASE_URL",
         # And the rule that protects the other sessions' unfinished work.
         "내가 하지 않은 작업을 덮지 않는다",
     ):
@@ -223,4 +225,4 @@ def test_the_onboarding_points_at_the_protocol():
     doc = (
         Path(__file__).resolve().parents[1] / "docs" / "agent-onboarding.md"
     ).read_text(encoding="utf-8")
-    assert "docs/session-protocol.md" in doc
+    assert "docs/work-protocol.md" in doc

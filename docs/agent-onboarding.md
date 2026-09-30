@@ -177,7 +177,7 @@ before this section existed — which is itself the argument for the section.
 
 | You need | Read |
 | --- | --- |
-| Work alongside the other sessions | `docs/session-protocol.md` |
+| Work alongside the other sessions | `docs/work-protocol.md` |
 | Run the tests, first commit | `CONTRIBUTING.md` |
 | What the system is | `docs/architecture.md` |
 | The board's fields and routes | `docs/work-board-reference.md` |

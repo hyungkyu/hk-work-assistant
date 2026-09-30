@@ -156,8 +156,14 @@ def test_the_unit_reads_the_url_from_outside_the_repository() -> None:
     )
     assert "postgresql://" not in unit
 
+    # The interval is asserted in test_deploy_gate.py instead, where the
+    # reason for its value lives: production waits on this verdict, so the
+    # interval is the delay between a fix being green and it running.
     timer = (ROOT / "deploy" / "systemd" / "hkwa-integration.timer").read_text()
-    assert "OnUnitInactiveSec=30min" in timer
+    # The interval is asserted in test_deploy_gate.py instead, where the
+    # reason for its value lives: production waits on this verdict, so
+    # the interval is the delay between a fix being green and it running.
+    assert "OnUnitInactiveSec=" in timer
 
 
 def test_it_refuses_to_test_one_checkout_with_another_s_interpreter(stage) -> None:

@@ -65,6 +65,37 @@ if [ -n "$(git rev-list HEAD..origin/main --count 2>/dev/null | grep -v '^0$')" 
   head_sha=$(git rev-parse --short HEAD)
 fi
 
+# The verdict, before the build.
+#
+# HK, 2026-09-30: 업무목록 -> 깃헙 -> 데브 -> 프로덕션. Until now the last
+# arrow had no condition on it: this batch would build whatever was on main,
+# and the integration run that says whether main works was a report nobody
+# was obliged to read. A gate that only reports is a gate that is open.
+#
+# So production deploys a commit that 통합데브 called green, and nothing
+# else. A commit with no verdict yet is not an error -- integration runs on
+# its own timer and will reach it -- so this waits rather than failing, and
+# says which commit it is waiting on.
+verdict="incoming/last-integration.json"
+if [ -f "$verdict" ]; then
+  verdict_head=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("head",""))' "$verdict" 2>/dev/null)
+  verdict_outcome=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("outcome",""))' "$verdict" 2>/dev/null)
+else
+  verdict_head=""
+  verdict_outcome="missing"
+fi
+
+if [ "$verdict_head" != "$head_sha" ]; then
+  outcome="awaiting-verification"
+  detail="통합데브 has not tested $head_sha yet (last verdict: ${verdict_outcome:-none} on ${verdict_head:-nothing})"
+  finish
+fi
+if [ "$verdict_outcome" != "green" ]; then
+  outcome="blocked"
+  detail="통합데브 says $head_sha is $verdict_outcome; not deploying it"
+  finish
+fi
+
 # What is actually running, hashed from the import path the app uses -- not
 # from /app/src, which is a copy that never executes. Conflating the two on
 # 2026-09-04 produced three false "deployed" reports in a row.
