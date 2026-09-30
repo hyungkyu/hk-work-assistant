@@ -8,11 +8,14 @@ hand on the mapping screen, and each correction raises an `*_override` flag.
 A refresh writes what comes from the source -- the Korean text, the team, the
 link -- and leaves every flagged column alone.
 
-**It must know what stayed the same.** Rows are matched by key first and by
-content hash second. The second pass is what makes the first refresh after the
-initial import a quiet one: those rows were keyed by ordinal and are about to
-be keyed by Notion block, and without hash matching every one of them would
-read as a deletion followed by an addition.
+**It must know what stayed the same.** Rows are matched on the same words
+first, then on similar words within the same team. A key alone is not trusted:
+it is a position in a cell, so one line inserted at the top shifts every key
+below it, and trusting the key would write each line's text onto its
+neighbour's row, overrides and all. The similar-words pass is also what makes
+the first refresh after the initial import a quiet one -- the seed was edited
+by hand ("셋업 (브링업)" became "셋업(브링업)"), so no hash of the page will
+ever equal it.
 
 **It must not let a translation lie.** The page is Korean. When a row's Korean
 changes, the English and Japanese beside it are stale, and a screen with a
@@ -22,6 +25,7 @@ language toggle has no way to say so unless something records it. That is what
 
 from __future__ import annotations
 
+import difflib
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -46,7 +50,9 @@ TEAM_BY_LABEL = {
 COLUMN_HORIZON = ("now", "next", "long")
 
 BULLET = re.compile(r"^[\s ]*([•◦▪·・-])\s*")
-TOP_LEVEL = "•"
+# How deep a marker sits when two lines share an indent. Notion exports nest
+# by indent, but a `◦` written flush left is still a sub-bullet.
+MARKER_DEPTH = {"◦": 1, "▪": 2}
 
 
 @dataclass
@@ -67,37 +73,85 @@ def _plain(rich_text: Iterable[Mapping[str, Any]]) -> str:
     return "".join(str(run.get("plain_text") or "") for run in rich_text)
 
 
-def split_cell(text: str) -> list[list[str]]:
-    """One cell into top-level bullets, each with its sub-bullets.
+@dataclass
+class _Node:
+    text: str
+    children: list["_Node"] = field(default_factory=list)
 
-    The page nests one level: `• thing` with `◦ detail` under it. A detail is
-    not its own roadmap entry -- it qualifies the entry above it -- so it is
-    folded into that entry rather than counted as one more.
+
+def _outline(text: str) -> list[tuple[int, str]]:
+    """A cell's lines as (depth, text). Depth 0 is a bare line, a heading.
+
+    Bullet depth is the rank of the line's indent among the cell's bullets,
+    not the raw count of spaces: the page indents `•` by two and `◦` by six,
+    while a hand-typed cell uses nought and four, and both mean the same tree.
     """
-    groups: list[list[str]] = []
+    lines: list[tuple[tuple[int, int] | None, str]] = []
     for raw in text.replace("\r", "").split("\n"):
-        line = raw.strip()
-        if not line:
+        if not raw.strip():
             continue
         marker = BULLET.match(raw)
-        body = BULLET.sub("", raw).strip() if marker else line
+        if not marker:
+            lines.append((None, raw.strip()))
+            continue
+        body = BULLET.sub("", raw).strip()
         if not body:
             continue
-        indented = len(raw) - len(raw.lstrip("  \t")) > 0
-        is_child = bool(marker) and (marker.group(1) != TOP_LEVEL or indented)
-        if groups and is_child:
-            groups[-1].append(body)
+        indent = len(raw) - len(raw.lstrip("  \t"))
+        lines.append(((indent, MARKER_DEPTH.get(marker.group(1), 0)), body))
+    shapes = sorted({shape for shape, _ in lines if shape is not None})
+    rank = {shape: depth for depth, shape in enumerate(shapes, start=1)}
+    return [(0 if shape is None else rank[shape], body) for shape, body in lines]
+
+
+def cell_entries(text: str) -> list[str]:
+    """One cell into roadmap entries, the unit the seed was written in.
+
+    A bullet with no children is an entry. A bullet with children is a label
+    for them -- `• Desktop` over four things Desktop will do -- so each child
+    becomes an entry carrying the label in front: `Desktop — 데이터셋 조회`.
+    A third level is too fine to stand alone and folds into its parent.
+
+    A bare line is a heading for the bullets under it ("고객에게 제공 가능한
+    버전 준비"). It is joined to the first entry beneath it, which is how the
+    seed reads it, rather than standing alone with nothing to do. A heading
+    with no bullets under it is an entry by itself.
+    """
+    roots: list[tuple[str | None, _Node]] = []
+    stack: list[tuple[int, _Node]] = []
+    heading: str | None = None
+
+    for depth, body in _outline(text):
+        if depth == 0:
+            if heading is not None:
+                roots.append((None, _Node(heading)))
+            heading = body
+            stack.clear()
+            continue
+        node = _Node(body)
+        while stack and stack[-1][0] >= depth:
+            stack.pop()
+        if stack:
+            stack[-1][1].children.append(node)
         else:
-            groups.append([body])
-    return groups
+            roots.append((heading, node))
+            heading = None
+        stack.append((depth, node))
+    if heading is not None:
+        roots.append((None, _Node(heading)))
 
+    def folded(node: _Node) -> str:
+        if not node.children:
+            return node.text
+        return f"{node.text} — " + ", ".join(folded(child) for child in node.children)
 
-def fold(group: Sequence[str]) -> str:
-    """A bullet and its sub-bullets as one line, the way the seed reads."""
-    head, *rest = group
-    if not rest:
-        return head
-    return f"{head} — " + ", ".join(rest)
+    entries: list[str] = []
+    for head, node in roots:
+        lines = [f"{node.text} — {folded(child)}" for child in node.children] or [node.text]
+        if head is not None:
+            lines[0] = f"{head} — {lines[0]}"
+        entries.extend(lines)
+    return entries
 
 
 def parse_table(rows: Sequence[Mapping[str, Any]]) -> list[ParsedItem]:
@@ -120,10 +174,7 @@ def parse_table(rows: Sequence[Mapping[str, Any]]) -> list[ParsedItem]:
         for index, column in enumerate(COLUMN_HORIZON, start=1):
             if index >= len(cells):
                 continue
-            for position, group in enumerate(split_cell(_plain(cells[index]))):
-                text = fold(group)
-                if not text:
-                    continue
+            for position, text in enumerate(cell_entries(_plain(cells[index]))):
                 items.append(
                     ParsedItem(
                         key=f"{block_id}:{column}:{position}",
@@ -162,17 +213,23 @@ class Change:
 
 @dataclass
 class Diff:
+    """What a refresh will do. `changed` and `carried` pair an existing row's
+    key with the page item that row now is; the item's key may differ."""
+
     added: list[ParsedItem] = field(default_factory=list)
     changed: list[tuple[str, ParsedItem]] = field(default_factory=list)
     removed: list[Mapping[str, Any]] = field(default_factory=list)
     carried: list[tuple[str, ParsedItem]] = field(default_factory=list)
+    # The Korean a changed row had before, by its old key, for the history.
+    before: dict[str, str] = field(default_factory=dict)
 
     def as_changes(self) -> list[Change]:
         out = [
             Change("added", item.key, item.team, after=item.text_ko) for item in self.added
         ]
         out += [
-            Change("changed", key, item.team, after=item.text_ko) for key, item in self.changed
+            Change("changed", item.key, item.team, before=self.before.get(key, ""), after=item.text_ko)
+            for key, item in self.changed
         ]
         out += [
             Change("removed", str(row["item_key"]), str(row["team_id"]), before=str(row["text_ko"]))
@@ -181,37 +238,121 @@ class Diff:
         return out
 
 
-def diff_items(incoming: Sequence[ParsedItem], existing: Sequence[Mapping[str, Any]]) -> Diff:
-    """What changed, matching on key first and on content second.
+# How alike two lines must be to be one row reworded rather than one row
+# replaced by another. Measured on 2026-10-01 against the live page and the
+# hand-edited seed: reworded rows scored 0.68 and up, while Infra -- which had
+# rewritten its roadmap outright -- never scored above 0.38 against its old
+# rows. The line sits in that gap, nearer the reworded side.
+SIMILAR = 0.65
+# Tie-breakers, not reasons: between two equally similar rows, prefer the one
+# already in this position, then the one already in this column.
+SAME_KEY_BONUS = 0.05
+SAME_HORIZON_BONUS = 0.05
+# Below this many letters, "the short line appears inside the long one" says
+# nothing: a two-word label appears inside half the rows of its team.
+MIN_CONTAINED = 8
 
-    The content pass is not a nicety. The rows seeded by the first import are
-    keyed by ordinal and every refresh keys them by Notion block, so without it
-    the first refresh would report ninety-five deletions and ninety-five
-    additions and lose every override with them.
+_NOISE = re.compile(r"[\W_]+")
+LABEL = " — "
+
+
+def _forms(text: str) -> set[str]:
+    """The line, and the line without the label a parent bullet put in front."""
+    forms = {text}
+    if LABEL in text:
+        forms.add(text.split(LABEL, 1)[1])
+    return {_NOISE.sub("", form).casefold() for form in forms} - {""}
+
+
+def _alike(a: str, b: str) -> float:
+    ratio = difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
+    short, long_ = sorted((a, b), key=len)
+    if len(short) < MIN_CONTAINED:
+        return ratio
+    run = difflib.SequenceMatcher(None, short, long_, autojunk=False).find_longest_match(
+        0, len(short), 0, len(long_)
+    )
+    return max(ratio, 0.9 * run.size / len(short))
+
+
+def similarity(a: str, b: str) -> float:
+    """How much of one line is the other, ignoring spacing and punctuation.
+
+    The larger of the plain ratio and the share of the shorter line found in
+    the longer one, taken over each line with and without its leading label:
+    `RRC 신규 기능 추가 — Leader 및 operator feedback 확장` is still the seed's
+    `Leader 및 operator feedback 확장 (HMD gamepad, ...)`.
+    """
+    return max((_alike(x, y) for x in _forms(a) for y in _forms(b)), default=0.0)
+
+
+def diff_items(incoming: Sequence[ParsedItem], existing: Sequence[Mapping[str, Any]]) -> Diff:
+    """What changed: same words first, then similar words in the same team.
+
+    1. Same key, same words: nothing happened.
+    2. Same words anywhere: the row moved (`carried`). The first refresh after
+       an import re-keys every row this way.
+    3. Similar words, same team: the row was reworded (`changed`), and it keeps
+       its overrides and its translation, now marked behind.
+    4. Whatever is left was added or removed.
+
+    A shared key with different words is deliberately not step 1. The key is a
+    position in a cell; a line inserted above shifts it.
     """
     diff = Diff()
-    by_key = {str(row["item_key"]): row for row in existing}
-    unmatched = dict(by_key)
+    unmatched = {str(row["item_key"]): row for row in existing}
 
-    by_hash: dict[str, list[Mapping[str, Any]]] = {}
-    for row in existing:
-        by_hash.setdefault(str(row["hash"]), []).append(row)
-
+    pending: list[ParsedItem] = []
     for item in incoming:
-        row = unmatched.pop(item.key, None)
-        if row is not None:
-            if str(row["hash"]) != item.hash:
-                diff.changed.append((item.key, item))
-            continue
-        # Same words, different key: the row moved rather than being replaced.
-        candidates = [r for r in by_hash.get(item.hash, []) if str(r["item_key"]) in unmatched]
-        if candidates:
-            carried = candidates[0]
-            unmatched.pop(str(carried["item_key"]), None)
-            diff.carried.append((str(carried["item_key"]), item))
-            continue
-        diff.added.append(item)
+        row = unmatched.get(item.key)
+        if row is not None and str(row["hash"]) == item.hash:
+            del unmatched[item.key]
+        else:
+            pending.append(item)
 
+    rest: list[ParsedItem] = []
+    for item in pending:
+        same_words = [key for key, row in unmatched.items() if str(row["hash"]) == item.hash]
+        if same_words:
+            # A same-team row first; the page moving a line between teams is
+            # rarer than two teams writing the same line. Then the same column.
+            same_words.sort(key=lambda key: (
+                str(unmatched[key]["team_id"]) != item.team,
+                unmatched[key].get("horizon") != horizon_for(item),
+            ))
+            key = same_words[0]
+            del unmatched[key]
+            diff.carried.append((key, item))
+        else:
+            rest.append(item)
+
+    def ranked(item: ParsedItem, key: str, row: Mapping[str, Any]) -> tuple[float, float]:
+        alike = similarity(item.text_ko, str(row["text_ko"]))
+        bonus = (SAME_KEY_BONUS if key == item.key else 0.0) + (
+            SAME_HORIZON_BONUS if row.get("horizon") == horizon_for(item) else 0.0
+        )
+        return alike + bonus, alike
+
+    scored = sorted(
+        (
+            (*ranked(item, key, row), n, key)
+            for n, item in enumerate(rest)
+            for key, row in unmatched.items()
+            if str(row["team_id"]) == item.team
+        ),
+        reverse=True,
+    )
+    paired: set[int] = set()
+    for _total, alike, n, key in scored:
+        # The bonuses order the candidates; only the words decide whether a
+        # pair is close enough to be one row.
+        if alike < SIMILAR or n in paired or key not in unmatched:
+            continue
+        paired.add(n)
+        diff.before[key] = str(unmatched.pop(key)["text_ko"])
+        diff.changed.append((key, rest[n]))
+
+    diff.added = [item for n, item in enumerate(rest) if n not in paired]
     diff.removed = list(unmatched.values())
     return diff
 
@@ -272,12 +413,21 @@ def apply_refresh(
             )
             snapshot_id = cursor.fetchone()[0]
 
-            for key, item in diff.changed:
-                _update_row(cursor, key, item, snapshot_id)
-            for old_key, item in diff.carried:
-                # The key moves to the Notion block id; nothing else does, and
-                # the overrides ride along because the row itself is the same.
-                _update_row(cursor, old_key, item, snapshot_id, new_key=item.key)
+            # Removed rows go first and every moving row steps aside to a key
+            # nobody uses: keys are unique, and a line inserted at the top of a
+            # cell hands each row below it the key its neighbour still holds.
+            for row in diff.removed:
+                cursor.execute("DELETE FROM roadmap_item WHERE item_key = %s", (row["item_key"],))
+            moving = diff.changed + diff.carried
+            for old_key, _item in moving:
+                cursor.execute(
+                    "UPDATE roadmap_item SET item_key = %s WHERE item_key = %s",
+                    (f"moving:{old_key}", old_key),
+                )
+            for old_key, item in moving:
+                # The overrides ride along because the row itself is the same;
+                # only what the source owns is written.
+                _update_row(cursor, f"moving:{old_key}", item, snapshot_id, new_key=item.key)
             if diff.added:
                 product_id = _fallback_product(cursor)
                 for item in diff.added:
@@ -294,8 +444,6 @@ def apply_refresh(
                             item.hash, snapshot_id,
                         ),
                     )
-            for row in diff.removed:
-                cursor.execute("DELETE FROM roadmap_item WHERE item_key = %s", (row["item_key"],))
 
             for change in diff.as_changes():
                 cursor.execute(
@@ -355,11 +503,19 @@ def fetch_table_rows(client: Any, page_id: str) -> list[dict[str, Any]]:
     팀별 로드맵 and keeps current. The per-team write-ups below it are the
     history of how it got that way, and reading both would double every row.
     """
-    for block in client.iter_block_children(page_id):
+    for block in _children(client, page_id):
         if block.get("type") != "table":
             continue
-        return [
-            child for child in client.iter_block_children(block["id"])
-            if child.get("type") == "table_row"
-        ]
+        return [child for child in _children(client, block["id"]) if child.get("type") == "table_row"]
     return []
+
+
+def _children(client: Any, block_id: str) -> Iterable[dict[str, Any]]:
+    """The blocks under one block, across every page of the listing.
+
+    `iter_block_children` yields Notion's list responses, not blocks; reading
+    each response as a block found no table and made every refresh report an
+    empty page (2026-09-30).
+    """
+    for page in client.iter_block_children(block_id):
+        yield from page.get("results") or []

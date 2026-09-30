@@ -187,8 +187,10 @@ def test_no_database_says_so_rather_than_answering_empty(
 
 # --- against a real database ---------------------------------------------
 
-DATABASE_URL = os.environ.get("ROADMAP_TEST_DATABASE_URL")
-needs_db = pytest.mark.skipif(not DATABASE_URL, reason="ROADMAP_TEST_DATABASE_URL is not set")
+# The integration run sets only WORKLOG_TEST_DATABASE_URL; reading only our own
+# name meant these tests were skipped everywhere, the integration run included.
+DATABASE_URL = os.environ.get("ROADMAP_TEST_DATABASE_URL") or os.environ.get("WORKLOG_TEST_DATABASE_URL")
+needs_db = pytest.mark.skipif(not DATABASE_URL, reason="ROADMAP_TEST_DATABASE_URL / WORKLOG_TEST_DATABASE_URL is not set")
 
 
 @needs_db
