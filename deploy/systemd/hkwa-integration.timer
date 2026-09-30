@@ -1,0 +1,12 @@
+[Unit]
+Description=Half-hourly integration test of origin/main
+
+[Timer]
+OnBootSec=12min
+OnUnitInactiveSec=30min
+Persistent=true
+AccuracySec=60s
+Unit=hkwa-integration.service
+
+[Install]
+WantedBy=timers.target

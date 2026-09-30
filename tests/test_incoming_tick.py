@@ -178,3 +178,49 @@ def test_every_rule_that_cost_a_day_is_written_down_not_remembered():
         "count it",
     ):
         assert rule in doc, f"the rule about {rule!r} is only in somebody's memory"
+
+
+def test_the_session_protocol_states_the_rules_a_session_needs():
+    """One file four sessions can read, since none of them can read each other.
+
+    2026-09-30: two sessions edited cli.py the same day without either being
+    able to see the other, and the collision went unnoticed for 26 minutes.
+    Measuring the patches afterwards showed the shape of it -- every patch
+    that went through the carrier landed without a collision, and the one
+    piece of work that bypassed it caused the stall.
+
+    So the protocol is short and its rules are load-bearing. This test names
+    them, because the failure mode for a document like this is quiet erosion
+    during an unrelated edit.
+    """
+    doc = (
+        Path(__file__).resolve().parents[1] / "docs" / "session-protocol.md"
+    ).read_text(encoding="utf-8")
+    for rule in (
+        # Branch per session: the one rule that alone prevents the incident.
+        "main 을 체크아웃하고 작업하지 않는다",
+        # One road onto main, so everything is serialized and tested.
+        "git format-patch -1 -o incoming/",
+        # Whichever road onto main a session takes, the suite runs first.
+        "푸시 전에 이 기계에서 전체 테스트가 초록이어야 한다",
+        # Announce at the start, which three P0 items already asked for.
+        "착수할 때 보드에 올린다",
+        # Fetch before you start: the other half of the 2026-09-30 incident.
+        "git fetch origin",
+        # And the tier that re-checks whatever actually landed.
+        "incoming/last-integration.json",
+        "Refs wi_",
+        # Read the receipt before theorising about a fix that "did not work".
+        "incoming/last-run.json",
+        # And the rule that protects the other sessions' unfinished work.
+        "내가 하지 않은 작업을 덮지 않는다",
+    ):
+        assert rule in doc, f"the protocol no longer states: {rule!r}"
+
+
+def test_the_onboarding_points_at_the_protocol():
+    """A document nobody is sent to is a document nobody reads."""
+    doc = (
+        Path(__file__).resolve().parents[1] / "docs" / "agent-onboarding.md"
+    ).read_text(encoding="utf-8")
+    assert "docs/session-protocol.md" in doc

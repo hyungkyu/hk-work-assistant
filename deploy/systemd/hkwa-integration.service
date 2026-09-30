@@ -1,0 +1,18 @@
+[Unit]
+Description=Pull what GitHub holds, test it here, and say whether it is green
+# Same reasoning as the other units on this machine: a watcher that its own
+# failures can permanently disable is not a watcher.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Documents/ChatGPT/RLWRLD workspace
+# `WORKLOG_INTEGRATION_DATABASE_URL` lives here, beside the collection's own
+# URL, because it holds a password and must not be in the repository. Without
+# it the tick refuses rather than running a suite that would skip every
+# database-backed test and still report green.
+EnvironmentFile=-%h/.config/hk-work-assistant/collect.env
+ExecStart=/bin/bash "%h/Documents/ChatGPT/RLWRLD workspace/scripts/integration-tick.sh"
+# Above a full suite run with the database tests switched on, which is the
+# whole point of this tier and is slower than the carrier's own run.
+TimeoutStartSec=1800
