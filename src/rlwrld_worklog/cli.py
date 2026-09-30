@@ -6,7 +6,7 @@ import os
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import IO, Sequence
+from typing import IO, Any, Sequence
 
 from .models import Source, TimelineEvent
 
@@ -1626,15 +1626,93 @@ def reconcile_command(args: argparse.Namespace) -> int:
             calendar_ids=calendar_ids,
         )
         print(f"코드: {running_code()}")
-        print(f"== {found['day']} 캘린더: 원장 {len(found['ledger'])}건, 원본 "
-              + (f"{len(found['source'])}건" if found["source_measured"] else "미조회"))
+        # One line per meeting, not per observation.
+        #
+        # 2026-09-29, on 09-23: 192 rows for 16 meetings, one of them
+        # repeated 49 times. The ledger keeps every collection of a meeting
+        # by design, so a listing that prints rows is printing how often we
+        # looked rather than what was there -- and the question this command
+        # exists for is which meetings the two sides disagree about. Both
+        # numbers are in the header so nothing is hidden, and the per-meeting
+        # observation count is on the line, because "seen 49 times" is itself
+        # worth noticing.
+        grouped: dict[str, dict[str, Any]] = {}
         for row in found["ledger"]:
-            mark = "취소됨" if row.get("status") == "cancelled" else (
-                "원장에만" if row["key"] in found["ledger_only"] else "양쪽"
+            entry = grouped.setdefault(
+                row["key"],
+                {
+                    "row": row,
+                    "observations": 0,
+                    "profiles": set(),
+                    "starts": set(),
+                    "latest": row.get("collected_at"),
+                    "latest_status": str(row.get("status") or ""),
+                    "live": False,
+                    "live_row": None,
+                },
             )
+            entry["observations"] += 1
+            entry["profiles"].add(str(row["capture_profile"]).split("/")[0])
+            if row["starts"]:
+                entry["starts"].add(str(row["starts"]))
+            # Label the meeting the way the count labels it.
+            #
+            # Two wrong versions of this in two days, both the same mistake:
+            # a rule invented for the listing instead of the rule of the thing
+            # it explains. First "any cancellation wins", which marked four
+            # attended meetings 취소됨. Then "the newest observation wins",
+            # which still disagreed with the digest on the same four --
+            # because the digest keeps a meeting when ANY observation is not
+            # cancelled (digest.py: `coalesce(status,'') <> 'cancelled'`), and
+            # a recurring instance deleted weeks later has a newest
+            # observation that says cancelled and a day that still happened.
+            #
+            # So 취소됨 here means exactly what it means there: no observation
+            # of this meeting is anything but cancelled.
+            if str(row.get("status") or "") != "cancelled":
+                entry["live"] = True
+                if not entry.get("live_row"):
+                    entry["live_row"] = row
+                    entry["row"] = row
+            if entry["latest"] is None or (
+                row.get("collected_at") is not None
+                and entry["latest"] is not None
+                and row["collected_at"] >= entry["latest"]
+            ):
+                entry["latest"] = row.get("collected_at")
+                entry["latest_status"] = str(row.get("status") or "")
+                if not entry.get("live"):
+                    entry["row"] = row
+        print(
+            f"== {found['day']} 캘린더: 원장 {len(grouped)}건"
+            f"(관측 {len(found['ledger'])}행), 원본 "
+            + (f"{len(found['source'])}건" if found["source_measured"] else "미조회")
+        )
+        for entry in sorted(
+            grouped.values(), key=lambda item: str(item["row"]["starts"] or "")
+        ):
+            row = entry["row"]
+            mark = (
+                "원장에만" if row["key"] in found["ledger_only"] else "양쪽"
+            ) if entry.get("live") else "취소됨"
+            # A meeting that happened and was deleted from the calendar
+            # afterwards. The count keeps it, which is right, and saying so is
+            # how a reader knows the two are not disagreeing by accident.
+            late_cancel = (
+                " · 이후 취소됨"
+                if entry.get("live") and entry.get("latest_status") == "cancelled"
+                else ""
+            )
+            profiles = "+".join(
+                sorted(p.replace("live-google-calendar-", "") for p in entry["profiles"])
+            )
+            # The same meeting written under two UTC offsets is one meeting
+            # recorded twice, and saying so is cheaper than leaving a reader
+            # to notice that 21:00-07:00 and 13:00+09:00 are the same moment.
+            offsets = " · 오프셋 2종" if len(entry["starts"]) > 1 else ""
             print(
                 f"  [{mark}] {row['starts'] or '?':<26}{(row['summary'] or '제목 없음')[:34]:<36}"
-                f"{row['capture_profile']}"
+                f"{profiles}  관측 {entry['observations']}회{offsets}{late_cancel}"
                 + (f"  <- {row['recurring_of']}" if row["recurring_of"] else "")
             )
         for key in found["source_only"]:
@@ -1657,7 +1735,8 @@ def reconcile_command(args: argparse.Namespace) -> int:
             "explain",
             {
                 "day": found["day"],
-                "ledger": len(found["ledger"]),
+                "ledger": len(grouped),
+                "ledger_observations": len(found["ledger"]),
                 "source": len(found["source"]) if found["source_measured"] else None,
                 "ledger_only": len(found["ledger_only"]),
                 "source_only": len(found["source_only"]),
