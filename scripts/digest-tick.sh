@@ -124,6 +124,62 @@ SWEEPSTATE
 fi
 
 echo
+echo "=== conversation blocks, and their vectors"
+# Blocks are derived from the ledger, so last night's messages have no block
+# until something builds one, and a block has no vector until something
+# embeds it. Both were commands somebody typed.
+#
+# That failed exactly the way handing over a command always fails here: the
+# blocks were built on 2026-09-21 and the embedding was never run, so the
+# precedent search spent nine days on an index of single messages -- the one
+# measured to return "퇴근하고 운동중입니다" for a question about deployment.
+# Nobody was wrong; it was simply nobody's job. Now it is this batch's.
+#
+# `--limit` is generous rather than absent: bge-m3 on the local GPU did 2,000
+# blocks in 38 seconds, so a night's worth is seconds and a backlog clears in
+# one run. A cap still exists so an unexpected rebuild cannot turn the
+# nightly batch into an hour.
+blocks_person="${WORKLOG_BLOCKS_PERSON:-류형규}"
+embed_max="${WORKLOG_EMBED_MAX:-5000}"
+if [ -n "$blocks_person" ] && [ "$embed_max" != "0" ]; then
+  blocks_out=$("$worklog" blocks --person-name "$blocks_person" --apply 2>&1) || status=1
+  printf '%s\n' "$blocks_out" | tail -3
+  embed_out=$("$worklog" embed --person-name "$blocks_person" --blocks --apply \
+              --limit "$embed_max" 2>&1) || status=1
+  printf '%s\n' "$embed_out" | tail -3
+  mkdir -p incoming
+  BLOCKS="$blocks_out" EMBED="$embed_out" python3 - > incoming/last-blocks.json <<'BLOCKSTATE' || true
+import json, os, datetime
+
+
+def summary(output: str, prefix: str) -> dict:
+    for line in reversed(output.splitlines()):
+        if line.startswith(prefix):
+            try:
+                return json.loads(line.split("=", 1)[1])
+            except ValueError:
+                return {}
+    return {}
+
+
+found = {
+    "finished_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "blocks": summary(os.environ.get("BLOCKS", ""), "blocks="),
+    "embed": summary(os.environ.get("EMBED", ""), "embed="),
+}
+# The number worth reading tomorrow: blocks with no vector yet. Anything but
+# zero means the cap was hit or the model did not load, and a precedent
+# search over a half-embedded index answers confidently from whichever half
+# it has.
+remaining = found["embed"].get("candidates")
+embedded = found["embed"].get("embedded")
+if isinstance(remaining, int) and isinstance(embedded, int):
+    found["unembedded_after"] = max(0, remaining - embedded)
+print(json.dumps(found, ensure_ascii=False, indent=2))
+BLOCKSTATE
+fi
+
+echo
 echo "=== digest (yesterday, and any gap in the last week)"
 # `--catch-up` rather than yesterday alone: a night the machine was off, or a
 # run that died, would otherwise leave a hole that only a person typing a
