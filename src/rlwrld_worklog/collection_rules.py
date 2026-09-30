@@ -1581,9 +1581,74 @@ V10 = CollectionRule(
 )
 
 
+# --------------------------------------------------------------------- V11
+
+# The Platform Team Roadmap page was never captured. Its 2026-09-06 edit fell on
+# days no collection ran, every later window started after it, and a seed shares
+# the run's window, so no pass could ever reach it. Pinning takes one page out
+# of the window altogether.
+NOTION_V11 = replace(
+    V10.source_rule("notion"),
+    includes=V10.source_rule("notion").includes
+    + (
+        "Each seed page marked pinned, walked in full on every run whatever its "
+        "last_edited_time says, and emitted as an event when it is new to the checkpoint, "
+        "its timestamp moved, or its body hash changed under an unmoved timestamp",
+    ),
+    known_limitations=V10.source_rule("notion").known_limitations
+    + (
+        "notion.pinned_pages_are_walked_every_run: a pinned page costs a full walk per run and "
+        "is compared by a hash of its block types and plain text, not by last_edited_time. "
+        "The hash sees text; a change only to formatting, a file behind the same caption, or "
+        "anything outside plain_text is not a change to it.",
+    ),
+    evidence=V10.source_rule("notion").evidence
+    + (
+        "src/rlwrld_worklog/notion_collector.py (`content_hash`, `pinned_state`)",
+        "manifest field counters.pinned_pages; checkpoint field content_hashes",
+    ),
+)
+
+V11 = CollectionRule(
+    version="V11",
+    title="공식 API 원본 원장 + 핀 고정 페이지 본문 해시 비교 (pinned pages)",
+    # Pending until a page is pinned: before that the collector's behaviour is
+    # V10's exactly, because an empty pin list takes no path V10 did not.
+    status="pending",
+    effective=EffectivePeriod(
+        start=None,
+        end=None,
+        basis=(
+            "pending: the collector can pin seed pages; this version takes effect on the day "
+            "notion-seeds.json first pins one."
+        ),
+    ),
+    summary=(
+        "V10 with pinned Notion seed pages. A pinned page is walked every run and compared "
+        "by body hash, so an edit that fell on days no collection ran is captured the next "
+        "time one does, and a body change under an unmoved timestamp becomes a version of "
+        "its own. Slack, Google Calendar, GitHub and Slurm are unchanged from V10."
+    ),
+    manifest_schema_version=2,
+    ledger_schema_version="1.0",
+    source_schema_version=None,
+    capture_profiles=V10.capture_profiles,
+    storage_layout=V10.storage_layout,
+    unknowns=V10.unknowns,
+    sources=(
+        V10.source_rule("slack"),
+        NOTION_V11,
+        V10.source_rule("google_calendar"),
+        V10.source_rule("github"),
+        V10.source_rule("slurm"),
+    ),
+    supersedes="V10",
+)
+
+
 # --------------------------------------------------------------- registry
 
-RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3, V4, V5, V6, V7, V8, V9, V10)
+RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11)
 
 ACTIVE_RULE_VERSION = "V10"
 

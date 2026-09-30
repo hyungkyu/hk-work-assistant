@@ -75,6 +75,17 @@ report["outcome"] = "clean" if report.get("ok") else "gaps"
 print(json.dumps(report, ensure_ascii=False, sort_keys=True))
 STATE
 
+# A missed source-day becomes its own board item, filed once. The summary line
+# below only works when somebody named a target item, and the next clean night
+# overwrites it; a gap needs a place on the board that stays until someone has
+# decided about it. See collection_gap_alarm.py.
+python_bin="$(dirname "$worklog")/python"
+if [ -x "$python_bin" ]; then
+  printf '%s' "$report" | "$python_bin" -m rlwrld_worklog.collection_gap_alarm \
+    --state incoming/.collection-gaps-filed.json --outbox "$outbox" \
+    > incoming/last-collection-gap.json 2>&1
+fi
+
 summary=$(printf '%s' "$report" | python3 -c 'import json,sys; print(json.load(sys.stdin)["summary"])' 2>/dev/null)
 [ -z "$summary" ] && exit 0
 [ -f "$target_file" ] || exit 0

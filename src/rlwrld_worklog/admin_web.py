@@ -585,6 +585,7 @@ async def post_notion_seed(request: Request) -> dict[str, Any]:
             str(body.get("value", "")),
             label=str(body.get("label", "")),
             actor=session_actor(current),
+            pinned=body.get("pinned") is True,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error

@@ -518,6 +518,7 @@ class AdminStore:
                     "label": str(entry.get("label") or ""),
                     "added_at": str(entry.get("added_at") or ""),
                     "added_by": str(entry.get("added_by") or ""),
+                    "pinned": bool(entry.get("pinned")),
                 }
             )
         return seeds
@@ -531,8 +532,23 @@ class AdminStore:
             # run loses its insurance, not its day.
             return []
 
+    def notion_pinned_seed_ids(self) -> list[str]:
+        """The seeds that are captured every run, whatever the window says.
+
+        An ordinary seed is captured only when its own `last_edited_time` lands
+        in the run's window. That is exactly what lost the Platform Team Roadmap
+        page: its 2026-09-06 edit fell on days no collection ran, so no later
+        window ever contained it, and a seed would have missed it too. A pinned
+        seed is walked every run and compared by content hash instead, so a gap
+        in the schedule cannot hide it. Never raises on a malformed file.
+        """
+        try:
+            return [seed["page_id"] for seed in self.load_notion_seeds() if seed["pinned"]]
+        except (OSError, ValueError, RuntimeError):
+            return []
+
     def add_notion_seed(
-        self, value: str, *, label: str = "", actor: str = "owner"
+        self, value: str, *, label: str = "", actor: str = "owner", pinned: bool = False
     ) -> dict[str, Any]:
         """Add one seed from a Notion URL or a page id.
 
@@ -556,6 +572,7 @@ class AdminStore:
             "label": (label or "").strip()[:200],
             "added_at": _utc_now(),
             "added_by": actor,
+            "pinned": bool(pinned),
         }
         seeds.append(entry)
         self._write_notion_seeds(seeds)

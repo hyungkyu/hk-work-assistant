@@ -1331,3 +1331,111 @@ def test_an_unreachable_seed_is_recorded_and_survived(tmp_path: Path) -> None:
     _, _, result = collect(tmp_path, client, seed_pages=["no-such-page"])
     assert result.counters["seed_pages"]["failed"] == 1
     assert result.status != "failed"
+
+
+# ---------------------------------------------------------------- pinned pages
+#
+# The Platform Team Roadmap page was edited on a day no collection ran. Every
+# later window started after that edit, so neither /search nor an ordinary seed
+# could ever bring it in. A pinned page is walked every run and compared by body
+# hash, so a gap in the schedule cannot hide it.
+
+
+def _pinned_client(text: str, *, edited: str = "2020-01-01T00:00:00Z") -> FakeNotionClient:
+    return FakeNotionClient(
+        search_results=[],
+        pages={SEED_ID: page_body(SEED_ID, edited=edited)},
+        blocks={
+            SEED_ID: [
+                [
+                    {
+                        "id": "pinned-row",
+                        "type": "table_row",
+                        "has_children": False,
+                        "table_row": {"cells": [[{"plain_text": "LOOP"}], [{"plain_text": text}]]},
+                    }
+                ]
+            ]
+        },
+    )
+
+
+def test_a_pinned_page_last_edited_before_every_window_is_still_captured(
+    tmp_path: Path,
+) -> None:
+    _, _, result = collect(tmp_path, _pinned_client("v1"), pinned_pages=[SEED_ID])
+    stats = result.counters["pinned_pages"]
+    assert stats["configured"] == 1 and stats["first_seen"] == 1
+    assert result.pages_collected == 1
+    assert "v1" in result.events[0].payload["content_text"]
+
+
+def test_an_unchanged_pinned_page_is_walked_but_not_counted_as_edited(tmp_path: Path) -> None:
+    collect(tmp_path, _pinned_client("v1"), run_id="first", pinned_pages=[SEED_ID])
+    client = _pinned_client("v1")
+    _, _, result = collect(tmp_path, client, run_id="second", pinned_pages=[SEED_ID])
+    assert result.counters["pinned_pages"]["unchanged"] == 1
+    assert result.pages_collected == 0
+    assert ("blocks", SEED_ID) in client.calls, "a pinned page is read every run"
+
+
+def test_a_body_change_under_an_unmoved_timestamp_is_a_new_version(tmp_path: Path) -> None:
+    """The case last_edited_time cannot see, and the reason for the hash."""
+    _, _, first = collect(tmp_path, _pinned_client("v1"), run_id="first", pinned_pages=[SEED_ID])
+    _, _, second = collect(tmp_path, _pinned_client("v2"), run_id="second", pinned_pages=[SEED_ID])
+    assert second.counters["pinned_pages"]["changed_by_hash"] == 1
+    assert second.pages_collected == 1
+    assert second.events[0].event_id != first.events[0].event_id
+
+    _, _, third = collect(tmp_path, _pinned_client("v2"), run_id="third", pinned_pages=[SEED_ID])
+    assert third.counters["pinned_pages"]["unchanged"] == 1
+    assert third.pages_collected == 0
+
+
+def test_a_moved_timestamp_is_an_ordinary_new_version(tmp_path: Path) -> None:
+    collect(tmp_path, _pinned_client("v1"), run_id="first", pinned_pages=[SEED_ID])
+    _, _, result = collect(
+        tmp_path,
+        _pinned_client("v2", edited="2020-02-01T00:00:00Z"),
+        run_id="second",
+        pinned_pages=[SEED_ID],
+    )
+    assert result.counters["pinned_pages"]["changed_by_time"] == 1
+    assert result.pages_collected == 1
+
+
+def test_a_date_slice_leaves_pinned_pages_out(tmp_path: Path) -> None:
+    client = _pinned_client("v1")
+    _, _, result = collect(
+        tmp_path,
+        client,
+        pinned_pages=[SEED_ID],
+        until=datetime(2026, 8, 26, tzinfo=timezone.utc),
+    )
+    assert result.counters["pinned_pages"]["configured"] == 0
+    assert ("blocks", SEED_ID) not in client.calls
+
+
+def test_a_failing_pinned_page_does_not_hold_the_watermark(tmp_path: Path) -> None:
+    client = FakeNotionClient(page_errors={SEED_ID: exhausted()})
+    _, _, result = collect(tmp_path, client, pinned_pages=[SEED_ID])
+    assert result.counters["pinned_pages"]["failed"] == 1
+    assert result.counters["watermark_held"] is False
+    manifest = json.loads(result.manifest_path.read_text())
+    assert manifest["last_edited_watermark"] is not None
+
+
+def test_the_content_hash_ignores_what_changes_on_every_read() -> None:
+    from rlwrld_worklog.notion_collector import content_hash
+
+    def image(url: str) -> dict[str, Any]:
+        return {
+            "type": "image",
+            "last_edited_time": url,
+            "image": {"type": "file", "file": {"url": url, "expiry_time": url}, "caption": []},
+        }
+
+    assert content_hash([image("https://a")]) == content_hash([image("https://b")])
+    paragraph = {"type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "x"}]}}
+    changed = {"type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "y"}]}}
+    assert content_hash([paragraph]) != content_hash([changed])

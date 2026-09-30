@@ -38,6 +38,7 @@ body is ever downloaded.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -106,6 +107,17 @@ SEED_PAGES_NOTE = (
     "per run and collected only if its own last_edited_time falls in the window. A seed is "
     "insurance against /search missing a page that matters, not a standing instruction to "
     "re-capture it daily."
+)
+
+PINNED_PAGES_NOTE = (
+    "notion.pinned_pages_are_walked_every_run: each pinned seed page was captured in full on "
+    "this run whatever its last_edited_time said, and its body was compared by content hash "
+    "with the last run that saw it. A pinned page emits an event only when it is new to the "
+    "checkpoint, its last_edited_time moved, or its body hash changed under an unmoved "
+    "timestamp; an unchanged pinned page is archived but not counted as edited. Pinning "
+    "exists because a seed shares the run's window, and an edit that falls on days no run "
+    "covered is outside every later window: counters.pinned_pages says what each pinned page "
+    "turned out to be."
 )
 
 DATA_SOURCE_QUERY_NOTE = (
@@ -240,8 +252,55 @@ def _parse_time(value: Any) -> datetime | None:
 class _Candidate:
     object_id: str
     object_type: str  # page | data_source | database
-    source: str  # search | link_queue | recheck | data_source_row | seed
+    source: str  # search | link_queue | recheck | data_source_row | seed | pinned
     last_edited_time: str | None = None
+
+
+def content_hash(blocks: Sequence[dict[str, Any]]) -> str:
+    """A fingerprint of what a page says, independent of when Notion says it changed.
+
+    Built from each block's type and every `plain_text` run under it, in walk
+    order -- table cells included, since a table row keeps its text in nested
+    lists. Everything else is left out on purpose: file URLs expire and are
+    re-signed on every read, and edit metadata is exactly the thing this hash
+    exists not to trust.
+    """
+    digest = hashlib.sha256()
+    for block in blocks:
+        kind = str(block.get("type") or "")
+        digest.update(kind.encode("utf-8"))
+        digest.update(b"\x1f")
+        for text in _plain_texts(block.get(kind)):
+            digest.update(text.encode("utf-8"))
+            digest.update(b"\x1e")
+        digest.update(b"\x1d")
+    return digest.hexdigest()
+
+
+def _plain_texts(value: Any) -> Iterator[str]:
+    if isinstance(value, dict):
+        text = value.get("plain_text")
+        if isinstance(text, str):
+            yield text
+        for key in sorted(value):
+            if key != "plain_text":
+                yield from _plain_texts(value[key])
+    elif isinstance(value, list):
+        for item in value:
+            yield from _plain_texts(item)
+
+
+def pinned_state(
+    previous: dict[str, Any] | None, *, digest: str, last_edited_time: str | None
+) -> str:
+    """What one pinned page turned out to be, against the last run that saw it."""
+    if not previous or not previous.get("hash"):
+        return "first_seen"
+    if str(previous.get("last_edited_time") or "") != str(last_edited_time or ""):
+        return "changed_by_time"
+    if previous.get("hash") != digest:
+        return "changed_by_hash"
+    return "unchanged"
 
 
 class NotionCollector:
@@ -738,6 +797,7 @@ class NotionCollector:
         advance_checkpoint: bool = True,
         until: datetime | None = None,
         seed_pages: Sequence[str] = (),
+        pinned_pages: Sequence[str] = (),
     ) -> NotionCollectionResult:
         if comment_strategy not in COMMENT_STRATEGIES:
             # Refused before the first API call: a misspelled strategy that
@@ -832,6 +892,35 @@ class NotionCollector:
         seed_stats = self._check_seeds(
             candidates, seed_pages, since=effective_since, until=until
         )
+        # Pinned pages join whatever the window says. A date slice is the one
+        # exception: it is a historical window, and a live page does not belong
+        # in it.
+        pinned_ids: set[str] = set()
+        if not slice_only:
+            for pinned in pinned_pages:
+                pinned_id = str(pinned).strip()
+                if not pinned_id:
+                    continue
+                pinned_ids.add(pinned_id)
+                if pinned_id not in candidates:
+                    candidates[pinned_id] = _Candidate(
+                        object_id=pinned_id, object_type="page", source="pinned"
+                    )
+        pinned_stats: dict[str, Any] = {
+            "configured": len(pinned_ids),
+            "first_seen": 0,
+            "changed_by_time": 0,
+            "changed_by_hash": 0,
+            "unchanged": 0,
+            "failed": 0,
+        }
+        if pinned_ids:
+            archive.note_coverage(PINNED_PAGES_NOTE)
+        content_hashes: dict[str, dict[str, Any]] = {
+            str(key): dict(value)
+            for key, value in (checkpoint.get("content_hashes") or {}).items()
+            if isinstance(value, dict)
+        }
         # Every id the run knows about before the walk starts. The walk's
         # `child_object_refs_unlisted` counter is measured against this, so a
         # child page that search *did* list is not counted as a miss.
@@ -898,6 +987,7 @@ class NotionCollector:
             property_pages = 0
             event: TimelineEvent | None = None
             failure: NotionApiError | Exception | None = None
+            pinned_entry: dict[str, Any] | None = None
 
             try:
                 obj, resolved_type = self._retrieve(candidate)
@@ -923,7 +1013,34 @@ class NotionCollector:
                     phase = "properties"
                     property_pages = self._collect_paginated_properties(obj)
                     phase = "normalize"
-                    event = normalize_notion(obj, blocks=blocks, comments=comments)
+                    version_key = None
+                    if object_id in pinned_ids:
+                        digest = content_hash(blocks)
+                        edited_at = obj.get("last_edited_time")
+                        previous = content_hashes.get(object_id)
+                        state = pinned_state(previous, digest=digest, last_edited_time=edited_at)
+                        # Once a body change has been told apart from its
+                        # unmoved timestamp, the page keeps that version until
+                        # the timestamp moves -- otherwise tomorrow's unchanged
+                        # read would carry the old version's id.
+                        suffixed = state == "changed_by_hash" or (
+                            state == "unchanged" and bool((previous or {}).get("suffixed"))
+                        )
+                        if suffixed:
+                            version_key = f"{edited_at}#{digest[:12]}"
+                        pinned_entry = {
+                            "state": state,
+                            "hash": digest,
+                            "last_edited_time": edited_at,
+                            "suffixed": suffixed,
+                        }
+                    event = normalize_notion(
+                        obj, blocks=blocks, comments=comments, version_key=version_key
+                    )
+                    if pinned_entry is not None and pinned_entry["state"] == "unchanged":
+                        # Walked because it is pinned, not because anybody
+                        # touched it: archived, remembered, not counted.
+                        event = None
             except NotionApiError as error:
                 failure = error
             except (KeyError, TypeError, ValueError) as error:
@@ -933,6 +1050,8 @@ class NotionCollector:
                 failure = error
 
             if failure is not None:
+                if object_id in pinned_ids:
+                    pinned_stats["failed"] += 1
                 detail = _failure_detail(
                     candidate, phase=phase, resolved_type=resolved_type, error=failure
                 )
@@ -956,7 +1075,12 @@ class NotionCollector:
                 edited = _parse_time((obj or {}).get("last_edited_time")) or _parse_time(
                     candidate.last_edited_time
                 )
-                if edited:
+                if candidate.source == "pinned":
+                    # Only pinning brought it in, and pinning reads it again
+                    # next run whatever the watermark says, so its old edit
+                    # time must not hold the watermark for everything else.
+                    pass
+                elif edited:
                     failed_edits.append(edited)
                 elif detail["resolution"] == "unresolved":
                     hold_watermark = True
@@ -980,6 +1104,14 @@ class NotionCollector:
             if edited:
                 collected_edits.append(edited)
             known_objects[object_id] = {"type": resolved_type, "last_checked": now_iso}
+            if pinned_entry is not None:
+                pinned_stats[pinned_entry["state"]] += 1
+                content_hashes[object_id] = {
+                    "hash": pinned_entry["hash"],
+                    "last_edited_time": pinned_entry["last_edited_time"],
+                    "suffixed": pinned_entry["suffixed"],
+                    "checked_at": now_iso,
+                }
             for url in linked_by_id.get(object_id, []):
                 link_queue.mark(url, "fetched")
                 link_fetched += 1
@@ -1048,6 +1180,7 @@ class NotionCollector:
             "child_object_refs_unlisted": child_object_refs_unlisted,
             "data_source_query": data_source_stats,
             "seed_pages": seed_stats,
+            "pinned_pages": pinned_stats,
             "archived_observed": archived_observed,
             "users_seen": users_seen,
             "link_queue_fetched": link_fetched,
@@ -1090,6 +1223,10 @@ class NotionCollector:
                     "since_effective": effective_since.isoformat(),
                     "last_edited_watermark": new_watermark,
                     "known_objects": known_objects,
+                    # The last body hash of each pinned page. Kept for pages not
+                    # pinned today too: un-pinning and re-pinning must not make
+                    # an old page look new.
+                    "content_hashes": content_hashes,
                 }
             )
             checkpoint_advanced = True

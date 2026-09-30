@@ -247,6 +247,7 @@ def normalize_notion(
     comments: list[dict[str, Any]] | None = None,
     legacy_text: str | None = None,
     self_user_id: str = "",
+    version_key: str | None = None,
 ) -> TimelineEvent:
     created = page.get("created_time") or page.get("last_edited_time")
     if not created:
@@ -279,7 +280,10 @@ def normalize_notion(
             "comments": comments or [],
             "archived": bool(page.get("archived") or page.get("in_trash")),
         },
-        version_key=str(updated),
+        # `last_edited_time` is the version unless the caller knows better: a
+        # pinned page whose body changed under an unmoved timestamp needs a
+        # version of its own, or the ledger would take it for the old one.
+        version_key=version_key or str(updated),
     )
 
 

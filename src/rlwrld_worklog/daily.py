@@ -702,6 +702,10 @@ def capture_notion(config: DailyConfig, credentials: Credentials) -> CaptureOutc
             # construction and a seed list would make its cost depend on how
             # many pages someone happened to add.
             seed_pages=() if config.smoke else _notion_seed_pages(config),
+            # The seeds that are walked every run and compared by body hash,
+            # because a window cannot see an edit that fell on a day no run
+            # covered. Skipped by a smoke run for the same reason as seeds.
+            pinned_pages=() if config.smoke else _notion_seed_pages(config, pinned=True),
         )
     except Exception as error:
         raise CaptureFailed(archive, error) from error
@@ -733,7 +737,7 @@ def capture_notion(config: DailyConfig, credentials: Credentials) -> CaptureOutc
     )
 
 
-def _notion_seed_pages(config: DailyConfig) -> tuple[str, ...]:
+def _notion_seed_pages(config: DailyConfig, *, pinned: bool = False) -> tuple[str, ...]:
     """Seed page ids from the backoffice, or none if they cannot be read.
 
     A seed list is insurance. Failing a collection because the insurance could
@@ -746,7 +750,8 @@ def _notion_seed_pages(config: DailyConfig) -> tuple[str, ...]:
         root = config.config_root or Path(
             os.environ.get("APP_CONFIG_ROOT") or Path.home() / ".config/hk-work-assistant"
         )
-        return tuple(AdminStore(root).notion_seed_ids())
+        store = AdminStore(root)
+        return tuple(store.notion_pinned_seed_ids() if pinned else store.notion_seed_ids())
     except Exception:
         return ()
 

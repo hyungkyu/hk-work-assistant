@@ -595,6 +595,49 @@ one of two named sweep strategies, users, and the archived/in-trash flags.
      nothing else: failing a collection over unreadable insurance would trade a
      day for a list that may well be empty.
 
+  4. A seed marked **`"pinned": true`** is walked in full every run, whatever
+     its `last_edited_time` says, and compared with the last run by a hash of
+     its body (`content_hash`: block types and every `plain_text`, nothing that
+     changes on each read). The reason is the Platform Team Roadmap page: its
+     2026-09-06 edit fell on days no collection ran (09/04, 09/05, 09/07), so
+     every later window started after it, and neither search nor an ordinary
+     seed could ever bring it in. A pinned page emits an event only when it is
+     new to the checkpoint, its timestamp moved, or its body changed under an
+     unmoved timestamp -- that last case gets its own `version_key`
+     (`<last_edited_time>#<hash>`), or the ledger would take it for the old
+     version. An unchanged pinned page is archived but not counted as edited.
+     `counters.pinned_pages` says which of those each run saw, and the hashes
+     live in the Notion checkpoint under `content_hashes`. A date slice leaves
+     pinned pages out. A pinned page that fails does not hold the watermark:
+     pinning reads it again next run anyway.
+
+     There is no backoffice switch for it yet; pin by hand in
+     `notion-seeds.json` (`{"page_id": "…", "label": "…", "pinned": true}`) or
+     send `"pinned": true` to `POST /api/v1/admin/notion-seeds`.
+
+* **A missed day becomes a board item.** `scripts/collection-audit-tick.sh`
+  already measured missing source-days every night, but it could only write its
+  summary onto an item named in `collection-audit-target`, as a `next_action`
+  the next clean night overwrote -- and nobody had named one. Now each new
+  missing source-day is also filed, once, as its own `ready` item assigned to
+  `hk` through the `mori` outbox (`collection_gap_alarm.py`). What was already
+  filed is remembered in `incoming/.collection-gaps-filed.json`, so a hole the
+  three-day look-back sees on three nights is filed on the first. The last
+  result is in `incoming/last-collection-gap.json`.
+
+* **Two weeks of side-by-side reading (design, not built).** Pinning and the
+  hash close the hole the roadmap page fell through; this is how to find out
+  whether there is another one. For fourteen days after pinning, a separate
+  daily tick reads each pinned page live (the same `content_hash` over a fresh
+  block walk) and compares it with what the last collection recorded in
+  `content_hashes`, appending one line per page to
+  `/data/rlwrld-worklog/validation/pinned-compare.jsonl`:
+  `{date, page_id, live_hash, local_hash, live_edited, local_edited, match}`.
+  A mismatch that the next collection does not clear is a page the collector is
+  still not seeing. No content is written, only hashes and timestamps, so the
+  record is outside the no-collected-data rule. After fourteen clean days the
+  tick is removed; a mismatch goes on the board the same way a gap does.
+
 * **The block walk stops at a page boundary.** A `child_page` or
   `child_database` block declares `has_children`, so a walk consulting only
   that flag descends through every nested page and files the result under the

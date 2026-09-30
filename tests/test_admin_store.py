@@ -295,8 +295,31 @@ def test_an_unreadable_seed_list_costs_the_run_its_seeds_and_nothing_else(
     store = AdminStore(tmp_path / "config")
     store.notion_seeds_path.write_text("{ not json", encoding="utf-8")
     assert store.notion_seed_ids() == []
+    assert store.notion_pinned_seed_ids() == []
     with pytest.raises(ValueError):
         store.load_notion_seeds()
+
+
+def test_a_pinned_seed_is_a_seed_and_is_listed_as_pinned(tmp_path: Path) -> None:
+    """Pinning adds to a seed; it does not replace one."""
+    store = AdminStore(tmp_path / "config")
+    store.add_notion_seed("2e1d872b594c817fb0650002b5686f9e", actor="hk")
+    pinned = store.add_notion_seed("3ce6cbdff6f68086b8f7cc174bbb040d", actor="hk", pinned=True)
+    assert pinned["pinned"] is True
+    assert len(store.notion_seed_ids()) == 2
+    assert store.notion_pinned_seed_ids() == [pinned["page_id"]]
+
+
+def test_a_seed_file_written_by_hand_can_pin_a_page(tmp_path: Path) -> None:
+    """The file predates the flag, so an entry without it is simply not pinned."""
+    store = AdminStore(tmp_path / "config")
+    store.notion_seeds_path.parent.mkdir(parents=True, exist_ok=True)
+    store.notion_seeds_path.write_text(
+        json.dumps({"seeds": [{"page_id": "a"}, {"page_id": "b", "pinned": True}]}),
+        encoding="utf-8",
+    )
+    assert store.notion_pinned_seed_ids() == ["b"]
+    assert [seed["pinned"] for seed in store.load_notion_seeds()] == [False, True]
 
 
 def test_the_seed_list_is_not_a_setting(tmp_path: Path) -> None:
