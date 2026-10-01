@@ -21,6 +21,15 @@
           <button data-page="roadmap">로드맵</button>
         </div>
         <div class="nav-group">
+          <span class="nav-label">정보</span>
+          <!-- GPU 가격 동향. The screen behind this button is built by another
+               session; the button stays disabled until that session removes
+               the attribute, so a half-built page is never reachable from a
+               menu somebody is already using. -->
+          <button data-page="gpu" data-requires="super_admin" disabled
+                  title="다른 세션이 작업 중입니다">GPU 가격</button>
+        </div>
+        <div class="nav-group">
           <span class="nav-label">다이제스트</span>
           <button data-page="org" data-requires="super_admin">조직도</button>
           <button data-page="person" data-requires="super_admin">일자별</button>
@@ -44,6 +53,8 @@
           <button data-page="models" data-requires="super_admin">로컬 모델</button>
           <button data-page="security" data-requires="super_admin">보안</button>
           <button data-page="mapping" data-requires="super_admin">로드맵 매핑</button>
+          <button data-page="menu" data-requires="super_admin" disabled
+                  title="준비 중입니다">메뉴 편집</button>
         </div>
         <div class="nav-group">
           <button data-page="audit" data-requires="super_admin">감사 기록</button>
@@ -398,6 +409,27 @@
           <p class="help" id="pairs-health">후보는 배치(<code>worklog pairs --apply</code>)가 만듭니다.
              이 화면은 만들지 않고 고르기만 합니다 — 그래야 「고를 때 실제로 뭘 봤는지」가 나중에도 답이 됩니다.</p>
         </article>
+      </section>
+
+      <!-- ------------------------------------------------------------------
+           GPU 가격. This section belongs to the session building that screen;
+           nothing outside these two markers is theirs to change, and nobody
+           else edits what is between them. The 2026-09-30 collision was two
+           sessions in one file with no line that said whose was whose.
+           ------------------------------------------------------------------ -->
+      <section class="page" id="page-gpu">
+        <h1>GPU 가격</h1>
+        <p class="lead">준비 중입니다.</p>
+      </section>
+
+      <!-- ------------------------------------------------------------------
+           메뉴 편집. mori's, and the reason the two sections above exist: once
+           the left menu is arranged here rather than in this file, a session
+           adding a screen never touches the menu at all.
+           ------------------------------------------------------------------ -->
+      <section class="page" id="page-menu">
+        <h1>메뉴 편집</h1>
+        <p class="lead">준비 중입니다.</p>
       </section>
 
       <section class="page" id="page-schedules">

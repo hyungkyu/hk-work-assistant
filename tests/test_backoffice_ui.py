@@ -57,6 +57,10 @@ def test_the_menu_is_grouped_and_ordered_as_the_operator_asked() -> None:
         # the backoffice rather than to read something in it.
         ("바로가기", [("bookmarks", "북마크")]),
         ("업무", [("work", "업무 현황"), ("roadmap", "로드맵")]),
+        # HK, 2026-10-01: 업무 밑에 정보 를 넣고, 정보 안에 GPU 가격 을.
+        # Reference about the world outside, which is neither the org's own
+        # activity (다이제스트) nor the running of this system (운영).
+        ("정보", [("gpu", "GPU 가격")]),
         # The org chart and the per-person day sit together, above 운영,
         # because they are what somebody opens to answer a question about a
         # person -- the collection screens are how the data behind them got
@@ -89,6 +93,7 @@ def test_the_menu_is_grouped_and_ordered_as_the_operator_asked() -> None:
                 # 설정 rather than beside 로드맵 because 로드맵 is the screen
                 # everybody reads and this is the one only HK edits.
                 ("mapping", "로드맵 매핑"),
+                ("menu", "메뉴 편집"),
             ],
         ),
         (None, [("audit", "감사 기록")]),
@@ -551,3 +556,40 @@ def test_the_bookmark_routes_are_mounted() -> None:
 
     paths = set(app.openapi()["paths"])
     assert {"/api/v1/admin/bookmarks", "/api/v1/admin/bookmarks/{bookmark_id}"} <= paths
+
+
+def test_a_screen_another_session_is_building_is_not_reachable_yet(html: str) -> None:
+    """A menu entry lands before the screen behind it does, on purpose.
+
+    HK, 2026-10-01: 메뉴 생성은 네가 하고, 생성된 메뉴 내에서의 수정은 다른
+    이들이. That removes the collision -- two sessions adding menu entries
+    would both rewrite the same list and the same assertion, and whichever
+    landed second would turn main red.
+
+    The cost of putting the entry in first is a button to a page that says
+    준비 중, so it ships disabled. The session that builds the screen removes
+    the attribute as its last step.
+    """
+    for page in ("gpu", "menu"):
+        entry = re.search(rf'<button data-page="{page}"[^>]*>', html)
+        assert entry, f"no menu entry for {page}"
+        assert "disabled" in entry.group(0), (
+            f"{page} is reachable before its screen exists"
+        )
+        assert f'id="page-{page}"' in html, "the section exists for it to fill"
+
+
+def test_each_unbuilt_screen_has_a_region_of_its_own(html: str) -> None:
+    """Two sessions in one file, with a line that says whose is whose.
+
+    On 2026-09-30 two sessions edited cli.py without either being able to see
+    the other, and one reverted the other's work. admin.html is the file most
+    likely to repeat it -- every screen lives in it. So each unbuilt screen
+    gets a named region, and the comment says who owns it.
+    """
+    gpu = html.index('id="page-gpu"')
+    menu = html.index('id="page-menu"')
+    assert gpu < menu
+    # Nothing of one session's section may sit inside the other's.
+    between = html[gpu:menu]
+    assert between.count("<section") == 1, "the regions do not overlap"
