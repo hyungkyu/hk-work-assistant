@@ -214,6 +214,13 @@ def test_the_work_protocol_states_the_whole_chain():
         "main 을 체크아웃하고 작업하지 않는다",
         # The two-line difference that decides whether 70 tests run.
         "WORKLOG_TEST_DATABASE_URL",
+        # The route onto main is decided by a session's tools, not its taste.
+        "경로는 고르는 것이 아니라 가진 도구로 갈린다",
+        # And the carrier is serialization, not a deeper test run.
+        "캐리어의 값은 검증 깊이가 아니라",
+        # Four sessions' commands funnel through one person.
+        "반복되는 일은 명령이 아니라 배치다",
+        "파서를 읽는다",
         # And the rule that protects the other sessions' unfinished work.
         "내가 하지 않은 작업을 덮지 않는다",
     ):
