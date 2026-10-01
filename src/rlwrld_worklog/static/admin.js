@@ -95,6 +95,10 @@
         renderStaffPassword(session.staff_password_set);
         $('auth-overlay').classList.add('hidden');
         if (isOwner()) await loadSettings();
+        // Arrange the left menu before routing, so the first paint is the
+        // arrangement rather than the markup's order rearranging itself a
+        // moment later. It returns quietly if it cannot read one.
+        await applyMenuArrangement();
         // The hash router decides which screen to open and which loader to
         // run, so a shared link, a reload and a first visit all agree.
         applyHash();
@@ -118,6 +122,10 @@
         $('auth-overlay').classList.add('hidden');
         $('admin-password').value = ''; $('admin-password-confirm').value = ''; $('auth-notice').textContent = '';
         if (isOwner()) await loadSettings();
+        // Arrange the left menu before routing, so the first paint is the
+        // arrangement rather than the markup's order rearranging itself a
+        // moment later. It returns quietly if it cannot read one.
+        await applyMenuArrangement();
         // The hash router decides which screen to open and which loader to
         // run, so a shared link, a reload and a first visit all agree.
         applyHash();
@@ -1752,6 +1760,7 @@
       if (page === 'org') loadOrg();
       if (page === 'unmapped') loadUnmapped();
       if (page === 'pairs') loadPairs({ reset: true });
+      if (page === 'menu') loadMenu();
       if (page === 'person') { if (!$('person-day').value) $('person-day').value = yesterdayKST(); }
       if (page === 'audit') loadAudit();
       if (page === 'work') { loadWork(); startWorkPolling(); }
@@ -2454,6 +2463,180 @@
     }
 
 
+    // -------------------------------------------------- 메뉴 편집
+    //
+    // HK, 2026-10-01: LEFT 메뉴를 편집할 수 있게 해주면 좋겠어.
+    //
+    // The markup decides which screens exist; this decides how they are
+    // arranged. Keeping those apart is what lets a session add a screen
+    // without touching the menu -- which is the collision that cost 26
+    // minutes on 2026-09-30 and would have cost more with two sessions
+    // adding screens on the same afternoon.
+    let menuDraft = [];
+
+    async function loadMenu() {
+      const line = $('menu-state');
+      try {
+        const payload = await api('/api/v1/admin/menu');
+        menuDraft = (payload.pages || []).map((page) => ({
+          page_id: page.page_id,
+          label: page.label,
+          group_label: page.group_label || '',
+          hidden: !!page.hidden,
+          unbuilt: !!page.unbuilt,
+          arranged: !!page.arranged,
+        }));
+        renderMenuEditor();
+        const unarranged = payload.unarranged || 0;
+        $('menu-badge').textContent = payload.source === 'database'
+          ? `${menuDraft.length}개${unarranged ? ` · 새 화면 ${unarranged}` : ''}`
+          : '코드 순서';
+        line.textContent = payload.source === 'database'
+          ? (unarranged
+            ? `${unarranged}개는 아직 배치한 적 없는 화면이라 맨 아래에 있습니다.`
+            : '순서를 바꾸고 저장하세요.')
+          // Saying which one it is reading matters: an arrangement that was
+          // saved and is not showing looks identical to one never saved.
+          : `저장된 배치를 읽지 못해 코드 순서로 보여주는 중입니다 (${payload.reason || '이유 불명'}).`;
+      } catch (error) {
+        line.textContent = `불러오지 못했습니다: ${error.message}`;
+        $('menu-badge').textContent = '조회 실패';
+      }
+    }
+
+    function renderMenuEditor() {
+      const list = $('menu-list');
+      list.textContent = '';
+      menuDraft.forEach((entry, index) => {
+        const row = document.createElement('div');
+        row.className = 'menu-row';
+
+        const group = document.createElement('input');
+        group.className = 'menu-group';
+        group.value = entry.group_label;
+        group.placeholder = '위와 같은 묶음';
+        group.addEventListener('change', () => { entry.group_label = group.value; });
+
+        const label = document.createElement('input');
+        label.className = 'menu-label';
+        label.value = entry.label;
+        label.addEventListener('change', () => { entry.label = label.value; });
+
+        const page = document.createElement('span');
+        page.className = 'menu-page';
+        page.textContent = entry.page_id + (entry.unbuilt ? ' · 준비 중' : '');
+
+        const up = document.createElement('button');
+        up.className = 'button';
+        up.textContent = '↑';
+        up.disabled = index === 0;
+        up.addEventListener('click', () => moveMenuEntry(index, -1));
+
+        const down = document.createElement('button');
+        down.className = 'button';
+        down.textContent = '↓';
+        down.disabled = index === menuDraft.length - 1;
+        down.addEventListener('click', () => moveMenuEntry(index, 1));
+
+        const hide = document.createElement('button');
+        hide.className = `button${entry.hidden ? '' : ' primary'}`;
+        hide.textContent = entry.hidden ? '숨김' : '보임';
+        hide.addEventListener('click', () => {
+          entry.hidden = !entry.hidden;
+          renderMenuEditor();
+        });
+
+        row.append(group, label, page, up, down, hide);
+        list.appendChild(row);
+      });
+    }
+
+    function moveMenuEntry(index, delta) {
+      const target = index + delta;
+      if (target < 0 || target >= menuDraft.length) return;
+      const [moved] = menuDraft.splice(index, 1);
+      menuDraft.splice(target, 0, moved);
+      renderMenuEditor();
+    }
+
+    async function saveMenu() {
+      const line = $('menu-state');
+      try {
+        await api('/api/v1/admin/menu', {
+          method: 'POST',
+          body: JSON.stringify({
+            entries: menuDraft.map((entry) => ({
+              page_id: entry.page_id,
+              label: entry.label,
+              group_label: entry.group_label,
+              hidden: entry.hidden,
+            })),
+          }),
+        });
+        toast('저장했습니다.');
+        // Redrawn from the saved arrangement rather than from the draft, so
+        // what the left menu shows is what the server kept.
+        await applyMenuArrangement();
+        loadMenu();
+      } catch (error) {
+        line.textContent = `저장하지 못했습니다: ${error.message}`;
+      }
+    }
+
+    // Rebuild the left menu from the stored arrangement.
+    //
+    // The buttons already exist in the markup -- they are moved, renamed and
+    // regrouped here, never created. A menu built from scratch out of server
+    // data could name a page that has no section, and the click would open
+    // nothing; moving what is already there cannot.
+    async function applyMenuArrangement() {
+      let payload;
+      try {
+        payload = await api('/api/v1/admin/menu');
+      } catch (_) {
+        return;  // The markup's own order stands. It is never wrong about what exists.
+      }
+      if (!payload || payload.source !== 'database') return;
+      const nav = $('nav');
+      const buttons = new Map(
+        Array.from(nav.querySelectorAll('button[data-page]'))
+          .map((button) => [button.dataset.page, button])
+      );
+      const rebuilt = document.createDocumentFragment();
+      (payload.groups || []).forEach((group) => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'nav-group';
+        if (group.label) {
+          const heading = document.createElement('span');
+          heading.className = 'nav-label';
+          heading.textContent = group.label;
+          wrapper.appendChild(heading);
+        }
+        (group.entries || []).forEach((entry) => {
+          const button = buttons.get(entry.page_id);
+          if (!button) return;
+          // The label is the one thing taken from the server, and only when
+          // somebody set it; an empty one would blank a working button.
+          if (entry.label) button.textContent = entry.label;
+          wrapper.appendChild(button);
+          buttons.delete(entry.page_id);
+        });
+        if (wrapper.querySelector('button')) rebuilt.appendChild(wrapper);
+      });
+      // Anything the arrangement did not mention is a screen somebody added
+      // since it was saved. It goes to the end rather than disappearing.
+      if (buttons.size) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'nav-group';
+        buttons.forEach((button) => wrapper.appendChild(button));
+        rebuilt.appendChild(wrapper);
+      }
+      nav.textContent = '';
+      nav.appendChild(rebuilt);
+      applyRoleVisibility();
+    }
+
+
     async function loadSchedules() {
       loadBatchRuns();
       try {
@@ -2509,6 +2692,8 @@
     $('search-run').addEventListener('click', runSearch);
     $('person-run').addEventListener('click', runPersonDay);
     $('person-day').addEventListener('change', () => { if ($('person-id').value.trim()) runPersonDay(); });
+    $('menu-save').addEventListener('click', saveMenu);
+    $('menu-reload').addEventListener('click', loadMenu);
     $('pairs-reload').addEventListener('click', () => loadPairs({ reset: true }));
     $('pairs-more').addEventListener('click', () => loadPairs());
     $('pairs-state').addEventListener('change', () => loadPairs({ reset: true }));

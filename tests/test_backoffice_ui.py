@@ -115,7 +115,17 @@ def test_the_landing_screen_after_login_is_the_work_board(html: str, script: str
     # call, so the assertion moved with it.
     # Assert the shape, not the exact spacing: a comment between the two calls
     # is not a behaviour change.
-    assert len(re.findall(r"await loadSettings\(\);(?:\s|//[^\n]*\n)*applyHash\(\);", script)) == 2
+    # Both login paths end at the hash router. What may sit between them is
+    # setup that has to finish first -- arranging the left menu joined that on
+    # 2026-10-01 -- so the check is that nothing branches away before the
+    # router, not that the two calls are adjacent.
+    handoffs = re.findall(
+        r"await loadSettings\(\);(?P<between>(?:\s|//[^\n]*\n|await \w+\(\);)*)applyHash\(\);",
+        script,
+    )
+    assert len(handoffs) == 2, "both login paths hand over to the hash router"
+    for between in handoffs:
+        assert "showPage(" not in between, "nothing opens a screen behind the router"
     assert "const DEFAULT_PAGE = 'work';" in script
 
 
@@ -289,6 +299,8 @@ def test_the_existing_backoffice_and_work_routes_are_all_still_served() -> None:
         "/api/v1/admin/work/items",
         "/api/v1/admin/work/meta",
         "/api/v1/admin/work/history",
+        # The left menu's arrangement, read on every page load.
+        "/api/v1/admin/menu",
         "/api/v1/timeline",
         "/healthz",
         # The review screen is only a screen if its routes are mounted; the
@@ -431,7 +443,10 @@ def test_the_review_screen_never_rebuilds_what_it_shows(script: str) -> None:
     row and the moment he clicked it, and the stored correction would no
     longer say what he chose it over.
     """
-    pairs_block = script.split("질문·답변 검수")[1].split("async function loadSchedules")[0]
+    # To the next section marker rather than to loadSchedules: another
+    # section landed between them on 2026-10-01 and was silently swept into
+    # this one, which made the test read a different screen's calls.
+    pairs_block = script.split("질문·답변 검수")[1].split("// ----")[0]
     # Only GET, plus the one POST that records his decision. Anything else
     # reaching the server from this screen would be it acting rather than
     # asking. ("proposed" is a field on a candidate, not a call -- the check is
@@ -593,3 +608,56 @@ def test_each_unbuilt_screen_has_a_region_of_its_own(html: str) -> None:
     # Nothing of one session's section may sit inside the other's.
     between = html[gpu:menu]
     assert between.count("<section") == 1, "the regions do not overlap"
+
+
+def test_the_left_menu_is_rearranged_not_rebuilt(script: str) -> None:
+    """The buttons in the markup are moved; they are never created from data.
+
+    A menu built out of server rows could name a page that has no section,
+    and clicking it would open nothing -- the failure would look like a
+    broken screen rather than a bad row. Moving what already exists cannot
+    produce an entry that leads nowhere.
+    """
+    block = script.split("async function applyMenuArrangement")[1].split(
+        "async function loadSchedules"
+    )[0]
+    assert "nav.querySelectorAll('button[data-page]')" in block, (
+        "it takes the existing buttons"
+    )
+    assert "createElement('button')" not in block, (
+        "a button invented here could point at a section that does not exist"
+    )
+
+
+def test_a_screen_the_arrangement_does_not_mention_still_appears(script: str) -> None:
+    """A screen added after the menu was last saved must not vanish.
+
+    This is the rule that lets a session add a screen without touching the
+    menu at all, which is the entire reason the arrangement moved out of the
+    markup.
+    """
+    block = script.split("async function applyMenuArrangement")[1].split(
+        "async function loadSchedules"
+    )[0]
+    assert "if (buttons.size)" in block, "the leftovers are placed, not dropped"
+
+
+def test_the_menu_falls_back_to_the_markup_when_the_server_cannot_say(
+    script: str,
+) -> None:
+    """The order in the file is never wrong about what exists.
+
+    So a failed read leaves it alone rather than clearing the navigation --
+    a backoffice with no menu is one nobody can use to find out why.
+    """
+    block = script.split("async function applyMenuArrangement")[1].split(
+        "async function loadSchedules"
+    )[0]
+    assert "return;  // The markup's own order stands" in block
+    assert "payload.source !== 'database'" in block
+
+
+def test_the_menu_editor_says_which_order_it_is_showing(html: str, script: str) -> None:
+    """Saved-but-not-showing and never-saved look identical otherwise."""
+    assert 'id="menu-state"' in html and 'id="menu-badge"' in html
+    assert "코드 순서로 보여주는 중입니다" in script

@@ -429,7 +429,22 @@
            ------------------------------------------------------------------ -->
       <section class="page" id="page-menu">
         <h1>메뉴 편집</h1>
-        <p class="lead">준비 중입니다.</p>
+        <p class="lead">왼쪽 메뉴의 순서·이름·묶음·표시 여부를 여기서 정합니다.
+           어떤 화면이 존재하는지는 코드가 정하고, 이 화면은 배치만 바꿉니다 —
+           그래서 새 화면을 만든 세션이 메뉴를 건드릴 일이 없습니다.</p>
+        <article class="card">
+          <div class="collection-toolbar">
+            <div class="work-filters">
+              <button class="button primary" id="menu-save">저장</button>
+              <button class="button" id="menu-reload">되돌리기</button>
+            </div>
+            <span class="badge" id="menu-badge">-</span>
+          </div>
+          <p class="work-state" id="menu-state">불러오는 중…</p>
+          <div id="menu-list"></div>
+          <p class="help">묶음 이름을 비우면 위 항목과 같은 묶음이 됩니다.
+             저장하면 바로 왼쪽에 반영됩니다.</p>
+        </article>
       </section>
 
       <section class="page" id="page-schedules">
