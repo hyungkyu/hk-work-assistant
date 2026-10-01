@@ -630,8 +630,22 @@ class SlackCollector:
         # Replies to threads whose parent predates the window are unreachable
         # through conversations.history, so watched threads are re-polled from
         # their own last observed reply. The lookback bounds the daily cost.
+        #
+        # Measured from the window being collected, not from the wall clock.
+        #
+        # It used to read `datetime.now()`, which is correct exactly once -- on
+        # a nightly run collecting yesterday -- and wrong for every backfill. A
+        # run on 2026-10-01 collecting 2026-09-01 took its cutoff from October,
+        # so threads inside the very window being collected fell outside the
+        # lookback and were never re-polled. The backfill looked complete.
+        #
+        # It surfaced on 2026-10-01 as two tests going red that had passed the
+        # day before: the fixtures pin a date and the code did not, so the two
+        # drifted apart until they disagreed. That is the shape of this bug and
+        # not a test expiring -- the tests were right all along and said so the
+        # moment the calendar moved far enough.
         if not bounded and not seed_threads:
-            cutoff = (datetime.now(timezone.utc) - timedelta(days=thread_lookback_days)).timestamp()
+            cutoff = (since - timedelta(days=thread_lookback_days)).timestamp()
             collected_channel_ids = {str(channel["id"]) for channel in channels}
             already_read = set(events_by_key)
             for channel_id in sorted(thread_watch):
@@ -756,7 +770,9 @@ class SlackCollector:
         events = tuple(sorted(events_by_key.values(), key=lambda item: (item.occurred_at, item.event_id)))
         channels_collected = len(channels) - len(skipped_channels)
         truncated = archive.truncated
-        thread_watch = _prune_thread_watch(thread_watch, thread_lookback_days)
+        thread_watch = _prune_thread_watch(
+            thread_watch, thread_lookback_days, reference=since
+        )
 
         counters = {
             "users_seen": users_seen,
@@ -864,9 +880,19 @@ class SlackCollector:
 
 
 def _prune_thread_watch(
-    thread_watch: dict[str, dict[str, str]], lookback_days: int
+    thread_watch: dict[str, dict[str, str]],
+    lookback_days: int,
+    *,
+    reference: datetime,
 ) -> dict[str, dict[str, str]]:
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).timestamp()
+    """Forget threads older than the lookback, measured from the window.
+
+    `reference` is the start of the window being collected rather than now,
+    for the same reason the re-poll cutoff is: a backfill of September run in
+    October would prune the watch list against an October cutoff and drop the
+    very threads that window is about.
+    """
+    cutoff = (reference - timedelta(days=lookback_days)).timestamp()
     pruned: dict[str, dict[str, str]] = {}
     for channel_id, threads in thread_watch.items():
         kept = {

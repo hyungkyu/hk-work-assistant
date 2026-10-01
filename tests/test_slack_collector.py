@@ -796,3 +796,75 @@ def test_make_slack_collector_passes_rate_limit_patience(monkeypatch) -> None:
     seen.clear()
     sc.make_slack_collector(archive_root=root, environment="test", token="xoxp-x")
     assert "max_attempts" not in seen, "nightly run uses the client default"
+
+
+def test_the_thread_lookback_follows_the_window_not_the_clock(tmp_path: Path) -> None:
+    """A backfill of an old window must re-poll that window's threads.
+
+    The lookback used to be measured from `datetime.now()`. On a nightly run
+    collecting yesterday the two are the same thing, so it was right exactly
+    once a day and wrong for every backfill: collecting 2026-09-01 on
+    2026-10-01 took its cutoff from October, and threads inside the very
+    window being collected fell outside the lookback and were never
+    re-polled. The run reported success.
+
+    This pins a window far enough in the past that a wall-clock cutoff would
+    exclude it, and no date in it goes stale -- the whole fixture moves with
+    `NOW`, which is what the two tests that went red on 2026-10-01 could not
+    do while the code read the real clock.
+    """
+    # Six months back, with the thread's last reply a day inside that window.
+    window_start = NOW - timedelta(days=180)
+    old_parent = f"{(window_start - timedelta(days=3)).timestamp():.6f}"
+    last_reply = f"{(window_start + timedelta(hours=1)).timestamp():.6f}"
+    new_reply = f"{(window_start + timedelta(hours=2)).timestamp():.6f}"
+
+    seed = RawArchive(tmp_path, "slack", "run-0", "test")
+    seed.write_checkpoint(
+        {
+            "schema_version": 2,
+            "source": "slack",
+            "run_id": "run-0",
+            "high_watermarks": {CHANNEL: last_reply},
+            "thread_watch": {CHANNEL: {old_parent: last_reply}},
+        }
+    )
+    client = FakeSlack(
+        history={CHANNEL: [[]], DM: [[]]},
+        replies={
+            (CHANNEL, old_parent): [
+                message(new_reply, thread_ts=old_parent, text="late reply")
+            ]
+        },
+    )
+
+    _, result = collect(tmp_path, client, run_id="run-1", since=window_start)
+
+    assert result.threads_repolled == 1, (
+        "the thread's last reply is one hour inside the window being "
+        "collected; a cutoff taken from the wall clock excludes it and the "
+        "backfill silently returns nothing"
+    )
+
+
+def test_pruning_the_watch_list_also_follows_the_window(tmp_path: Path) -> None:
+    """The same reference, for the same reason.
+
+    If the watch list were pruned against a wall-clock cutoff, a backfill
+    would drop the threads its own window is about -- and would then write
+    that shortened list back to the checkpoint, so the loss outlives the run.
+    """
+    from rlwrld_worklog.slack_collector import _prune_thread_watch
+
+    window_start = NOW - timedelta(days=180)
+    inside = f"{(window_start + timedelta(days=1)).timestamp():.6f}"
+    before = f"{(window_start - timedelta(days=60)).timestamp():.6f}"
+
+    kept = _prune_thread_watch(
+        {CHANNEL: {"a": inside, "b": before}}, 30, reference=window_start
+    )
+
+    assert kept == {CHANNEL: {"a": inside}}, (
+        "a thread inside the window survives; one older than the lookback "
+        "does not"
+    )
