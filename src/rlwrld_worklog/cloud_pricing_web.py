@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from .admin_web import (
     _require_csrf,
+    require_page_access,
     require_super_admin_session,
     session_actor,
     store,
@@ -59,7 +60,7 @@ def _guarded(call):
 @admin_router.get("")
 def cloud_pricing_route(request: Request) -> dict[str, Any]:
     """The current rate card, its exchange rate, and the list of older ones."""
-    require_super_admin_session(request)
+    require_page_access("gpu")(request)
     from .cloud_pricing import read_current
 
     return _guarded(lambda: read_current(_database_url()))
@@ -72,7 +73,7 @@ def snapshot_route(snapshot_id: int, request: Request) -> dict[str, Any]:
     Not today's rate applied to yesterday's prices: the conversion is part of
     what was read, and re-converting it later would quietly rewrite history.
     """
-    require_super_admin_session(request)
+    require_page_access("gpu")(request)
     from .cloud_pricing import read_snapshot
 
     try:

@@ -31,6 +31,41 @@ from typing import Any
 STATIC = Path(__file__).resolve().parent / "static"
 ADMIN_HTML = STATIC / "admin.html"
 
+# The screens whose routes actually consult `admin_menu.requires`.
+#
+# HK, 2026-10-02: 공개여부를 어드민에서 수정할 수 있게 해줘.
+#
+# Access is wired per screen rather than switched on everywhere at once,
+# because the failure modes are not symmetrical: a screen left shut is an
+# inconvenience somebody reports, and a screen opened by accident is data
+# already read. A screen is listed here only once its routes ask
+# `require_page_access` -- so for every screen not listed, the server keeps
+# demanding super_admin whatever the database says, and the editor shows the
+# entry as fixed instead of offering a switch that would do nothing.
+#
+# 조직도 and 일자별 are one entry because they are one router: 일자별 reads
+# /api/v1/admin/org/digest. Listing them separately would let the editor
+# promise a distinction the server cannot keep.
+TOGGLABLE: dict[str, str] = {
+    "work": "work",
+    "roadmap": "roadmap",
+    "gpu": "gpu",
+    "org": "org",
+    "person": "org",
+    "bookmarks": "bookmarks",
+}
+
+# Screens that are already open today, and must stay open when nobody has
+# arranged them yet. Without this, wiring a screen to the new rule would
+# quietly narrow it on the deploy that wires it: 북마크 reading has been open
+# to any signed-in reader, and defaulting it shut would read to those people
+# as the backoffice breaking.
+DEFAULT_OPEN = {"bookmarks"}
+
+# Fail closed: this is what every unlisted, unread or unknown case becomes.
+CLOSED = "super_admin"
+OPEN = "company_user"
+
 # `data-page="x" ... >라벨</button>`, and whether it is disabled or restricted.
 _BUTTON = re.compile(
     r'<button\s+data-page="(?P<page>[a-z-]+)"(?P<attrs>[^>]*)>(?P<label>[^<]*)</button>',
@@ -69,6 +104,10 @@ def declared_pages(html: str | None = None) -> list[dict[str, Any]]:
                     # something a reader can open yet.
                     "unbuilt": "disabled" in attrs,
                     "owner_only": 'data-requires="super_admin"' in attrs,
+                    # Whether the 공개 switch in the editor does anything for
+                    # this screen, which is a fact about the routes, not a
+                    # preference.
+                    "togglable": button.group("page") in TOGGLABLE,
                 }
             )
     return pages
@@ -103,6 +142,7 @@ def arrange(
                     # order among themselves.
                     "position": 10_000 + index,
                     "hidden": False,
+                    "requires": OPEN if page["page_id"] in DEFAULT_OPEN else CLOSED,
                     "arranged": False,
                 }
             )
@@ -116,6 +156,9 @@ def arrange(
                 "group_label": group_label,
                 "position": int(row.get("position") or 0),
                 "hidden": bool(row.get("hidden")),
+                # Anything but the one known open value reads as shut, so a
+                # bad row cannot widen access.
+                "requires": OPEN if row.get("requires") == OPEN else CLOSED,
                 "arranged": True,
             }
         )
@@ -151,7 +194,7 @@ def read(database_url: str) -> dict[str, Any]:
     with psycopg.connect(database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT page_id, label, group_label, position, hidden "
+                "SELECT page_id, label, group_label, position, hidden, requires "
                 "  FROM admin_menu ORDER BY position, page_id"
             )
             rows = [
@@ -161,6 +204,7 @@ def read(database_url: str) -> dict[str, Any]:
                     "group_label": row[2],
                     "position": row[3],
                     "hidden": row[4],
+                    "requires": row[5],
                 }
                 for row in cursor.fetchall()
             ]
@@ -202,17 +246,57 @@ def save(
             for position, entry in enumerate(entries):
                 cursor.execute(
                     "INSERT INTO admin_menu "
-                    "  (page_id, label, group_label, position, hidden, updated_by) "
-                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    "  (page_id, label, group_label, position, hidden, requires, "
+                    "   updated_by) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
                     (
                         str(entry.get("page_id")),
                         (entry.get("label") or "").strip() or None,
                         (entry.get("group_label") or "").strip() or None,
                         position,
                         bool(entry.get("hidden")),
+                        # Only a screen whose routes honour it can be stored
+                        # open. Otherwise the table would record a decision
+                        # the server does not act on, and the next person to
+                        # read it would believe it.
+                        OPEN
+                        if entry.get("requires") == OPEN
+                        and str(entry.get("page_id")) in TOGGLABLE
+                        else CLOSED,
                         actor,
                     ),
                 )
         connection.commit()
 
     return {"saved": len(entries), "actor": actor}
+
+
+def access_for(page_id: str, database_url: str | None) -> str:
+    """The lowest role allowed to open this screen.
+
+    Every way of not knowing returns CLOSED: an unlisted screen, no database,
+    a failed query, a missing row, an unrecognised value. That is the whole
+    point of reading it here rather than at each call site -- a route that
+    asks this question can only ever be told "super_admin" when something is
+    wrong, never "anyone".
+    """
+    if page_id not in TOGGLABLE:
+        return CLOSED
+    if not database_url:
+        return OPEN if page_id in DEFAULT_OPEN else CLOSED
+
+    import psycopg
+
+    try:
+        with psycopg.connect(database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT requires FROM admin_menu WHERE page_id = %s", (page_id,)
+                )
+                row = cursor.fetchone()
+    except Exception:
+        return OPEN if page_id in DEFAULT_OPEN else CLOSED
+
+    if row is None:
+        return OPEN if page_id in DEFAULT_OPEN else CLOSED
+    return OPEN if row[0] == OPEN else CLOSED

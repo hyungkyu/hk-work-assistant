@@ -21,7 +21,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from .admin_web import _require_csrf, require_super_admin_session
+from .admin_web import _require_csrf, require_page_access, require_super_admin_session
 
 router = APIRouter(prefix="/api/v1/admin/org")
 
@@ -42,7 +42,7 @@ def org_chart_route(
     include_retired: Annotated[bool, Query()] = False,
 ) -> dict[str, Any]:
     """The org chart from the newest roster observation of each tab."""
-    require_super_admin_session(request)
+    require_page_access("org")(request)
     from .org.chart import org_chart
 
     return org_chart(_database_url(), include_retired=include_retired)
@@ -50,7 +50,7 @@ def org_chart_route(
 
 @router.get("/status")
 def org_status_route(request: Request) -> dict[str, Any]:
-    require_super_admin_session(request)
+    require_page_access("org")(request)
     from .org.store import org_status
 
     return org_status(_database_url())
@@ -63,7 +63,7 @@ def unmapped_route(
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
 ) -> dict[str, Any]:
     """Accounts with activity and no owner. Read-only: the scan is a batch."""
-    require_super_admin_session(request)
+    require_page_access("org")(request)
     from .org.unmapped import list_unmapped
 
     return list_unmapped(_database_url(), state=state, limit=limit)
@@ -102,7 +102,7 @@ def resolve_route(request: Request, payload: ResolveRequest) -> dict[str, Any]:
 
 @router.get("/digest/status")
 def digest_status_route(request: Request) -> dict[str, Any]:
-    require_super_admin_session(request)
+    require_page_access("org")(request)
     from .digest import digest_status
 
     return digest_status(_database_url())
@@ -121,7 +121,7 @@ def person_day_route(
     did nothing" are different facts, and a screen that showed them the same
     way would make an unbuilt backfill look like a quiet week.
     """
-    require_super_admin_session(request)
+    require_page_access("org")(request)
     from .digest import read_digest
 
     found = read_digest(_database_url(), person_id, date.fromisoformat(day))

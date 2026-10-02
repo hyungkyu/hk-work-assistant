@@ -20,6 +20,7 @@ from .admin_web import (
     _require_csrf,
     agent_name,
     require_board_session,
+    require_page_access,
     require_super_admin_session,
     session_actor,
     store,
@@ -178,7 +179,7 @@ def work_meta(request: Request) -> dict[str, Any]:
     client written against the earlier response keeps working; everything the
     four-stage board needs is added beside them.
     """
-    require_board_session(request)
+    require_page_access("work", closed=require_board_session)(request)
     payload = status_metadata()
     payload["statuses"] = list(STATUSES)
     payload["priorities"] = list(PRIORITIES)
@@ -197,7 +198,7 @@ def list_items(
     assigned_to: str | None = None,
     limit: Annotated[int, Query(ge=1, le=2_000)] = 500,
 ) -> dict[str, Any]:
-    require_board_session(request)
+    require_page_access("work", closed=require_board_session)(request)
     with _translated_errors():
         payload = work_store().list_items(
             include_archived=include_archived,
@@ -210,7 +211,7 @@ def list_items(
 
 @router.get("/items/{item_id}")
 def get_item(item_id: str, request: Request) -> dict[str, Any]:
-    require_board_session(request)
+    require_page_access("work", closed=require_board_session)(request)
     with _translated_errors():
         store = work_store()
         item = store.get_item(item_id)
@@ -281,7 +282,7 @@ def work_timeline(
     fields existed come back marked ``legacy`` with their unknown fields
     named, rather than back-filled with a guess.
     """
-    require_board_session(request)
+    require_page_access("work", closed=require_board_session)(request)
     with _translated_errors():
         return work_store().read_timeline(item_id, limit=limit)
 
@@ -294,7 +295,7 @@ def work_agents(request: Request) -> dict[str, Any]:
     assigned to someone who has left no recent trace is not in progress, and
     until now the only way to know that was to read a hidden file by hand.
     """
-    require_board_session(request)
+    require_page_access("work", closed=require_board_session)(request)
     with _translated_errors():
         items = work_store().list_items()["items"]
     open_counts: dict[str, int] = {}
@@ -322,6 +323,6 @@ def work_history(
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     item_id: str | None = None,
 ) -> dict[str, Any]:
-    require_board_session(request)
+    require_page_access("work", closed=require_board_session)(request)
     with _translated_errors():
         return {"items": work_store().read_history(limit=limit, item_id=item_id)}

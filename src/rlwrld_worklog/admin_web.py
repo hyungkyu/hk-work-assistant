@@ -136,6 +136,35 @@ def require_board_session(request: Request) -> dict[str, Any]:
     return current
 
 
+def require_page_access(page_id: str, *, closed: Any = None):
+    """A guard for one screen, honouring the 공개 switch in the menu editor.
+
+    HK, 2026-10-02: 공개여부를 어드민에서 수정할 수 있게 해줘.
+
+    Reading the setting here, on every request, is what makes the switch real
+    rather than cosmetic: hiding a button in the markup only stops people who
+    click buttons. It also means the answer to "who may open this" has one
+    home, instead of a copy in the menu and a different copy in the routes.
+
+    Fails closed in every direction -- see `menu.access_for`. The cost is one
+    small query per request on five screens, which is cheaper than the class
+    of mistake it removes.
+    """
+
+    def guard(request: Request) -> dict[str, Any]:
+        from . import menu
+
+        if menu.access_for(page_id, os.environ.get("DATABASE_URL") or None) == menu.OPEN:
+            # Widen, never swap. 업무 현황 is read by agents today; a guard
+            # that replaced its rule with "company people" would have opened
+            # the screen to colleagues and shut it to the agents who work on
+            # it, which is not what anybody means by 공개.
+            return require_reader_session(request)
+        return (closed or require_super_admin_session)(request)
+
+    return guard
+
+
 def require_super_admin_session(request: Request) -> dict[str, Any]:
     current = _session(request)
     if current is None:
@@ -589,7 +618,9 @@ def require_reader_session(request: Request) -> dict[str, Any]:
 
 @router.get("/api/v1/admin/bookmarks")
 def get_bookmarks(request: Request) -> dict[str, Any]:
-    require_reader_session(request)
+    # Open today, and stays open by default (menu.DEFAULT_OPEN); the switch
+    # exists so it can be shut without a deploy, not to shut it now.
+    require_page_access("bookmarks")(request)
     return {"groups": store().bookmark_groups(), "bookmarks": store().load_bookmarks()}
 
 

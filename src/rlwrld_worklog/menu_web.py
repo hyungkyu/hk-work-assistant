@@ -66,6 +66,11 @@ class MenuEntry(BaseModel):
     label: str | None = None
     group_label: str | None = None
     hidden: bool = False
+    # "company_user" opens the screen to anybody signed in from the company;
+    # anything else, including an absent field, means super_admin only. The
+    # permissive value has to be spelled out -- a dropped or misspelled field
+    # can only ever shut a screen, never open one.
+    requires: str | None = None
 
 
 class SaveMenu(BaseModel):

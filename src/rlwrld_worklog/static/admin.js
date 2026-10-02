@@ -2487,6 +2487,8 @@
           hidden: !!page.hidden,
           unbuilt: !!page.unbuilt,
           arranged: !!page.arranged,
+          requires: page.requires === 'company_user' ? 'company_user' : 'super_admin',
+          togglable: !!page.togglable,
         }));
         renderMenuEditor();
         const unarranged = payload.unarranged || 0;
@@ -2540,6 +2542,25 @@
         down.disabled = index === menuDraft.length - 1;
         down.addEventListener('click', () => moveMenuEntry(index, 1));
 
+        // 공개 / 자물쇠. Only shown as a switch where the routes behind the
+        // screen actually ask -- elsewhere it is a label, because a switch
+        // that silently does nothing is worse than no switch: somebody flips
+        // it, reads 공개, and tells a colleague the screen is open.
+        const access = document.createElement('button');
+        const open = entry.requires === 'company_user';
+        access.className = `button${open ? ' primary' : ''}`;
+        access.textContent = open ? '공개' : '자물쇠';
+        access.disabled = !entry.togglable;
+        access.title = entry.togglable
+          ? (open
+            ? '로그인한 회사 사람이면 볼 수 있습니다. 쓰기는 여전히 관리자만.'
+            : '관리자만 볼 수 있습니다.')
+          : '이 화면은 코드에서 관리자 전용으로 고정되어 있습니다.';
+        access.addEventListener('click', () => {
+          entry.requires = open ? 'super_admin' : 'company_user';
+          renderMenuEditor();
+        });
+
         const hide = document.createElement('button');
         hide.className = `button${entry.hidden ? '' : ' primary'}`;
         hide.textContent = entry.hidden ? '숨김' : '보임';
@@ -2548,7 +2569,7 @@
           renderMenuEditor();
         });
 
-        row.append(group, label, page, up, down, hide);
+        row.append(group, label, page, up, down, access, hide);
         list.appendChild(row);
       });
     }
@@ -2572,6 +2593,7 @@
               label: entry.label,
               group_label: entry.group_label,
               hidden: entry.hidden,
+              requires: entry.requires,
             })),
           }),
         });
