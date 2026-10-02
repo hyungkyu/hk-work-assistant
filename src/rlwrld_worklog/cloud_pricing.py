@@ -82,6 +82,13 @@ class PriceRow:
     region: str | None = None
     spec: Mapping[str, Any] = field(default_factory=dict)
     sort: int = 0
+    # Which chip, how many, and how much memory ONE of them has. Null where
+    # the provider does not publish it -- never inferred from the model name,
+    # because A100 ships as 40GB and 80GB and a comparison screen that picks
+    # one is wrong half the time.
+    gpu_model: str | None = None
+    gpu_count: int | None = None
+    gpu_memory_gb: Decimal | None = None
 
     def __post_init__(self) -> None:
         if self.provider not in PROVIDERS:
@@ -97,7 +104,14 @@ class PriceRow:
         return (self.provider, self.category, self.sku)
 
     def identity(self) -> str:
-        """Everything a change would have to move. The unit of the hash."""
+        """Everything a change would have to move. The unit of the hash.
+
+        Price only. The machine's description is deliberately out: a provider
+        spelling out a GPU model it used to leave blank has not changed its
+        prices, and a 요금 히스토리 that fills up with entries showing no price
+        movement stops being worth opening. Descriptions are instead refreshed
+        in place -- see `_refresh_descriptions`.
+        """
         return "|".join(
             [
                 self.provider,
@@ -287,6 +301,9 @@ def carry_forward(
                 region=old.get("region"),
                 spec=old.get("spec") or {},
                 sort=int(old.get("sort") or 0),
+                gpu_model=old.get("gpu_model"),
+                gpu_count=old.get("gpu_count"),
+                gpu_memory_gb=old.get("gpu_memory_gb"),
             )
         )
     return rows
@@ -305,6 +322,14 @@ def _row_payload(row: Mapping[str, Any], fx: FxRate | None) -> dict[str, Any]:
         "label": row["label"],
         "region": row.get("region"),
         "spec": row.get("spec") or {},
+        "gpu_model": row.get("gpu_model"),
+        "gpu_count": row.get("gpu_count"),
+        # A decimal as a string, like every other number here: 141.00 and
+        # 141 are the same memory, and 0.5 of a GB is not a thing we invent.
+        "gpu_memory_gb": (
+            None if row.get("gpu_memory_gb") is None
+            else f"{Decimal(str(row['gpu_memory_gb'])):f}".rstrip("0").rstrip(".")
+        ),
         "unit": row["unit"],
         # The 원가, as a string: a price is a decimal, and JSON numbers are
         # binary floats. $0.0147/GiB-month does not survive a round trip
@@ -406,7 +431,8 @@ def build_payload(
 # -------------------------------------------------------------- the database
 
 _ROWS_SQL = """
-    SELECT provider, category, sku, label, region, spec, amount, currency, unit, sort
+    SELECT provider, category, sku, label, region, spec, amount, currency, unit, sort,
+           gpu_model, gpu_count, gpu_memory_gb
     FROM cloud_price
     WHERE snapshot_id = %s
     ORDER BY provider, category, sort, sku
@@ -575,6 +601,7 @@ def apply_refresh(
                         snapshot["id"],
                     ),
                 )
+                _refresh_descriptions(cursor, snapshot["id"], rows)
                 _write_runs(cursor, snapshot["id"], results, rows, taken_at, replace=True)
                 connection.commit()
                 return {
@@ -608,12 +635,13 @@ def apply_refresh(
                 cursor.execute(
                     "INSERT INTO cloud_price"
                     " (snapshot_id, provider, category, sku, label, region, spec, amount,"
-                    "  currency, unit, sort)"
-                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    "  currency, unit, sort, gpu_model, gpu_count, gpu_memory_gb)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         snapshot_id, row.provider, row.category, row.sku, row.label,
                         row.region, Jsonb(dict(row.spec)), row.amount, row.currency,
-                        row.unit, row.sort,
+                        row.unit, row.sort, row.gpu_model, row.gpu_count,
+                        row.gpu_memory_gb,
                     ),
                 )
 
@@ -643,6 +671,36 @@ def apply_refresh(
         "refreshed_at": taken_at,
         "runs": _run_summary(results),
     }
+
+
+def _refresh_descriptions(cursor, snapshot_id: int, rows: Sequence[PriceRow]) -> None:
+    """Update what a machine *is* on a snapshot whose prices did not move.
+
+    Without this the descriptive columns would freeze the first time a rate
+    card settled. The hash is over price alone, so a provider that starts
+    publishing a GPU model, or a parser taught to read one, produces an
+    "unchanged" refresh -- and the rows, never rewritten, would keep the blanks
+    for as long as the prices held. Which is exactly what happened to every row
+    already in the table when `gpu_model` was added: same prices, so nothing
+    would ever have filled them.
+
+    Writes only the description. Price, currency and unit belong to the hash
+    and are the same by construction on this branch; touching them here would
+    be a price change nothing recorded.
+    """
+    from psycopg.types.json import Jsonb
+
+    for row in rows:
+        cursor.execute(
+            "UPDATE cloud_price SET label = %s, region = %s, spec = %s,"
+            "       gpu_model = %s, gpu_count = %s, gpu_memory_gb = %s"
+            " WHERE snapshot_id = %s AND provider = %s AND category = %s AND sku = %s",
+            (
+                row.label, row.region, Jsonb(dict(row.spec)),
+                row.gpu_model, row.gpu_count, row.gpu_memory_gb,
+                snapshot_id, row.provider, row.category, row.sku,
+            ),
+        )
 
 
 def _write_runs(

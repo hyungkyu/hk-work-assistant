@@ -3294,7 +3294,7 @@
     // multiplying by a rate we fetched separately. So the rate and both
     // timestamps sit at the top of the screen rather than in a tooltip: a
     // converted price with nothing next to it is a number nobody can check.
-    const cpState = { data: null, category: 'gpu', q: '', provider: '', viewing: null };
+    const cpState = { data: null, category: 'gpu', q: '', provider: '', model: '', viewing: null };
 
     const CP_STATE_TEXT = {
       empty: '아직 한 번도 가져오지 않았습니다. "다시 가져오기"를 누르세요.',
@@ -3329,6 +3329,20 @@
     function cpProviderLabel(id) {
       const found = (cpState.data.providers || []).find((p) => p.id === id);
       return found ? found.label : id;
+    }
+
+    // "H100 x8", or just "H100" where the provider does not say how many.
+    function cpGpu(row) {
+      if (!row.gpu_model) return '—';
+      return row.gpu_count ? `${row.gpu_model} x${row.gpu_count}` : row.gpu_model;
+    }
+
+    // Per GPU, which is the number a model has to fit inside. Blank where the
+    // provider does not publish it -- Nebius and Kakao name the chip and not
+    // its memory, and deriving it from the name would be wrong for A100 and
+    // V100, which ship in two sizes each.
+    function cpGpuMemory(row) {
+      return row.gpu_memory_gb ? `${cpNumber(row.gpu_memory_gb, 0)} GB` : '—';
     }
 
     function cpSpec(spec) {
@@ -3415,6 +3429,7 @@
     function cpVisible(row) {
       if (row.category !== cpState.category) return false;
       if (cpState.provider && row.provider !== cpState.provider) return false;
+      if (cpState.model && row.gpu_model !== cpState.model) return false;
       if (cpState.q) {
         const hay = `${row.label} ${row.sku} ${cpSpec(row.spec)}`.toLowerCase();
         if (!hay.includes(cpState.q)) return false;
@@ -3435,6 +3450,27 @@
         });
       }
 
+      // The models actually present, so the filter can never offer a chip
+      // that would empty the table.
+      const modelSelect = $('cp-model');
+      const models = Array.from(new Set(
+        (data.rows || []).filter((r) => r.gpu_model).map((r) => r.gpu_model),
+      )).sort();
+      if (modelSelect.options.length - 1 !== models.length) {
+        const chosen = cpState.model;
+        rmClear(modelSelect);
+        modelSelect.appendChild(rmEl('option', { text: '모든 GPU' }));
+        models.forEach((model) => {
+          const option = rmEl('option', { text: model });
+          option.value = model;
+          modelSelect.appendChild(option);
+        });
+        modelSelect.value = models.includes(chosen) ? chosen : '';
+        cpState.model = modelSelect.value;
+      }
+      // Storage has no GPU, so the filter would silently empty the table.
+      modelSelect.disabled = cpState.category !== 'gpu';
+
       cpRenderAsOf();
       cpRenderRuns();
 
@@ -3444,6 +3480,14 @@
         const tr = document.createElement('tr');
         tr.appendChild(rmEl('td', { text: cpProviderLabel(row.provider) }));
         tr.appendChild(rmEl('td', { text: row.label }));
+        tr.appendChild(rmEl('td', {
+          text: cpGpu(row), className: row.gpu_model ? '' : 'help',
+        }));
+        tr.appendChild(rmEl('td', {
+          text: cpGpuMemory(row),
+          className: row.gpu_memory_gb ? '' : 'help',
+          style: 'text-align:right;white-space:nowrap',
+        }));
         tr.appendChild(rmEl('td', { className: 'help', text: cpSpec(row.spec) }));
         tr.appendChild(rmEl('td', { text: row.unit }));
         tr.appendChild(rmEl('td', {
@@ -3517,6 +3561,9 @@
     });
     $('cp-provider').addEventListener('change', function () {
       cpState.provider = this.value; renderCloudPricing();
+    });
+    $('cp-model').addEventListener('change', function () {
+      cpState.model = this.value; renderCloudPricing();
     });
     $('cp-history-open').addEventListener('click', () => $('cp-drawer').classList.remove('hidden'));
     $('cp-history-close').addEventListener('click', () => $('cp-drawer').classList.add('hidden'));

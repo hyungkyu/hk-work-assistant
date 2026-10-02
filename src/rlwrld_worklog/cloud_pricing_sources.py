@@ -73,6 +73,88 @@ AWS_GPU_PREFIXES = (
     "g4dn.", "g5.", "g6.", "g6e.", "gr6.",
 )
 
+# Which chip each AWS instance family carries. AWS's price list publishes the
+# count and the total memory but never the model, so without this the one
+# column people actually compare on -- "who sells an H100 cheapest" -- would be
+# empty for the largest provider on the screen.
+#
+# Explicit rather than derived, for the same reason `TEAM_BY_LABEL` in
+# roadmap_refresh is explicit: a family that AWS adds and this does not know
+# shows up as a row with no model, which is visible, rather than as a confident
+# wrong name. Keyed by the family before the dot.
+AWS_GPU_MODEL = {
+    "p3": "V100", "p3dn": "V100",
+    "p4d": "A100", "p4de": "A100",
+    "p5": "H100", "p5e": "H200", "p5en": "H200",
+    "p6": "B200", "p6e": "B200",
+    "g4dn": "T4",
+    "g5": "A10G",
+    "g6": "L4", "gr6": "L4",
+    "g6e": "L40S",
+}
+
+# The chips the five rate cards name, longest first so that "GB300" is not read
+# as "B300" and "L40S" is not read as "L4". A list rather than a pattern like
+# [A-Z]\d+ because that matches EPYC 7R13 and Xeon 8175 just as happily.
+GPU_MODELS = (
+    "GB300", "GB200", "B300", "B200",
+    "H200", "H100",
+    "A100", "A10G",
+    "L40S", "L4",
+    "RTX PRO 6000", "RTX A6000",
+    "V100", "T4", "P40",
+    # Not a GPU: FuriosaAI's NPU, which Kakao Cloud sells by the hour beside
+    # its NVIDIA machines. Named rather than left blank, because a priced
+    # accelerator with no name on a comparison screen reads as a parser that
+    # failed rather than as a different kind of chip.
+    "WARBOY",
+)
+
+
+def parse_gpu_model(text: str) -> str | None:
+    """The chip named in a product name, or None when none is.
+
+    Matched on word boundaries so that the "L4" inside "gp1l4-g3" is not read
+    as an L4 card, and longest-first so the more specific name wins.
+    """
+    if not text:
+        return None
+    haystack = text.upper()
+    for model in GPU_MODELS:
+        pattern = r"(?<![A-Z0-9])" + re.escape(model) + r"(?![A-Z0-9])"
+        if re.search(pattern, haystack):
+            return model
+    return None
+
+
+def parse_gpu_memory_gb(text: str) -> Decimal | None:
+    """Memory in GB out of "80GB", "141GB HBM3e", "640 GB HBM3", "1개 x 48GB"."""
+    if not text:
+        return None
+    match = re.search(r"(\d+(?:\.\d+)?)\s*(TB|GB|GiB|MB)\b", text, re.I)
+    if not match:
+        return None
+    value = Decimal(match.group(1))
+    unit = match.group(2).upper()
+    if unit == "TB":
+        return value * 1024
+    if unit == "MB":
+        return value / 1024
+    return value
+
+
+def parse_gpu_count(text: str) -> int | None:
+    """How many cards: "A100 x1", "8개 x 80GB", "288GB x N" (unknown -> None)."""
+    if not text:
+        return None
+    match = re.search(r"(?:^|\s)(\d+)\s*개\s*(?:x|X|\*)", text)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"[xX\*]\s*(\d+)\b", text)
+    if match:
+        return int(match.group(1))
+    return None
+
 
 class SourceError(RuntimeError):
     """A fetch or a parse that could not produce a rate card."""
@@ -321,15 +403,28 @@ def parse_aws_csv(stream: Iterator[str]) -> tuple[list[PriceRow], str]:
             if amount is None or ("gpu", instance) in seen:
                 continue
             seen.add(("gpu", instance))
+            family = instance.split(".", 1)[0]
+            count = parse_gpu_count(f"x{field(row, 'GPU')}") if field(row, "GPU") else None
+            # AWS states the memory of the whole machine ("640 GB HBM3" across
+            # eight cards). Every other provider states one card, so divide --
+            # a column where one row means per-GPU and the next means per-box
+            # cannot be compared, and comparing is what the screen is for.
+            total_memory = parse_gpu_memory_gb(field(row, "GPU Memory"))
+            per_gpu = (
+                (total_memory / count) if (total_memory is not None and count) else None
+            )
             rows.append(
                 PriceRow(
                     provider="aws", category="gpu", sku=instance, label=instance,
                     amount=amount, currency=field(row, "Currency") or "USD",
                     unit=field(row, "Unit") or "Hrs", region=AWS_REGION,
+                    gpu_model=AWS_GPU_MODEL.get(family),
+                    gpu_count=count,
+                    gpu_memory_gb=per_gpu,
                     spec={
-                        "GPU": field(row, "GPU"),
                         "vCPU": field(row, "vCPU"),
-                        "메모리": field(row, "Memory"),
+                        "시스템 메모리": field(row, "Memory"),
+                        "CPU": field(row, "Physical Processor"),
                     },
                 )
             )
@@ -473,8 +568,11 @@ def parse_nebius(markup: str) -> list[PriceRow]:
                     PriceRow(
                         provider="nebius", category="gpu", sku=name, label=name,
                         amount=amount, currency="USD", unit="GPU-hour",
+                        # Nebius names the chip and not its memory. Left blank
+                        # rather than filled from the model name.
+                        gpu_model=parse_gpu_model(name),
                         spec={
-                            "vCPU": line[1], "RAM(GB)": line[2],
+                            "vCPU": line[1], "시스템 메모리(GB)": line[2],
                             **({"기준": "from"} if _qualifier(price_cell) else {}),
                         },
                     )
@@ -570,7 +668,7 @@ def parse_kakao(document: str) -> list[PriceRow]:
                         spec = {
                             "accelerator": accelerator,
                             "vCPU": metadata.get("cpu"),
-                            "메모리(GB)": metadata.get("memory"),
+                            "시스템 메모리(GB)": metadata.get("memory"),
                         }
                         label = name
                     else:
@@ -586,6 +684,10 @@ def parse_kakao(document: str) -> list[PriceRow]:
                             provider="kakao", category=category, sku=sku, label=label,
                             amount=amount, currency="KRW",
                             unit=str(metadata.get("unit") or "시간"),
+                            # "A100 x1", "NVIDIA Tesla V100 x4" -- Kakao gives
+                            # the chip and how many, but never the memory.
+                            gpu_model=parse_gpu_model(accelerator),
+                            gpu_count=parse_gpu_count(accelerator),
                             spec={k: v for k, v in spec.items() if v},
                         )
                     )
@@ -606,6 +708,37 @@ def fetch_kakao(*, timeout: float = 30.0) -> SourceResult:
 
 _NAVER_HEAD = ("서버스펙코드", "GPU", "vCPU")
 
+# Naver heads each price table with the chip it is for: "H100 (KVM기반)",
+# "V100 (XEN기반)". The table itself never names the model, so without the
+# heading every Naver row would be a price for an unnamed card.
+# The last word before the bracket, not a run of them: the paragraph above
+# the L40S table ends "... Bare Metal Server : A100, H200 L40S (KVM기반)",
+# and a group that may span spaces swallows the sentence with it.
+_NAVER_SECTION = re.compile(r"([A-Za-z0-9]{2,20})\s*\((?:KVM|XEN)기반\)\s*$")
+
+
+def _table_headings(markup: str) -> list[str]:
+    """The visible text immediately before each table, in document order.
+
+    Aligned by position with :func:`read_tables`, which emits top-level tables
+    in the same order. When the two disagree about how many tables there are --
+    a nested table would do it -- every heading is dropped rather than paired
+    with the wrong table, because a price labelled with the chip above the
+    *previous* table is worse than one labelled with nothing.
+    """
+    stripped = _strip_noise(markup)
+    headings: list[str] = []
+    for match in re.finditer(r"<table", stripped):
+        # Generous, because this markup is far more tag than text: six
+        # thousand characters of it reduce to a couple of lines, and the
+        # heading is the last of them.
+        before = stripped[max(0, match.start() - 6000):match.start()]
+        # The window starts mid-tag, whose remains would otherwise survive
+        # tag-stripping as a line of attribute text.
+        cut = before.find(">")
+        headings.append(visible_text(before[cut + 1:] if cut >= 0 else before))
+    return headings
+
 
 def parse_naver(markup: str) -> list[PriceRow]:
     """The GPU tables on the Naver Cloud GPU server page.
@@ -620,10 +753,13 @@ def parse_naver(markup: str) -> list[PriceRow]:
     tables = read_tables(markup)
     if not tables:
         raise SourceError("the Naver Cloud GPU page carried no tables")
+    headings = _table_headings(markup)
+    if len(headings) != len(tables):
+        headings = [""] * len(tables)
 
     rows: list[PriceRow] = []
     seen: set[str] = set()
-    for table in tables:
+    for position, table in enumerate(tables):
         header = table[0] if table else []
         if len(header) < 6 or tuple(header[:3]) != _NAVER_HEAD:
             continue
@@ -631,6 +767,8 @@ def parse_naver(markup: str) -> list[PriceRow]:
             hourly = header.index("시간 요금")
         except ValueError:
             continue
+        section = _NAVER_SECTION.search(headings[position])
+        model = parse_gpu_model(section.group(1)) if section else None
         for line in table[1:]:
             if len(line) <= hourly:
                 continue
@@ -647,7 +785,11 @@ def parse_naver(markup: str) -> list[PriceRow]:
                 PriceRow(
                     provider="naver", category="gpu", sku=code, label=code,
                     amount=amount, currency="KRW", unit="시간", region="KR",
-                    spec={"GPU": line[1], "vCPU": line[2], "메모리": line[3]},
+                    gpu_model=model,
+                    # "1개 x 48GB": how many, and how much each one has.
+                    gpu_count=parse_gpu_count(line[1]),
+                    gpu_memory_gb=parse_gpu_memory_gb(line[1]),
+                    spec={"vCPU": line[2], "시스템 메모리": line[3]},
                 )
             )
     if not rows:
@@ -695,7 +837,9 @@ def parse_vessl(markup: str) -> list[PriceRow]:
                 PriceRow(
                     provider="vessl", category="gpu", sku=name, label=name,
                     amount=amount, currency="USD", unit="hr",
-                    spec={"VRAM": line[1], "아키텍처": line[2]},
+                    gpu_model=parse_gpu_model(name),
+                    gpu_memory_gb=parse_gpu_memory_gb(line[1]),
+                    spec={"아키텍처": line[2]},
                 )
             )
 

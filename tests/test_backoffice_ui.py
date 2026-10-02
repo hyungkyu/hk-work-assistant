@@ -715,3 +715,36 @@ def test_the_refresh_button_says_which_of_the_two_things_happened(
     # A provider that failed is named rather than quietly shortening the table.
     assert "에서 받지 못했습니다" in script
     assert 'id="cp-runs-body"' in html
+
+
+def test_a_drawer_pins_only_its_own_close_button(css: str) -> None:
+    """2026-10-02: 요금 히스토리 could be opened and not closed.
+
+    `.drawer .button` is a descendant rule, so it caught every button the
+    drawer's body rendered -- each 열기 in the history list stacked at the same
+    corner on top of 닫기, and the last one painted took the click. The close
+    button is a direct child of the drawer; nothing in its body is.
+    """
+    assert ".drawer > .button { position: absolute;" in css
+    assert ".drawer .button { position: absolute;" not in css
+
+
+def test_the_price_table_names_the_chip_and_its_memory(html: str, script: str) -> None:
+    """HK, 2026-10-02: h100, a100, b300 등 gpu 종류와 gpu memory 정보를 같이."""
+    assert "<th>GPU</th>" in html
+    assert "GPU 메모리" in html
+    assert "function cpGpu(" in script and "function cpGpuMemory(" in script
+    # The chip and how many of them, where the provider says how many.
+    assert "`${row.gpu_model} x${row.gpu_count}`" in script
+
+
+def test_a_memory_the_provider_did_not_publish_stays_blank(script: str) -> None:
+    """Nebius and Kakao name the chip and not its memory. A100 ships as 40GB
+    and 80GB, so filling the gap from the model name is wrong half the time."""
+    assert "return row.gpu_memory_gb ? `${cpNumber(row.gpu_memory_gb, 0)} GB` : '—';" in script
+
+
+def test_the_gpu_filter_cannot_offer_a_chip_that_is_not_there(script: str) -> None:
+    assert "(data.rows || []).filter((r) => r.gpu_model).map((r) => r.gpu_model)" in script
+    # Storage rows have no GPU at all, so the filter is not offered there.
+    assert "modelSelect.disabled = cpState.category !== 'gpu';" in script

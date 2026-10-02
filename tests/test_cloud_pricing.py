@@ -234,7 +234,9 @@ def test_naver_reads_the_hourly_won_price_off_the_gpu_table() -> None:
     found = {r.sku: r for r in rows}
     assert found["gp1ls16-g3"].amount == Decimal("4309")
     assert found["gp1ls16-g3"].currency == "KRW"
-    assert found["gp1ls16-g3"].spec["GPU"] == "1개 x 48GB"
+    # "1개 x 48GB" is two facts in one cell; they live in two columns now.
+    assert found["gp1ls16-g3"].gpu_count == 1
+    assert found["gp1ls16-g3"].gpu_memory_gb == Decimal("48")
     # The models Naver does not sell by the hour print a dash, not a zero.
     assert all(r.amount > 0 for r in rows)
 
@@ -252,7 +254,7 @@ def test_vessl_reads_the_on_demand_column_and_the_storage_cards() -> None:
     gpu = {r.sku: r for r in rows if r.category == "gpu"}
     storage = {r.sku: r for r in rows if r.category == "storage"}
     assert gpu["NVIDIA H100 SXM"].amount == Decimal("2.98")
-    assert gpu["NVIDIA H100 SXM"].spec["VRAM"] == "80GB"
+    assert gpu["NVIDIA H100 SXM"].gpu_memory_gb == Decimal("80")
     # The status chip is glued to the model name in the cell; it is not
     # part of what the machine is called.
     assert all("문의" not in sku and "바로 시작" not in sku for sku in gpu)
@@ -286,7 +288,7 @@ def test_the_aws_price_list_is_filtered_to_gpu_machines_and_storage() -> None:
     storage = {r.sku: r for r in rows if r.category == "storage"}
     assert version == "20260925174521"
     assert gpu["p5.48xlarge"].amount == Decimal("75.9552000000")
-    assert gpu["p5.48xlarge"].spec["GPU"] == "8"
+    assert gpu["p5.48xlarge"].gpu_count == 8
     assert storage["ebs-gp3"].amount == Decimal("0.0912000000")
     # Windows, dedicated tenancy, reserved terms and non-GPU machines are all
     # priced in the same file and none of them belongs on this screen.
@@ -448,3 +450,109 @@ def test_before_any_refresh_the_screen_says_so_rather_than_showing_nothing(
     assert payload["snapshot"] is None
     assert payload["rows"] == []
     assert [p["id"] for p in payload["providers"]] == list(cp.PROVIDERS)
+
+
+# --- which chip, how many, how much memory ----------------------------------
+
+
+def test_the_longer_model_name_wins_over_the_one_inside_it() -> None:
+    """GB300 is not a B300 and an L40S is not an L4."""
+    assert sources.parse_gpu_model("NVIDIA GB300 NVL72") == "GB300"
+    assert sources.parse_gpu_model("NVIDIA L40S with Intel CPU") == "L40S"
+    assert sources.parse_gpu_model("NVIDIA HGX H100") == "H100"
+
+
+def test_a_model_name_is_not_read_out_of_a_machine_code() -> None:
+    """`gp1l4-g3` is a Naver spec code that happens to contain "l4"."""
+    assert sources.parse_gpu_model("gp1l4-g3") is None
+    assert sources.parse_gpu_model("L4 (KVM기반)") == "L4"
+    # A CPU is not an accelerator, however many numbers are in its name.
+    assert sources.parse_gpu_model("AMD EPYC 7R13 Processor") is None
+
+
+def test_memory_and_count_come_off_the_shapes_the_providers_use() -> None:
+    assert sources.parse_gpu_memory_gb("80GB") == Decimal("80")
+    assert sources.parse_gpu_memory_gb("141GB HBM3e") == Decimal("141")
+    assert sources.parse_gpu_memory_gb("1개 x 48GB") == Decimal("48")
+    assert sources.parse_gpu_memory_gb("") is None
+    assert sources.parse_gpu_count("A100 x1") == 1
+    assert sources.parse_gpu_count("8개 x 80GB") == 8
+    # "288GB x N" is Nebius saying "as many as you ask for".
+    assert sources.parse_gpu_count("288GB × N") is None
+
+
+def test_aws_names_the_chip_from_the_family_and_divides_its_memory() -> None:
+    """AWS publishes the count and the memory of the whole machine, never the
+    model. p5.48xlarge is 8 x H100 and 640GB across them -- 80GB each."""
+    rows, _ = sources.parse_aws_csv(iter(fixture("aws_ec2.csv").splitlines(keepends=True)))
+    gpu = {r.sku: r for r in rows if r.category == "gpu"}
+    assert (gpu["p5.48xlarge"].gpu_model, gpu["p5.48xlarge"].gpu_count) == ("H100", 8)
+    assert gpu["p5.48xlarge"].gpu_memory_gb == Decimal("80")
+    assert gpu["g4dn.xlarge"].gpu_model == "T4"
+    assert gpu["g6e.xlarge"].gpu_model == "L40S"
+
+
+def test_an_aws_family_nobody_told_us_about_has_no_model_rather_than_a_guess() -> None:
+    assert sources.AWS_GPU_MODEL.get("p9") is None
+
+
+def test_naver_takes_the_chip_from_the_heading_above_the_table() -> None:
+    """The table never names the model; the section heading does."""
+    rows = sources.parse_naver(fixture("naver_gpu.html"))
+    found = {r.sku: r for r in rows}
+    assert found["gp1ls16-g3"].gpu_model == "L40S"
+    assert (found["gp1ls16-g3"].gpu_count, found["gp1ls16-g3"].gpu_memory_gb) == (1, Decimal("48"))
+    assert found["gp1l4-g3"].gpu_model == "L4"
+    assert all(r.gpu_model for r in rows), "every Naver row sits under a heading"
+
+
+def test_the_naver_heading_is_the_word_before_the_bracket_not_the_sentence() -> None:
+    """The paragraph above the L40S table ends "... A100, H200 L40S (KVM기반)";
+    a heading pattern that spans spaces swallows the sentence with it."""
+    rows = sources.parse_naver(fixture("naver_gpu.html"))
+    assert {r.gpu_model for r in rows} <= set(sources.GPU_MODELS)
+
+
+def test_vessl_and_nebius_and_kakao_name_the_chip_they_sell() -> None:
+    vessl = {r.sku: r for r in sources.parse_vessl(fixture("vessl.html")) if r.category == "gpu"}
+    assert vessl["NVIDIA H100 SXM"].gpu_model == "H100"
+    assert vessl["NVIDIA H100 SXM"].gpu_memory_gb == Decimal("80")
+
+    nebius = {r.sku: r for r in sources.parse_nebius(fixture("nebius.html")) if r.category == "gpu"}
+    assert nebius["NVIDIA HGX H100"].gpu_model == "H100"
+    # Nebius publishes no GPU memory, and we do not supply one.
+    assert nebius["NVIDIA HGX H100"].gpu_memory_gb is None
+
+    kakao = {r.sku: r for r in sources.parse_kakao(fixture("kakao_calc.json")) if r.category == "gpu"}
+    assert (kakao["gn1i.xlarge"].gpu_model, kakao["gn1i.xlarge"].gpu_count) == ("T4", 1)
+    assert kakao["gn1i.xlarge"].gpu_memory_gb is None
+
+
+def test_a_description_is_not_a_price_change() -> None:
+    """A provider that starts naming a chip it used to leave blank has not
+    changed its prices, and the 요금 history must not fill up with that."""
+    before = row()
+    after = row(gpu_model="H100", gpu_memory_gb=Decimal("80"))
+    assert cp.content_hash([before]) == cp.content_hash([after])
+
+
+@REQUIRES_DATABASE
+def test_a_description_still_lands_on_a_snapshot_whose_prices_held(database: str) -> None:
+    """The bug this would otherwise be: the hash is over price alone, so a
+    newly-parsed GPU model arrives on an "unchanged" refresh -- and the rows,
+    never rewritten on that branch, would keep the blank for as long as the
+    price held. Which is every row already in the table."""
+    first = cp.apply_refresh(
+        database, [cp.SourceResult(provider="nebius", rows=[row()])], fx(), now=NOW,
+    )
+    second = cp.apply_refresh(
+        database,
+        [cp.SourceResult(provider="nebius", rows=[
+            row(gpu_model="H100", gpu_count=1, gpu_memory_gb=Decimal("80"))])],
+        fx(),
+        now=NOW + timedelta(hours=1),
+    )
+    assert second["changed"] is False
+    assert second["snapshot_id"] == first["snapshot_id"]
+    shown = cp.read_current(database)["rows"][0]
+    assert (shown["gpu_model"], shown["gpu_count"], shown["gpu_memory_gb"]) == ("H100", 1, "80")

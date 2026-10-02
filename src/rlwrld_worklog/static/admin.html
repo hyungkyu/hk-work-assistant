@@ -428,6 +428,7 @@
           <div class="work-filters">
             <input id="cp-q" type="search" style="min-width:200px" placeholder="이름으로 거르기">
             <select id="cp-provider"><option value="">모든 공급자</option></select>
+            <select id="cp-model"><option value="">모든 GPU</option></select>
             <button class="button primary" id="cp-refresh">다시 가져오기</button>
             <button class="button" id="cp-history-open">히스토리</button>
           </div>
@@ -455,7 +456,8 @@
           <div style="overflow-x:auto">
             <table class="audit">
               <thead><tr>
-                <th>공급자</th><th>이름</th><th>사양</th><th>단위</th>
+                <th>공급자</th><th>이름</th><th>GPU</th><th style="text-align:right">GPU 메모리</th>
+                <th>사양</th><th>단위</th>
                 <th style="text-align:right">원가</th><th style="text-align:right">환율 적용</th>
               </tr></thead>
               <tbody id="cp-body"></tbody>
