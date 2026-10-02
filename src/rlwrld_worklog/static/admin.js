@@ -3426,6 +3426,101 @@
       });
     }
 
+    // One chip, every cloud that sells it, cheapest card-hour first. The
+    // ranking is on per_gpu_krw and on nothing else: a row we cannot put in
+    // that unit is shown at the end rather than ranked on a number it does
+    // not have.
+    function cpCompareGroups() {
+      const groups = new Map();
+      (cpState.data.rows || []).forEach((row) => {
+        if (row.category !== 'gpu' || !row.gpu_model) return;
+        if (cpState.provider && row.provider !== cpState.provider) return;
+        if (cpState.model && row.gpu_model !== cpState.model) return;
+        if (cpState.q) {
+          const hay = `${row.label} ${row.sku} ${row.gpu_model}`.toLowerCase();
+          if (!hay.includes(cpState.q)) return;
+        }
+        if (!groups.has(row.gpu_model)) groups.set(row.gpu_model, []);
+        groups.get(row.gpu_model).push(row);
+      });
+      groups.forEach((rows) => {
+        rows.sort((a, b) => {
+          const left = a.per_gpu_krw === null ? Infinity : Number(a.per_gpu_krw);
+          const right = b.per_gpu_krw === null ? Infinity : Number(b.per_gpu_krw);
+          return left - right;
+        });
+      });
+      // Chips with a comparable price first, each at its own cheapest.
+      return Array.from(groups.entries()).sort((a, b) => {
+        const left = a[1][0].per_gpu_krw === null ? Infinity : Number(a[1][0].per_gpu_krw);
+        const right = b[1][0].per_gpu_krw === null ? Infinity : Number(b[1][0].per_gpu_krw);
+        if (left !== right) return left - right;
+        return a[0].localeCompare(b[0]);
+      });
+    }
+
+    function cpCompareTable(model, rows) {
+      const table = rmEl('table', { className: 'audit' });
+      const head = rmEl('tr', {}, [
+        rmEl('th', { text: '공급자' }), rmEl('th', { text: '품목' }),
+        rmEl('th', { text: '구성' }), rmEl('th', { text: '메모리' }),
+        rmEl('th', { text: '원가', style: 'text-align:right' }),
+        rmEl('th', { text: '환율 적용', style: 'text-align:right' }),
+        rmEl('th', { text: '1장·1시간', style: 'text-align:right' }),
+      ]);
+      table.appendChild(rmEl('thead', {}, [head]));
+      const body = rmEl('tbody');
+      rows.forEach((row, index) => {
+        const tr = document.createElement('tr');
+        const name = rmEl('td', {}, [
+          // The cheapest comparable row, marked rather than left to be found.
+          index === 0 && row.per_gpu_krw !== null
+            ? rmEl('span', { className: 'kindtag added', text: '최저' })
+            : null,
+        ]);
+        name.appendChild(document.createTextNode(cpProviderLabel(row.provider)));
+        tr.appendChild(name);
+        tr.appendChild(rmEl('td', { text: row.label }));
+        tr.appendChild(rmEl('td', { text: row.gpu_count ? `x${row.gpu_count}` : '—' }));
+        tr.appendChild(rmEl('td', {
+          text: cpGpuMemory(row), style: 'white-space:nowrap',
+        }));
+        tr.appendChild(rmEl('td', {
+          text: `${cpOriginal(row)} /${row.unit}`,
+          style: 'text-align:right;white-space:nowrap',
+        }));
+        tr.appendChild(rmEl('td', {
+          text: cpWon(row.krw), style: 'text-align:right;white-space:nowrap',
+        }));
+        tr.appendChild(rmEl('td', {
+          text: row.per_gpu_krw === null ? '—' : cpWon(row.per_gpu_krw),
+          className: row.per_gpu_krw === null ? 'help' : '',
+          style: 'text-align:right;white-space:nowrap;font-weight:600',
+        }));
+        body.appendChild(tr);
+      });
+      table.appendChild(body);
+      const block = rmEl('div', { className: 'hist' }, [
+        rmEl('div', { className: 'when' }, [
+          rmEl('strong', { text: model }),
+          rmEl('span', { className: 'help', text: `${rows.length}곳` }),
+        ]),
+      ]);
+      block.appendChild(rmEl('div', { style: 'overflow-x:auto' }, [table]));
+      return block;
+    }
+
+    function cpRenderCompare() {
+      const out = rmClear($('cp-compare-out'));
+      const groups = cpCompareGroups();
+      $('cp-compare-badge').textContent = `${groups.length}종`;
+      if (!groups.length) {
+        out.appendChild(rmEl('p', { className: 'help', text: '비교할 GPU가 없습니다.' }));
+        return;
+      }
+      groups.forEach(([model, rows]) => out.appendChild(cpCompareTable(model, rows)));
+    }
+
     function cpVisible(row) {
       if (row.category !== cpState.category) return false;
       if (cpState.provider && row.provider !== cpState.provider) return false;
@@ -3469,10 +3564,24 @@
         cpState.model = modelSelect.value;
       }
       // Storage has no GPU, so the filter would silently empty the table.
-      modelSelect.disabled = cpState.category !== 'gpu';
+      modelSelect.disabled = cpState.category === 'storage';
+
+      const comparing = cpState.category === 'compare';
+      $('cp-compare-card').classList.toggle('hidden', !comparing);
+      $('cp-table-card').classList.toggle('hidden', comparing);
 
       cpRenderAsOf();
       cpRenderRuns();
+
+      if (comparing) {
+        cpRenderCompare();
+        $('cp-history-open').textContent = `히스토리${data.history && data.history.length ? ` (${data.history.length})` : ''}`;
+        $('cp-state').textContent = cpState.viewing
+          ? `지난 요금표를 보고 있습니다 (#${cpState.viewing}).` : '';
+        $('cp-foot').textContent = '';
+        cpRenderHistory();
+        return;
+      }
 
       const shown = (data.rows || []).filter(cpVisible);
       const body = rmClear($('cp-body'));

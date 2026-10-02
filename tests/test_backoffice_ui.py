@@ -746,5 +746,33 @@ def test_a_memory_the_provider_did_not_publish_stays_blank(script: str) -> None:
 
 def test_the_gpu_filter_cannot_offer_a_chip_that_is_not_there(script: str) -> None:
     assert "(data.rows || []).filter((r) => r.gpu_model).map((r) => r.gpu_model)" in script
-    # Storage rows have no GPU at all, so the filter is not offered there.
-    assert "modelSelect.disabled = cpState.category !== 'gpu';" in script
+    # Storage rows have no GPU at all, so the filter is not offered there --
+    # and only there: 칩별 비교 filters by chip too.
+    assert "modelSelect.disabled = cpState.category === 'storage';" in script
+
+
+def test_the_price_screen_can_rank_one_chip_across_the_clouds(
+    html: str, script: str
+) -> None:
+    """HK, 2026-10-02: 전체 리스트를 gpu 종류, 공급사 별로 filtering해서."""
+    assert '<button data-category="compare">칩별 비교</button>' in html
+    assert 'id="cp-compare-out"' in html
+    assert "function cpCompareGroups(" in script
+    # Grouped by chip, cheapest card-hour first.
+    assert "groups.get(row.gpu_model).push(row)" in script
+    assert "a.per_gpu_krw === null ? Infinity : Number(a.per_gpu_krw)" in script
+
+
+def test_a_row_with_no_comparable_unit_sorts_last_rather_than_first(
+    script: str,
+) -> None:
+    """Infinity, not 0: a row we cannot price per card must not win the
+    ranking by having no number at all."""
+    block = script.split("function cpCompareGroups")[1].split("function cpCompareTable")[0]
+    assert "Infinity" in block
+    assert "? 0 :" not in block
+
+
+def test_comparing_and_listing_are_not_shown_at_the_same_time(script: str) -> None:
+    assert "$('cp-compare-card').classList.toggle('hidden', !comparing);" in script
+    assert "$('cp-table-card').classList.toggle('hidden', comparing);" in script

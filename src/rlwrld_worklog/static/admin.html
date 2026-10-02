@@ -424,6 +424,7 @@
           <div class="seg" id="cp-category">
             <button data-category="gpu" class="on">GPU</button>
             <button data-category="storage">스토리지</button>
+            <button data-category="compare">칩별 비교</button>
           </div>
           <div class="work-filters">
             <input id="cp-q" type="search" style="min-width:200px" placeholder="이름으로 거르기">
@@ -451,7 +452,14 @@
             </table>
           </div>
         </div>
-        <div class="card">
+        <div class="card" id="cp-compare-card" style="margin-bottom:16px">
+          <div class="card-header"><h2>칩별 비교</h2><span class="badge" id="cp-compare-badge">-</span></div>
+          <p class="help">같은 칩을 파는 곳을 <strong>GPU 1장·1시간</strong> 원화 단가로 줄 세웁니다.
+            AWS는 여덟 장을 한 줄로 파는데 Nebius는 한 장씩 팔아서, 머신 단가를 그대로 늘어놓으면
+            포장 차이가 가격 차이처럼 보입니다. 장당으로 환산할 수 없는 줄은 비워 둡니다.</p>
+          <div id="cp-compare-out"></div>
+        </div>
+        <div class="card" id="cp-table-card">
           <div class="card-header"><h2 id="cp-table-title">요금</h2><span class="badge" id="cp-count-badge">-</span></div>
           <div style="overflow-x:auto">
             <table class="audit">

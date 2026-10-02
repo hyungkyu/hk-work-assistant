@@ -571,6 +571,9 @@ def parse_nebius(markup: str) -> list[PriceRow]:
                         # Nebius names the chip and not its memory. Left blank
                         # rather than filled from the model name.
                         gpu_model=parse_gpu_model(name),
+                        # The unit is literally "GPU-hour": this price buys one
+                        # card for an hour, whatever the host machine holds.
+                        gpu_count=1,
                         spec={
                             "vCPU": line[1], "시스템 메모리(GB)": line[2],
                             **({"기준": "from"} if _qualifier(price_cell) else {}),
@@ -838,6 +841,11 @@ def parse_vessl(markup: str) -> list[PriceRow]:
                     provider="vessl", category="gpu", sku=name, label=name,
                     amount=amount, currency="USD", unit="hr",
                     gpu_model=parse_gpu_model(name),
+                    # Per card. VESSL's own calculator treats "GPU 수량" as a
+                    # separate multiplier on this rate -- its default estimate
+                    # is $2.98 x 730h for one H100 -- so the listed hourly
+                    # figure buys one card, not a machine full of them.
+                    gpu_count=1,
                     gpu_memory_gb=parse_gpu_memory_gb(line[1]),
                     spec={"아키텍처": line[2]},
                 )

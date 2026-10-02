@@ -556,3 +556,61 @@ def test_a_description_still_lands_on_a_snapshot_whose_prices_held(database: str
     assert second["snapshot_id"] == first["snapshot_id"]
     shown = cp.read_current(database)["rows"][0]
     assert (shown["gpu_model"], shown["gpu_count"], shown["gpu_memory_gb"]) == ("H100", 1, "80")
+
+
+# --- comparing five clouds on one unit --------------------------------------
+
+
+def test_a_machine_price_is_divided_by_the_cards_it_buys() -> None:
+    """AWS sells eight H100s on one invoice line and Nebius sells one. Putting
+    the two hourly figures side by side makes packaging look like price."""
+    assert cp.per_gpu_hour(Decimal("75.9552"), "Hrs", 8) == Decimal("9.4944")
+    assert cp.per_gpu_hour(Decimal("3.85"), "GPU-hour", 1) == Decimal("3.85")
+    assert cp.per_gpu_hour(Decimal("4309"), "시간", 1) == Decimal("4309")
+
+
+def test_a_row_we_cannot_put_in_that_unit_has_no_number_rather_than_a_guess() -> None:
+    # Count unknown: dividing by an assumed 1 would publish a machine price
+    # as a card price, which is the exact error the column exists to prevent.
+    assert cp.per_gpu_hour(Decimal("10"), "Hrs", None) is None
+    assert cp.per_gpu_hour(Decimal("10"), "Hrs", 0) is None
+    # Storage is a real price and not rankable against a GPU-hour.
+    assert cp.per_gpu_hour(Decimal("0.0912"), "GB-Mo", 1) is None
+
+
+def test_the_comparison_figure_reaches_the_screen_in_won() -> None:
+    payload = cp.build_payload(
+        snapshot={"id": 1, "taken_at": NOW, "refreshed_at": NOW, "fx_rate": Decimal("1360"),
+                  "fx_base": "USD", "fx_quote": "KRW", "fx_as_of": NOW, "fx_source": "t"},
+        rows=[{"provider": "aws", "category": "gpu", "sku": "p5.48xlarge",
+               "label": "p5.48xlarge", "amount": Decimal("75.9552"), "currency": "USD",
+               "unit": "Hrs", "region": None, "spec": {}, "gpu_model": "H100",
+               "gpu_count": 8, "gpu_memory_gb": Decimal("80")}],
+    )
+    row = payload["rows"][0]
+    assert row["per_gpu"] == "9.4944"
+    assert row["per_gpu_krw"] == "12912.38"     # 9.4944 * 1360
+    # The whole-machine figures are still there beside it.
+    assert row["krw"] == "103299.07"
+
+
+def test_a_round_memory_keeps_its_zero() -> None:
+    """80 rendered as "8" for as long as the value came from a parser rather
+    than from a numeric(10,2) column that padded it back."""
+    payload = cp.build_payload(
+        snapshot=None,
+        rows=[{"provider": "vessl", "category": "gpu", "sku": "H100", "label": "H100",
+               "amount": Decimal("2.98"), "currency": "USD", "unit": "hr",
+               "gpu_memory_gb": Decimal("80")}],
+    )
+    assert payload["rows"][0]["gpu_memory_gb"] == "80"
+
+
+def test_nebius_and_vessl_quote_one_card_and_say_so() -> None:
+    """Both publish a per-card rate -- Nebius in the unit itself, VESSL in a
+    calculator that multiplies the listed figure by a separate 수량. Without a
+    count neither could be compared at all."""
+    nebius = {r.sku: r for r in sources.parse_nebius(fixture("nebius.html")) if r.category == "gpu"}
+    assert nebius["NVIDIA HGX H100"].gpu_count == 1
+    vessl = {r.sku: r for r in sources.parse_vessl(fixture("vessl.html")) if r.category == "gpu"}
+    assert vessl["NVIDIA H100 SXM"].gpu_count == 1

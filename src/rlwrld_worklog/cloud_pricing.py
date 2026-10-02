@@ -312,9 +312,44 @@ def carry_forward(
 # --------------------------------------------------------------- the payload
 
 
+# The units an hourly rate is quoted in. A GiB-month is a real price and a
+# real column, but it is not a thing you can rank against a GPU-hour.
+_HOURLY_UNITS = ("hr", "hrs", "hour", "gpu-hour", "시간")
+
+
+def is_hourly(unit: str) -> bool:
+    return str(unit).strip().lower() in _HOURLY_UNITS
+
+
+def per_gpu_hour(
+    amount: Decimal, unit: str, gpu_count: int | None
+) -> Decimal | None:
+    """What one card costs for one hour, or None when that cannot be said.
+
+    The only unit on which five clouds can be compared. AWS quotes a machine
+    (`p5.48xlarge` is eight H100s on one invoice line) while Nebius quotes a
+    card, so putting the two hourly figures side by side makes an eight-fold
+    packaging difference look like an eight-fold price difference.
+
+    None rather than a guess when the count is unknown or the price is not by
+    the hour: a blank says "we cannot compare this row", which is true, and a
+    number here would be read as a comparison that had been made.
+    """
+    if not gpu_count or gpu_count <= 0 or not is_hourly(unit):
+        return None
+    return Decimal(str(amount)) / gpu_count
+
+
 def _row_payload(row: Mapping[str, Any], fx: FxRate | None) -> dict[str, Any]:
     amount = Decimal(str(row["amount"]))
     converted = fx.convert(amount, str(row["currency"])) if fx else None
+    count = row.get("gpu_count")
+    unit_price = per_gpu_hour(amount, str(row["unit"]), count)
+    per_gpu_krw = (
+        fx.convert(unit_price, str(row["currency"]))
+        if (fx and unit_price is not None)
+        else None
+    )
     return {
         "provider": row["provider"],
         "category": row["category"],
@@ -325,10 +360,17 @@ def _row_payload(row: Mapping[str, Any], fx: FxRate | None) -> dict[str, Any]:
         "gpu_model": row.get("gpu_model"),
         "gpu_count": row.get("gpu_count"),
         # A decimal as a string, like every other number here: 141.00 and
-        # 141 are the same memory, and 0.5 of a GB is not a thing we invent.
+        # 141 are the same memory.
+        #
+        # Formatted to two places *before* the zeros are stripped, so there is
+        # always a decimal point to stop at. Stripping "80" directly gives "8",
+        # and the only reason that never reached the screen is that the column
+        # is numeric(10,2) and Postgres hands back "80.00" -- a correctness
+        # that belonged to the schema rather than to this function, and that
+        # any caller passing a freshly parsed row would not have had.
         "gpu_memory_gb": (
             None if row.get("gpu_memory_gb") is None
-            else f"{Decimal(str(row['gpu_memory_gb'])):f}".rstrip("0").rstrip(".")
+            else f"{Decimal(str(row['gpu_memory_gb'])):.2f}".rstrip("0").rstrip(".")
         ),
         "unit": row["unit"],
         # The 원가, as a string: a price is a decimal, and JSON numbers are
@@ -337,6 +379,9 @@ def _row_payload(row: Mapping[str, Any], fx: FxRate | None) -> dict[str, Any]:
         "amount": amount_key(amount).rstrip("0").rstrip(".") or "0",
         "currency": row["currency"],
         "krw": (f"{converted:.2f}" if converted is not None else None),
+        # One card, one hour -- the figure the comparison ranks on.
+        "per_gpu": (None if unit_price is None else f"{unit_price:.4f}"),
+        "per_gpu_krw": (None if per_gpu_krw is None else f"{per_gpu_krw:.2f}"),
     }
 
 

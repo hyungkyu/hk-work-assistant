@@ -61,6 +61,26 @@ HK 지시(2026-09-30):
 가속기라 이름은 적는다 — 값이 붙은 행이 이름 없이 비어 있으면 파서가 깨진
 것처럼 읽힌다.
 
+### 칩별 비교 — GPU 1장·1시간
+
+화면의 세 번째 탭. 같은 칩을 파는 곳을 **GPU 1장·1시간 원화 단가**로 줄 세운다.
+
+이 단위가 아니면 비교가 안 된다. AWS `p5.48xlarge` 는 H100 여덟 장이 한 줄이고
+Nebius 는 한 장씩 판다. 머신 단가를 그대로 늘어놓으면 **포장 차이가 가격 차이로
+보인다**. 그래서 `per_gpu_hour = 값 / gpu_count` 로 맞춘다.
+
+| 공급자 | 고시 단위 | 환산 |
+| --- | --- | --- |
+| AWS | 머신 시간당 | ÷ `GPU` 개수 |
+| Naver·Kakao | 머신 시간당 | ÷ 개수 |
+| Nebius | **GPU-hour** | 그대로 (단위가 장당이라고 말한다) |
+| VESSL | 시간당, 장당 | 그대로 (계산기가 「GPU 수량」을 별도 곱셈 인자로 둔다) |
+
+개수를 모르거나 시간당 요금이 아니면 **비운다.** 1장이라고 가정하고 나누면
+머신 가격을 장당 가격으로 공개하게 된다 — 이 칸이 막으려는 바로 그 잘못이다.
+비교 불가 행은 정렬에서 맨 뒤로 보낸다(0 이 아니라 Infinity). 숫자가 없다고
+1등이 되면 안 된다.
+
 ### 설명은 요금 이력이 아니다
 
 `content_hash` 는 **값만** 본다. 공급자가 전에 비워 두던 모델명을 적기 시작한
@@ -143,7 +163,7 @@ HK 지시(2026-09-30):
 | `src/rlwrld_worklog/cloud_pricing_sources.py` | 다섯 어댑터와 환율 (네트워크) |
 | `src/rlwrld_worklog/cloud_pricing_web.py` | 라우트 |
 | `static/admin.{html,js}` | 화면 |
-| `tests/test_cloud_pricing.py` | 37개 |
+| `tests/test_cloud_pricing.py` | 43개 |
 | `tests/fixtures/cloud_pricing/` | 실제 페이지에서 잘라낸 고정 입력 |
 
 라우트는 전부 `require_super_admin_session`. GPU-hour 단가는 협상 카드라
