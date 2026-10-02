@@ -573,30 +573,6 @@ def test_the_bookmark_routes_are_mounted() -> None:
     assert {"/api/v1/admin/bookmarks", "/api/v1/admin/bookmarks/{bookmark_id}"} <= paths
 
 
-def test_a_screen_another_session_is_building_is_not_reachable_yet(html: str) -> None:
-    """A menu entry lands before the screen behind it does, on purpose.
-
-    HK, 2026-10-01: 메뉴 생성은 네가 하고, 생성된 메뉴 내에서의 수정은 다른
-    이들이. That removes the collision -- two sessions adding menu entries
-    would both rewrite the same list and the same assertion, and whichever
-    landed second would turn main red.
-
-    The cost of putting the entry in first is a button to a page that says
-    준비 중, so it ships disabled. The session that builds the screen removes
-    the attribute as its last step.
-    """
-    # GPU 가격 came off this list on 2026-10-01, when the screen behind it
-    # landed and the attribute came off with it -- which is the step this
-    # test exists to make deliberate rather than accidental.
-    for page in ("menu",):
-        entry = re.search(rf'<button data-page="{page}"[^>]*>', html)
-        assert entry, f"no menu entry for {page}"
-        assert "disabled" in entry.group(0), (
-            f"{page} is reachable before its screen exists"
-        )
-        assert f'id="page-{page}"' in html, "the section exists for it to fill"
-
-
 def test_each_unbuilt_screen_has_a_region_of_its_own(html: str) -> None:
     """Two sessions in one file, with a line that says whose is whose.
 
@@ -776,3 +752,33 @@ def test_a_row_with_no_comparable_unit_sorts_last_rather_than_first(
 def test_comparing_and_listing_are_not_shown_at_the_same_time(script: str) -> None:
     assert "$('cp-compare-card').classList.toggle('hidden', !comparing);" in script
     assert "$('cp-table-card').classList.toggle('hidden', comparing);" in script
+
+
+# ---------------------------------------------------------------- 준비 중 표시
+
+def test_a_screen_that_exists_is_not_still_marked_as_coming_soon() -> None:
+    """`disabled` is a promise that the screen is not there yet.
+
+    The menu entries get added first, as placeholders, so the arrangement is
+    settled before the screen lands. The failure that costs a person their
+    time is forgetting to unlock one when the screen does land: the button is
+    in the menu, it is visibly greyed, and it looks like the work was never
+    done. That happened to 메뉴 편집 -- shipped, deployed, unreachable.
+
+    So: a button is allowed to be disabled only while nothing answers it.
+    """
+    html = (STATIC / "admin.html").read_text(encoding="utf-8")
+    built = set(re.findall(r'<section[^>]*id="page-([a-z-]+)"', html))
+
+    disabled = {
+        match.group("page")
+        for match in re.finditer(
+            r'<button\s+data-page="(?P<page>[a-z-]+)"(?P<attrs>[^>]*)>', html, re.S
+        )
+        if "disabled" in match.group("attrs")
+    }
+
+    assert not (disabled & built), (
+        "이 화면은 만들어져 있는데 메뉴에서 '준비 중'으로 잠겨 있습니다: "
+        f"{sorted(disabled & built)}"
+    )
