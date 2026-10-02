@@ -256,9 +256,16 @@
       border-left: 1px solid var(--line); z-index: 40; padding: 22px; overflow-y: auto;
       box-shadow: -20px 0 60px #0008; }
     .drawer h2 { font-size: 17px; margin: 0 0 4px; }
-    .drawer .button { position: absolute; right: 18px; top: 18px; }
+    /* The drawer's OWN close button, pinned to its corner -- a direct child
+       only. As a descendant rule this also caught every button a drawer's
+       body renders, stacking them all at the same corner on top of 닫기,
+       where the last one painted took the click and the drawer could not be
+       closed at all (2026-10-02, the 요금 히스토리 drawer). */
+    .drawer > .button { position: absolute; right: 18px; top: 18px; }
     .hist { border: 1px solid var(--line); border-radius: 10px; padding: 12px 13px; margin-top: 12px; background: var(--panel); }
     .hist .when { font-size: 12px; color: var(--muted); margin-bottom: 7px; display: flex; gap: 10px; align-items: baseline; }
+    /* Now that it is in the flow rather than pinned to the drawer corner. */
+    .hist .when .button { margin-left: auto; }
     .hist ul { list-style: none; margin: 0; padding: 0; }
     .hist li { font-size: 12.5px; padding: 4px 0; }
     .kindtag { display: inline-block; border-radius: 5px; padding: 1px 6px; font-size: 10.5px; margin-right: 6px; }
