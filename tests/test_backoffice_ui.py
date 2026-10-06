@@ -618,7 +618,10 @@ def test_a_screen_the_arrangement_does_not_mention_still_appears(script: str) ->
     block = script.split("async function applyMenuArrangement")[1].split(
         "async function loadSchedules"
     )[0]
-    assert "if (buttons.size)" in block, "the leftovers are placed, not dropped"
+    # The condition moved when hidden screens stopped being treated as new
+    # (2026-10-06): what is placed at the end is now the screens the
+    # arrangement has never heard of, not everything it did not draw.
+    assert "if (added.length)" in block, "the leftovers are placed, not dropped"
 
 
 def test_the_menu_falls_back_to_the_markup_when_the_server_cannot_say(
@@ -782,3 +785,70 @@ def test_a_screen_that_exists_is_not_still_marked_as_coming_soon() -> None:
         "이 화면은 만들어져 있는데 메뉴에서 '준비 중'으로 잠겨 있습니다: "
         f"{sorted(disabled & built)}"
     )
+
+
+# ------------------------------------------------- 메뉴 배치가 화면에 닿는가
+
+def _apply_menu_block() -> str:
+    source = (STATIC / "admin.js").read_text(encoding="utf-8")
+    start = source.index("async function applyMenuArrangement")
+    return source[start : source.index("\n    }", start)]
+
+
+def test_a_hidden_screen_leaves_the_menu_instead_of_moving_to_the_bottom() -> None:
+    """HK, 2026-10-06: 자물쇠가 보임, 안보임도 안 바뀌어.
+
+    It was doing something, just not the something it said. `as_groups`
+    leaves hidden screens out of the groups, and the client treated anything
+    missing from the groups as a screen added since the arrangement was
+    saved -- so every 숨김 entry was faithfully put back, at the end of the
+    menu. Three of them were sitting there, which also made the order look
+    wrong.
+
+    The fix needs both lists: the groups say what to draw, `pages` says what
+    the arrangement has heard of. Only a screen in neither is new.
+    """
+    block = _apply_menu_block()
+    assert "payload.pages" in block and "known" in block, (
+        "the client must be able to tell hidden apart from new"
+    )
+    assert "if (!known.has(page)) added.push(button)" in block
+
+
+def test_opening_a_screen_takes_the_owner_only_mark_off_its_button() -> None:
+    """Otherwise 공개 lets colleagues through a door they cannot see.
+
+    `data-requires="super_admin"` is what `applyRoleVisibility` hides a
+    button by. Opening a screen in the routes while leaving the attribute on
+    would be the most confusing possible half-measure: allowed, invisible.
+    """
+    block = _apply_menu_block()
+    assert "removeAttribute('data-requires')" in block
+    assert "setAttribute('data-requires', 'super_admin')" in block, (
+        "re-locking a screen has to put the mark back"
+    )
+
+
+def test_the_menu_buttons_survive_being_hidden() -> None:
+    """숨김 must not be a one-way door.
+
+    Rebuilding the list from the DOM on each application would mean a button
+    removed from the menu is gone from the only place the next application
+    looks for it -- so un-hiding would do nothing until a page reload, and
+    the person would reasonably read that as the save failing.
+    """
+    source = (STATIC / "admin.js").read_text(encoding="utf-8")
+    assert "const menuButtons = new Map();" in source
+    assert "const buttons = new Map(menuButtons);" in _apply_menu_block()
+
+
+def test_the_lock_mark_goes_away_with_the_rule_that_drew_it() -> None:
+    """The 🔒 is a child element, not styling on the attribute.
+
+    So removing `data-requires` from an opened screen leaves the mark
+    behind, telling the owner it is 나만 보이는 화면 while the whole company
+    can open it. The most believable kind of wrong: everything looks
+    consistent except the fact.
+    """
+    source = (STATIC / "admin.js").read_text(encoding="utf-8")
+    assert "button[data-page]:not([data-requires]) .lock" in source

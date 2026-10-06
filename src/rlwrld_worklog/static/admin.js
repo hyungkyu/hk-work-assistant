@@ -22,6 +22,13 @@
           existing.remove();
         }
       });
+      // A screen opened in the menu editor loses the attribute above, but
+      // the 🔒 already drawn on it is a child element and would stay --
+      // saying "나만 보이는 화면" on a screen the whole company can now
+      // open. Swept here rather than where the attribute is removed, so
+      // the mark and the rule that draws it live in one place.
+      document.querySelectorAll('button[data-page]:not([data-requires]) .lock')
+        .forEach((mark) => mark.remove());
       // A group heading with every entry under it hidden is a label for
       // nothing, and reads as a screen that failed to load.
       document.querySelectorAll('.nav-group').forEach((group) => {
@@ -2476,6 +2483,9 @@
     // adding screens on the same afternoon.
     let menuDraft = [];
 
+    // page_id -> the one <button> for that screen, from the markup.
+    const menuButtons = new Map();
+
     async function loadMenu() {
       const line = $('menu-state');
       try {
@@ -2622,10 +2632,23 @@
       }
       if (!payload || payload.source !== 'database') return;
       const nav = $('nav');
-      const buttons = new Map(
-        Array.from(nav.querySelectorAll('button[data-page]'))
-          .map((button) => [button.dataset.page, button])
-      );
+      // Held across applications, because a hidden screen's button is not in
+      // the menu any more and rebuilding from the DOM would never find it
+      // again: 숨김 would be a one-way door until the page was reloaded.
+      // The elements are kept, not re-created, so every listener bound at
+      // startup survives.
+      Array.from(nav.querySelectorAll('button[data-page]')).forEach((button) => {
+        if (!menuButtons.has(button.dataset.page)) {
+          menuButtons.set(button.dataset.page, button);
+        }
+      });
+      const buttons = new Map(menuButtons);
+      // Every screen the arrangement knows about, whether or not it draws
+      // one. `groups` leaves out the hidden ones, so without this list a
+      // hidden screen is indistinguishable from a screen added this morning
+      // -- and the leftovers rule below would put it back at the bottom of
+      // the menu, which is what 숨김 looked like it was doing: nothing.
+      const known = new Set((payload.pages || []).map((page) => page.page_id));
       const rebuilt = document.createDocumentFragment();
       (payload.groups || []).forEach((group) => {
         const wrapper = document.createElement('div');
@@ -2642,17 +2665,34 @@
           // The label is the one thing taken from the server, and only when
           // somebody set it; an empty one would blank a working button.
           if (entry.label) button.textContent = entry.label;
+          // 공개 has to reach the markup, not just the routes. This attribute
+          // is what hides a button from everyone but the owner, so leaving it
+          // on an opened screen would mean colleagues are allowed through the
+          // door and cannot see it. Written both ways, because re-locking a
+          // screen has to put it back.
+          if (entry.requires === 'company_user') {
+            button.removeAttribute('data-requires');
+          } else if (entry.owner_only) {
+            button.setAttribute('data-requires', 'super_admin');
+          }
           wrapper.appendChild(button);
           buttons.delete(entry.page_id);
         });
         if (wrapper.querySelector('button')) rebuilt.appendChild(wrapper);
       });
-      // Anything the arrangement did not mention is a screen somebody added
-      // since it was saved. It goes to the end rather than disappearing.
-      if (buttons.size) {
+      // What is left over is one of two things, and they are opposites.
+      // A screen the arrangement knows but did not draw is hidden on
+      // purpose, so it goes nowhere. A screen it has never heard of was
+      // added since the arrangement was saved, and goes to the end rather
+      // than disappearing.
+      const added = [];
+      buttons.forEach((button, page) => {
+        if (!known.has(page)) added.push(button);
+      });
+      if (added.length) {
         const wrapper = document.createElement('div');
         wrapper.className = 'nav-group';
-        buttons.forEach((button) => wrapper.appendChild(button));
+        added.forEach((button) => wrapper.appendChild(button));
         rebuilt.appendChild(wrapper);
       }
       nav.textContent = '';
