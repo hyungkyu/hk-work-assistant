@@ -43,6 +43,7 @@
           <button data-page="search" data-requires="super_admin">검색</button>
           <button data-page="server" data-requires="super_admin">서버 상태</button>
           <button data-page="schedules" data-requires="super_admin">스케줄</button>
+          <button data-page="release" data-requires="super_admin">릴리즈 노트</button>
         </div>
         <div class="nav-group">
           <span class="nav-label">설정</span>
@@ -122,7 +123,29 @@
         <div class="work-board" id="work-board"></div>
       </section>
 
-      <section class="page" id="page-roadmap">
+            <!-- 릴리즈 노트. HK, 2026-10-06: 백오피스에 release note 메뉴를 두고,
+           거기에 배포된 현황을 볼 수 있게 해줘.
+
+           Reads only. Deploying is the batch's job, and a button here that
+           could deploy would be a second authority over what production
+           runs. -->
+      <section class="page" id="page-release">
+        <h1>릴리즈 노트</h1>
+        <p class="lead">지금 돌고 있는 버전과, 그 전에 무엇이 언제 올라갔는지. 배포 점검 배치가 10분마다 남기는 기록을 그대로 읽습니다 — 바뀐 때만 한 줄씩 쌓입니다.</p>
+        <article class="card">
+          <header class="card-head">
+            <div>
+              <div class="label">지금 도는 버전</div>
+              <div class="metric" id="release-current">-</div>
+            </div>
+            <span class="badge wait" id="release-badge">조회 중</span>
+          </header>
+          <p class="muted" id="release-state">불러오는 중입니다.</p>
+          <div id="release-list"></div>
+        </article>
+      </section>
+
+<section class="page" id="page-roadmap">
         <h1 id="roadmap-title">로드맵</h1>
         <p class="lead"><span id="roadmap-sub"></span> · <a id="roadmap-source" target="_blank" rel="noreferrer"></a></p>
         <div class="collection-toolbar">

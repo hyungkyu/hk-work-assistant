@@ -1770,6 +1770,7 @@
       if (page === 'unmapped') loadUnmapped();
       if (page === 'pairs') loadPairs({ reset: true });
       if (page === 'menu') loadMenu();
+      if (page === 'release') loadReleaseNotes();
       if (page === 'person') { if (!$('person-day').value) $('person-day').value = yesterdayKST(); }
       if (page === 'audit') loadAudit();
       if (page === 'work') { loadWork(); startWorkPolling(); }
@@ -2623,6 +2624,74 @@
     // regrouped here, never created. A menu built from scratch out of server
     // data could name a page that has no section, and the click would open
     // nothing; moving what is already there cannot.
+    // 릴리즈 노트. HK, 2026-10-06: 배포 히스토리를 알아야 내가 딴 이야기를
+    // 안할거같아. Three times in two days he reasoned from a version that had
+    // already been replaced, because the only record was overwritten every
+    // ten minutes.
+    async function loadReleaseNotes() {
+      const line = $('release-state');
+      const badge = $('release-badge');
+      try {
+        const payload = await api('/api/v1/admin/release-notes');
+        renderReleaseNotes(payload);
+        badge.textContent = payload.current ? (payload.current.outcome_label || '-') : '기록 없음';
+        badge.className = payload.current && payload.current.outcome === 'current'
+          ? 'badge ok'
+          : (payload.current && payload.current.landed ? 'badge ok' : 'badge wait');
+        line.textContent = payload.reason
+          || `배포로 이어진 기록 ${payload.landed}건을 포함해 최근 ${payload.entries.length}건입니다.`;
+      } catch (error) {
+        line.textContent = `불러오지 못했습니다: ${error.message}`;
+        badge.textContent = '조회 실패';
+        badge.className = 'badge warn';
+      }
+    }
+
+    function renderReleaseNotes(payload) {
+      const current = payload.current;
+      // The version, then what it was. A seven-character sha on its own is
+      // the thing nobody can act on.
+      $('release-current').textContent = current
+        ? `${current.head}${current.subject ? ` · ${current.subject}` : ''}`
+        : '-';
+
+      const list = $('release-list');
+      list.textContent = '';
+      (payload.entries || []).forEach((entry) => {
+        const row = document.createElement('div');
+        row.className = 'release-row';
+
+        const when = document.createElement('span');
+        when.className = 'release-when';
+        when.textContent = entry.at_kst || '-';
+
+        const sha = document.createElement('code');
+        sha.className = 'release-sha';
+        sha.textContent = entry.head || '-';
+
+        const subject = document.createElement('span');
+        subject.className = 'release-subject';
+        // The commit subject is the release note. They are already one line
+        // each, written for a person; a second document kept by hand would
+        // be the one that goes stale.
+        subject.textContent = entry.subject || '(제목 없음)';
+
+        const outcome = document.createElement('span');
+        outcome.className = `badge ${entry.landed ? 'ok' : 'wait'}`;
+        outcome.textContent = entry.outcome_label || entry.outcome || '-';
+        if (entry.detail) outcome.title = entry.detail;
+
+        row.append(when, sha, subject, outcome);
+        list.appendChild(row);
+      });
+      if (!list.children.length) {
+        const empty = document.createElement('p');
+        empty.className = 'muted';
+        empty.textContent = '아직 쌓인 배포 기록이 없습니다.';
+        list.appendChild(empty);
+      }
+    }
+
     async function applyMenuArrangement() {
       let payload;
       try {

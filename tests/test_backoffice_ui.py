@@ -80,6 +80,7 @@ def test_the_menu_is_grouped_and_ordered_as_the_operator_asked() -> None:
                 ("search", "검색"),
                 ("server", "서버 상태"),
                 ("schedules", "스케줄"),
+                ("release", "릴리즈 노트"),
             ],
         ),
         (
@@ -301,6 +302,7 @@ def test_the_existing_backoffice_and_work_routes_are_all_still_served() -> None:
         "/api/v1/admin/work/history",
         # The left menu's arrangement, read on every page load.
         "/api/v1/admin/menu",
+        "/api/v1/admin/release-notes",
         "/api/v1/timeline",
         "/healthz",
         # The review screen is only a screen if its routes are mounted; the

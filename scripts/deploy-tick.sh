@@ -25,11 +25,61 @@ outcome="idle"
 detail=""
 head_sha=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
+# Where the record of what was deployed lives.
+#
+# HK, 2026-10-06: 배포 히스토리를 알아야 내가 딴 이야기를 안할거같아.
+#
+# Under the data root, not in the repository: the app container mounts that
+# read-only and does not mount this checkout, so this is the only place a
+# file written here can be read by the 릴리즈 노트 screen. It is also the
+# honest home for it -- a deploy log is a record of what happened, not source.
+deploy_dir="${RAW_ARCHIVE_HOST_ROOT:-/data/rlwrld-worklog}/deploy"
+
 finish() {
-  printf '{"started_at":"%s","finished_at":"%s","outcome":"%s","head":"%s","detail":%s}\n' \
-    "$started" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$outcome" "$head_sha" \
-    "$(printf '%s' "$detail" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo '""')" \
-    > "$state"
+  finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  subject=$(git log -1 --format=%s "$head_sha" 2>/dev/null || true)
+  line=$(
+    STARTED="$started" FINISHED="$finished" OUTCOME="$outcome" HEAD_SHA="$head_sha" \
+    SUBJECT="$subject" DETAIL="$detail" python3 -c '
+import json, os
+print(json.dumps({
+    "started_at": os.environ["STARTED"],
+    "finished_at": os.environ["FINISHED"],
+    "outcome": os.environ["OUTCOME"],
+    "head": os.environ["HEAD_SHA"],
+    "subject": os.environ["SUBJECT"],
+    "detail": os.environ["DETAIL"],
+}, ensure_ascii=False))' 2>/dev/null
+  )
+  # The repository copy stays exactly as it was -- scripts and sessions read
+  # it, and this change is not the place to move them.
+  if [ -n "$line" ]; then
+    printf '%s\n' "$line" > "$state"
+  else
+    printf '{"started_at":"%s","finished_at":"%s","outcome":"%s","head":"%s","detail":""}\n' \
+      "$started" "$finished" "$outcome" "$head_sha" > "$state"
+  fi
+
+  if [ -n "$line" ] && mkdir -p "$deploy_dir" 2>/dev/null; then
+    printf '%s\n' "$line" > "$deploy_dir/current.json" 2>/dev/null || true
+    # Appended only when something changed. This batch runs every ten
+    # minutes and almost always finds the running image already correct;
+    # logging those would bury the four lines a day that mean something
+    # under a hundred that do not.
+    previous=$(tail -n 1 "$deploy_dir/deploy-log.jsonl" 2>/dev/null || true)
+    was=$(
+      PREVIOUS="$previous" python3 -c '
+import json, os
+try:
+    row = json.loads(os.environ["PREVIOUS"])
+    print(row.get("head", "") + " " + row.get("outcome", ""))
+except Exception:
+    print("")' 2>/dev/null
+    )
+    if [ "$was" != "$head_sha $outcome" ]; then
+      printf '%s\n' "$line" >> "$deploy_dir/deploy-log.jsonl" 2>/dev/null || true
+    fi
+  fi
   exit 0
 }
 

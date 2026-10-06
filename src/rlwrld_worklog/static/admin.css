@@ -278,6 +278,11 @@
     #page-mapping .audit td .button { white-space: nowrap; padding: 7px 12px; }
     #page-mapping .audit td:nth-child(6) { white-space: nowrap; color: var(--muted); }
     #page-mapping .audit th:first-child, #page-mapping .audit td:first-child { min-width: 180px; }
+    .release-row { display: grid; grid-template-columns: 130px 80px 1fr auto; gap: 10px; align-items: center; padding: 7px 8px; border-radius: 8px; background: var(--panel-2); margin-bottom: 6px; }
+    .release-when { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .release-sha { color: var(--muted); font-size: 12px; }
+    .release-subject { font-size: 14px; }
+    @media (max-width: 900px) { .release-row { grid-template-columns: 1fr auto; } .release-subject { grid-column: 1 / -1; } }
     .menu-row { display: grid; grid-template-columns: 150px 1fr 180px auto auto auto auto; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 8px; background: var(--panel-2); margin-bottom: 6px; }
     .menu-row input { padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text); }
     .menu-group { color: var(--muted); }

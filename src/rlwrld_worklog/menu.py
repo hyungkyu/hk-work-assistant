@@ -53,6 +53,7 @@ TOGGLABLE: dict[str, str] = {
     "org": "org",
     "person": "org",
     "bookmarks": "bookmarks",
+    "release": "release",
 }
 
 # Screens that are already open today, and must stay open when nobody has

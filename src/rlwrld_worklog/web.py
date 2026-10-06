@@ -12,6 +12,7 @@ from .admin_web import require_company_session, router as admin_router
 from .cloud_pricing_web import admin_router as cloud_pricing_router
 from .collection_web import router as collection_router
 from .menu_web import router as menu_router
+from .release_web import router as release_router
 from .org_web import router as org_router
 from .roadmap_web import admin_router as roadmap_admin_router, router as roadmap_router
 from .schedule_web import router as schedule_router
@@ -30,6 +31,7 @@ app.include_router(collection_router)
 app.include_router(cloud_pricing_router)
 app.include_router(org_router)
 app.include_router(menu_router)
+app.include_router(release_router)
 app.include_router(roadmap_router)
 app.include_router(roadmap_admin_router)
 app.include_router(schedule_router)
