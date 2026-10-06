@@ -833,9 +833,17 @@ def parse_vessl(markup: str) -> list[PriceRow]:
             amount = parse_amount(line[column])
             if amount is None or amount == 0:
                 continue
-            # The model cell carries a status chip glued to the name
-            # ("NVIDIA B300문의"); the price is what identifies the row.
-            name = re.sub(r"(문의|바로 시작)$", "", line[0]).strip()
+            # The model cell carries a status chip glued straight onto the
+            # name, with no separator: "NVIDIA H100 SXM셀프서브". The product
+            # name is Latin and the chip is Hangul, so the cut is where the
+            # Hangul starts.
+            #
+            # This used to strip a list of known chip words, and on 2026-10-06
+            # VESSL changed "바로 시작" to "셀프서브" -- which renamed every sku
+            # and wrote six deletions and three additions into the price
+            # history for a day on which no price moved. Identity must not
+            # depend on a vocabulary somebody else maintains.
+            name = re.split(r"[\uac00-\ud7a3]", line[0], 1)[0].strip()
             rows.append(
                 PriceRow(
                     provider="vessl", category="gpu", sku=name, label=name,

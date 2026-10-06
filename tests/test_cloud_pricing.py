@@ -638,3 +638,27 @@ def test_an_aws_row_carries_the_region_its_price_is_for() -> None:
     rows, _ = sources.parse_aws_csv(iter(fixture("aws_ec2.csv").splitlines(keepends=True)))
     assert {r.region for r in rows} == {sources.AWS_REGION}
     assert sources.AWS_REGION == "ap-northeast-2"
+
+
+def test_a_vessl_sku_does_not_change_when_vessl_rewords_its_status_chip() -> None:
+    """2026-10-06: "바로 시작" became "셀프서브", and because the chip was
+    stripped by matching a list of known words it stayed glued to the name.
+    Every sku changed, and a day on which no price moved was written into the
+    price history as six deletions and three additions.
+
+    The product name is Latin and the chip is Hangul, so the cut is structural
+    and does not depend on a vocabulary somebody else maintains.
+    """
+    def one(chip: str) -> str:
+        markup = (
+            "<table><tr><th>GPU 모델</th><th>VRAM</th><th>아키텍처</th>"
+            "<th>온디맨드</th></tr>"
+            f"<tr><td>NVIDIA H100 SXM{chip}</td><td>80GB</td><td>Hopper</td>"
+            "<td>$2.98/시간</td></tr></table>"
+        )
+        return sources.parse_vessl(markup)[0].sku
+
+    assert one("바로 시작") == "NVIDIA H100 SXM"
+    assert one("셀프서브") == "NVIDIA H100 SXM"
+    assert one("무엇이든새로운말") == "NVIDIA H100 SXM"
+    assert one("") == "NVIDIA H100 SXM"
