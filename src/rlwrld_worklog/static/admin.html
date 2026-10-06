@@ -485,11 +485,10 @@
           <div class="card-header"><h2 id="cp-table-title">요금</h2><span class="badge" id="cp-count-badge">-</span></div>
           <div style="overflow-x:auto">
             <table class="audit">
-              <thead><tr>
-                <th>공급자</th><th>이름</th><th>GPU</th><th style="text-align:right">GPU 메모리</th>
-                <th>사양</th><th>단위</th>
-                <th style="text-align:right">원가</th><th style="text-align:right">환율 적용</th>
-              </tr></thead>
+              <!-- Drawn per category: 수량 and 장당 단가 mean nothing for
+                   storage, and a column of dashes is a column that has to be
+                   read before it can be ignored. -->
+              <thead id="cp-head"></thead>
               <tbody id="cp-body"></tbody>
             </table>
           </div>

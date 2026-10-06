@@ -47,6 +47,20 @@ PROVIDERS: dict[str, str] = {
 
 CATEGORIES: dict[str, str] = {"gpu": "GPU", "storage": "스토리지"}
 
+# Where a person goes to check a number against the provider.
+#
+# Not the same as the URL the fetcher reads. For four of the five they happen
+# to coincide, but AWS is read from a 202MB CSV that no one can open and check
+# -- linking that would be citing a source nobody can follow. The published
+# pricing page is the citation; the CSV is the plumbing.
+PROVIDER_PAGE: dict[str, str] = {
+    "aws": "https://aws.amazon.com/ec2/pricing/on-demand/",
+    "nebius": "https://nebius.com/prices",
+    "kakao": "https://www.kakaocloud.com/pricing/calculator",
+    "naver": "https://www.ncloud.com/product/compute/gpuServer",
+    "vessl": "https://vessl.ai/pricing",
+}
+
 # Money is compared and hashed at the scale the column stores. Two amounts
 # that differ below this are the same price, and must not read as a change.
 AMOUNT_SCALE = 10
@@ -421,6 +435,7 @@ def build_payload(
             {
                 "id": pid,
                 "label": label,
+                "page": PROVIDER_PAGE.get(pid),
                 "counts": by_provider.get(pid, {"gpu": 0, "storage": 0}),
             }
             for pid, label in PROVIDERS.items()

@@ -672,7 +672,8 @@ def test_the_price_screen_shows_the_original_beside_the_converted(
     """Two columns, because they are two different kinds of fact: the left is
     what the provider published, the right is ours and only as good as the
     rate printed above it."""
-    assert "원가" in html and "환율 적용" in html
+    # The header is drawn per category now, so it lives in the script.
+    assert "['원가', 'text-align:right'], ['환율 적용', 'text-align:right']" in script
     assert 'id="cp-asof-body"' in html
     # The rate, and both of the times that bound it.
     assert "'가져온 시각'" in script
@@ -712,11 +713,9 @@ def test_a_drawer_pins_only_its_own_close_button(css: str) -> None:
 
 def test_the_price_table_names_the_chip_and_its_memory(html: str, script: str) -> None:
     """HK, 2026-10-02: h100, a100, b300 등 gpu 종류와 gpu memory 정보를 같이."""
-    assert "<th>GPU</th>" in html
-    assert "GPU 메모리" in html
+    assert "['GPU', '']" in script
+    assert "['GPU 메모리', 'text-align:right']" in script
     assert "function cpGpu(" in script and "function cpGpuMemory(" in script
-    # The chip and how many of them, where the provider says how many.
-    assert "`${row.gpu_model} x${row.gpu_count}`" in script
 
 
 def test_a_memory_the_provider_did_not_publish_stays_blank(script: str) -> None:
@@ -854,3 +853,40 @@ def test_the_lock_mark_goes_away_with_the_rule_that_drew_it() -> None:
     """
     source = (STATIC / "admin.js").read_text(encoding="utf-8")
     assert "button[data-page]:not([data-requires]) .lock" in source
+
+
+def test_the_count_is_its_own_column_not_part_of_the_chip(script: str) -> None:
+    """HK, 2026-10-06: GPU는 가격과 수량을 별개의 컬럼으로 나눠줘.
+
+    "H100 x8" in one cell invited reading the machine price beside it as the
+    price of one card, which for p5.48xlarge is eight times wrong.
+    """
+    assert "function cpGpu(row) {\n      return row.gpu_model || '—';" in script
+    assert "function cpCount(" in script
+    assert "['수량', 'text-align:right']" in script
+    # And the per-card price is a column of its own, beside the machine price.
+    assert "['1장·1시간', 'text-align:right']" in script
+
+
+def test_storage_is_not_given_columns_that_mean_nothing_to_it(script: str) -> None:
+    """A column of dashes has to be read before it can be ignored."""
+    storage = script.split("storage: [")[1].split("],")[0]
+    assert "수량" not in storage and "1장·1시간" not in storage
+    assert "function cpRenderHead(" in script
+
+
+def test_every_price_links_to_the_page_it_can_be_checked_against(
+    html: str, script: str
+) -> None:
+    """HK, 2026-10-06: 원본 정보를 보러 갈 수 있는 링크를 남겨줘."""
+    assert "function cpSourceUrl(" in script
+    assert "function cpProviderCell(" in script
+    # The published page, not whatever the fetcher happened to read: AWS is
+    # read from a 202MB CSV, and a citation nobody can open is not one.
+    assert "if (found && found.page) return found.page;" in script
+
+
+def test_the_region_a_price_belongs_to_is_on_screen(script: str) -> None:
+    """HK, 2026-10-06: AWS는 리전별로 가격이 다르다고 들었는데."""
+    assert "['리전', '']" in script
+    assert "text: row.region || '—'," in script

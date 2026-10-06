@@ -19,7 +19,11 @@ HK 지시(2026-09-30):
 
 | 보여주는 것 | 어디서 |
 | --- | --- |
-| GPU 모델·개수 | 어느 칩을 몇 장. H100, A100, B300 … |
+| GPU 모델 | 어느 칩. H100, A100, B300 … |
+| 수량 | 몇 장. **값과 따로** 둔다 — 한 칸에 "H100 x8" 로 적으면 옆의 머신 단가가 한 장 값으로 읽힌다 |
+| 1장·1시간 | 장당 환산가. 머신 단가와 나란히 둔다 |
+| 리전 | 그 값이 어느 리전 것인지. AWS 는 리전마다 다르다 |
+| 출처 | 공급자 이름이 공개 요금 페이지로 걸린다 |
 | GPU 메모리 | **한 장**의 메모리. 공개하지 않는 곳은 비운다 |
 | 원가 | 공급자가 적어 둔 그대로. 통화도 그대로 |
 | 환율 적용가 | 원가 × 그 옆에 적힌 환율. **저장하지 않는다** |
@@ -163,7 +167,7 @@ Nebius 는 한 장씩 판다. 머신 단가를 그대로 늘어놓으면 **포�
 | `src/rlwrld_worklog/cloud_pricing_sources.py` | 다섯 어댑터와 환율 (네트워크) |
 | `src/rlwrld_worklog/cloud_pricing_web.py` | 라우트 |
 | `static/admin.{html,js}` | 화면 |
-| `tests/test_cloud_pricing.py` | 43개 |
+| `tests/test_cloud_pricing.py` | 46개 |
 | `tests/fixtures/cloud_pricing/` | 실제 페이지에서 잘라낸 고정 입력 |
 
 라우트는 전부 `require_super_admin_session`. GPU-hour 단가는 협상 카드라

@@ -3462,10 +3462,32 @@
       return found ? found.label : id;
     }
 
-    // "H100 x8", or just "H100" where the provider does not say how many.
+    // The chip, and nothing else. How many of them is its own column: the
+    // price beside it buys all of them, and "H100 x8" in one cell invited
+    // reading 103,314원 as the price of one card.
     function cpGpu(row) {
-      if (!row.gpu_model) return '—';
-      return row.gpu_count ? `${row.gpu_model} x${row.gpu_count}` : row.gpu_model;
+      return row.gpu_model || '—';
+    }
+
+    function cpCount(row) {
+      return row.gpu_count ? `${cpNumber(row.gpu_count, 0)}장` : '—';
+    }
+
+    // Where a person goes to check the number. The provider's published page
+    // rather than whatever the fetcher read -- AWS's is a 202MB CSV, and a
+    // citation nobody can open is not a citation.
+    function cpSourceUrl(provider) {
+      const found = (cpState.data.providers || []).find((p) => p.id === provider);
+      if (found && found.page) return found.page;
+      const run = (cpState.data.runs || []).find((r) => r.provider === provider);
+      return run && run.source_url ? run.source_url : null;
+    }
+
+    function cpProviderCell(provider) {
+      const href = cpSourceUrl(provider);
+      const label = cpProviderLabel(provider);
+      if (!href) return rmEl('td', { text: label });
+      return rmEl('td', {}, [rmEl('a', { href, text: label, className: 'lnk' })]);
     }
 
     // Per GPU, which is the number a model has to fit inside. Blank where the
@@ -3544,7 +3566,13 @@
       $('cp-runs-card').classList.toggle('hidden', runs.length === 0);
       runs.forEach((run) => {
         const tr = document.createElement('tr');
-        tr.appendChild(rmEl('td', { text: cpProviderLabel(run.provider) }));
+        tr.appendChild(
+          run.source_url
+            ? rmEl('td', {}, [rmEl('a', {
+                href: run.source_url, text: cpProviderLabel(run.provider), className: 'lnk',
+              })])
+            : rmEl('td', { text: cpProviderLabel(run.provider) }),
+        );
         tr.appendChild(rmEl('td', {}, [
           rmEl('span', {
             className: `kindtag ${run.outcome === 'ok' ? 'added' : 'removed'}`,
@@ -3594,7 +3622,9 @@
       const table = rmEl('table', { className: 'audit' });
       const head = rmEl('tr', {}, [
         rmEl('th', { text: '공급자' }), rmEl('th', { text: '품목' }),
-        rmEl('th', { text: '구성' }), rmEl('th', { text: '메모리' }),
+        rmEl('th', { text: '리전' }),
+        rmEl('th', { text: '수량', style: 'text-align:right' }),
+        rmEl('th', { text: '메모리', style: 'text-align:right' }),
         rmEl('th', { text: '원가', style: 'text-align:right' }),
         rmEl('th', { text: '환율 적용', style: 'text-align:right' }),
         rmEl('th', { text: '1장·1시간', style: 'text-align:right' }),
@@ -3603,18 +3633,30 @@
       const body = rmEl('tbody');
       rows.forEach((row, index) => {
         const tr = document.createElement('tr');
+        const href = cpSourceUrl(row.provider);
         const name = rmEl('td', {}, [
           // The cheapest comparable row, marked rather than left to be found.
           index === 0 && row.per_gpu_krw !== null
             ? rmEl('span', { className: 'kindtag added', text: '최저' })
             : null,
+          href
+            ? rmEl('a', { href, text: cpProviderLabel(row.provider), className: 'lnk' })
+            : rmEl('span', { text: cpProviderLabel(row.provider) }),
         ]);
-        name.appendChild(document.createTextNode(cpProviderLabel(row.provider)));
         tr.appendChild(name);
         tr.appendChild(rmEl('td', { text: row.label }));
-        tr.appendChild(rmEl('td', { text: row.gpu_count ? `x${row.gpu_count}` : '—' }));
         tr.appendChild(rmEl('td', {
-          text: cpGpuMemory(row), style: 'white-space:nowrap',
+          text: row.region || '—',
+          className: row.region ? '' : 'help',
+          style: 'white-space:nowrap',
+        }));
+        tr.appendChild(rmEl('td', {
+          text: cpCount(row),
+          className: row.gpu_count ? '' : 'help',
+          style: 'text-align:right;white-space:nowrap',
+        }));
+        tr.appendChild(rmEl('td', {
+          text: cpGpuMemory(row), style: 'text-align:right;white-space:nowrap',
         }));
         tr.appendChild(rmEl('td', {
           text: `${cpOriginal(row)} /${row.unit}`,
@@ -3650,6 +3692,28 @@
         return;
       }
       groups.forEach(([model, rows]) => out.appendChild(cpCompareTable(model, rows)));
+    }
+
+    const CP_COLUMNS = {
+      gpu: [
+        ['공급자', ''], ['이름', ''], ['리전', ''], ['GPU', ''],
+        ['수량', 'text-align:right'], ['GPU 메모리', 'text-align:right'],
+        ['단위', ''], ['원가', 'text-align:right'], ['환율 적용', 'text-align:right'],
+        ['1장·1시간', 'text-align:right'],
+      ],
+      storage: [
+        ['공급자', ''], ['이름', ''], ['리전', ''], ['사양', ''],
+        ['단위', ''], ['원가', 'text-align:right'], ['환율 적용', 'text-align:right'],
+      ],
+    };
+
+    function cpRenderHead() {
+      const head = rmClear($('cp-head'));
+      const tr = document.createElement('tr');
+      (CP_COLUMNS[cpState.category] || CP_COLUMNS.gpu).forEach(([label, style]) => {
+        tr.appendChild(rmEl('th', { text: label, style: style || undefined }));
+      });
+      head.appendChild(tr);
     }
 
     function cpVisible(row) {
@@ -3715,20 +3779,37 @@
       }
 
       const shown = (data.rows || []).filter(cpVisible);
+      cpRenderHead();
       const body = rmClear($('cp-body'));
+      const gpuView = cpState.category === 'gpu';
       shown.forEach((row) => {
         const tr = document.createElement('tr');
-        tr.appendChild(rmEl('td', { text: cpProviderLabel(row.provider) }));
+        tr.appendChild(cpProviderCell(row.provider));
         tr.appendChild(rmEl('td', { text: row.label }));
+        // Which region these prices are for. AWS charges differently by
+        // region, so a price with no region beside it is half a fact.
         tr.appendChild(rmEl('td', {
-          text: cpGpu(row), className: row.gpu_model ? '' : 'help',
+          text: row.region || '—',
+          className: row.region ? '' : 'help',
+          style: 'white-space:nowrap',
         }));
-        tr.appendChild(rmEl('td', {
-          text: cpGpuMemory(row),
-          className: row.gpu_memory_gb ? '' : 'help',
-          style: 'text-align:right;white-space:nowrap',
-        }));
-        tr.appendChild(rmEl('td', { className: 'help', text: cpSpec(row.spec) }));
+        if (gpuView) {
+          tr.appendChild(rmEl('td', {
+            text: cpGpu(row), className: row.gpu_model ? '' : 'help',
+          }));
+          tr.appendChild(rmEl('td', {
+            text: cpCount(row),
+            className: row.gpu_count ? '' : 'help',
+            style: 'text-align:right;white-space:nowrap',
+          }));
+          tr.appendChild(rmEl('td', {
+            text: cpGpuMemory(row),
+            className: row.gpu_memory_gb ? '' : 'help',
+            style: 'text-align:right;white-space:nowrap',
+          }));
+        } else {
+          tr.appendChild(rmEl('td', { className: 'help', text: cpSpec(row.spec) }));
+        }
         tr.appendChild(rmEl('td', { text: row.unit }));
         tr.appendChild(rmEl('td', {
           text: cpOriginal(row), style: 'text-align:right;white-space:nowrap',
@@ -3741,6 +3822,15 @@
           className: row.krw === null ? 'help' : '',
           style: 'text-align:right;white-space:nowrap',
         }));
+        if (gpuView) {
+          // The price of ONE card for one hour. The column beside it buys the
+          // whole machine, and for p5.48xlarge those differ eightfold.
+          tr.appendChild(rmEl('td', {
+            text: row.per_gpu_krw === null ? '—' : cpWon(row.per_gpu_krw),
+            className: row.per_gpu_krw === null ? 'help' : '',
+            style: 'text-align:right;white-space:nowrap;font-weight:600',
+          }));
+        }
         body.appendChild(tr);
       });
 

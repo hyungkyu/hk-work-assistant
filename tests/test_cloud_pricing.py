@@ -614,3 +614,27 @@ def test_nebius_and_vessl_quote_one_card_and_say_so() -> None:
     assert nebius["NVIDIA HGX H100"].gpu_count == 1
     vessl = {r.sku: r for r in sources.parse_vessl(fixture("vessl.html")) if r.category == "gpu"}
     assert vessl["NVIDIA H100 SXM"].gpu_count == 1
+
+
+def test_every_provider_has_a_page_a_person_can_open() -> None:
+    """The citation is the published page, not the file the fetcher read."""
+    assert set(cp.PROVIDER_PAGE) == set(cp.PROVIDERS)
+    assert all(url.startswith("https://") for url in cp.PROVIDER_PAGE.values())
+    # AWS is read from a CSV nobody can check by eye; it is not the citation.
+    assert "pricing.us-east-1.amazonaws.com" not in cp.PROVIDER_PAGE["aws"]
+
+
+def test_the_page_reaches_the_screen_beside_each_provider() -> None:
+    payload = cp.build_payload(snapshot=None, rows=[])
+    pages = {p["id"]: p["page"] for p in payload["providers"]}
+    assert pages["nebius"] == "https://nebius.com/prices"
+    assert all(pages[pid] for pid in cp.PROVIDERS)
+
+
+def test_an_aws_row_carries_the_region_its_price_is_for() -> None:
+    """AWS charges differently by region, so a price without one is half a
+    fact. Today every AWS row is Seoul; the column is what makes that
+    visible rather than assumed."""
+    rows, _ = sources.parse_aws_csv(iter(fixture("aws_ec2.csv").splitlines(keepends=True)))
+    assert {r.region for r in rows} == {sources.AWS_REGION}
+    assert sources.AWS_REGION == "ap-northeast-2"
