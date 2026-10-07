@@ -337,6 +337,85 @@ _PEOPLE_SQL = """
 """
 
 
+# The block that holds people who have left, kept apart from the live chart
+# (HK, 2026-10-07: 퇴사 및 연구계약종료 는 다른 블럭으로 분리 -- 히스토리 관리
+# 차원). Two bands, because leaving the company and a lab contract ending are
+# different events about different populations, the same split the chart
+# itself makes between its two roots.
+DEPARTED_COMPANY = "퇴사"
+DEPARTED_LAB = "연구계약종료"
+DEPARTED_ORDER = (DEPARTED_COMPANY, DEPARTED_LAB)
+
+
+def departure_band(person: dict) -> str:
+    """퇴사 for the company, 연구계약종료 for a lab member.
+
+    Decided by where the person sat, not by what the status cell said: the
+    sheet writes 퇴사 for both, and a 방문 연구원 on the internal tab is a lab
+    member whose contract ended, not an employee who resigned.
+    """
+    path = person.get("chart_path") or []
+    if path[:1] == [LAB_ROOT] or person.get("affiliation") in {"student", "professor"}:
+        return DEPARTED_LAB
+    return DEPARTED_COMPANY
+
+
+# When each departed person was first seen departed, counted from the last
+# observation that still had them active -- so somebody who left, came back
+# and left again is dated by the second departure, not the first.
+#
+# The roster has no leaving date (입·퇴사일 are not stored), so this is when
+# the *sheet* first said it, which is what the history can honestly claim.
+# A departure first seen in a tab's very first observation predates the sync
+# altogether, and is flagged so the screen does not pass the first sync's
+# date off as the day somebody left.
+_DEPARTED_SINCE_SQL = """
+    WITH last_active AS (
+        SELECT person_id, MAX(observation_id) AS observation_id
+          FROM org_person_state
+         WHERE status = 'active' AND person_id = ANY(%(people)s)
+         GROUP BY person_id
+    ), first_of_source AS (
+        SELECT source, MIN(observation_id) AS observation_id
+          FROM roster_observation
+         GROUP BY source
+    )
+    SELECT s.person_id, MIN(o.observed_at),
+           bool_or(o.observation_id = f.observation_id)
+      FROM org_person_state s
+      JOIN roster_observation o ON o.observation_id = s.observation_id
+      JOIN first_of_source f ON f.source = o.source
+      LEFT JOIN last_active a ON a.person_id = s.person_id
+     WHERE s.status = 'retired'
+       AND s.person_id = ANY(%(people)s)
+       AND s.observation_id > COALESCE(a.observation_id, 0)
+     GROUP BY s.person_id
+"""
+
+
+def departed_block(people: list[dict], since: dict[str, tuple]) -> dict[str, Any]:
+    """The departed, banded and newest-first, each with when it was first seen."""
+    members = []
+    for person in people:
+        first_seen, before_first_sync = since.get(person["person_id"], (None, False))
+        members.append(
+            {
+                **person,
+                "departure": departure_band(person),
+                "departed_seen_at": first_seen.isoformat() if first_seen else None,
+                "departed_before_first_sync": bool(before_first_sync),
+            }
+        )
+    members.sort(key=lambda person: person["name"] or "")
+    members.sort(key=lambda person: person["departed_seen_at"] or "", reverse=True)
+    members.sort(key=lambda person: DEPARTED_ORDER.index(person["departure"]))
+    bands = [
+        {"name": band, "people": sum(1 for person in members if person["departure"] == band)}
+        for band in DEPARTED_ORDER
+    ]
+    return {"people": len(members), "bands": bands, "members": members}
+
+
 def latest_observations(cursor) -> dict[str, int]:
     """The newest observation of each roster tab.
 
@@ -387,6 +466,7 @@ def org_chart(database_url: str, *, include_retired: bool = False) -> dict[str, 
             ]
 
     people = []
+    departed = []
     for row in rows:
         (
             person_id,
@@ -401,32 +481,41 @@ def org_chart(database_url: str, *, include_retired: bool = False) -> dict[str, 
             advisor,
             source,
         ) = row
-        if status == "retired" and not include_retired:
-            continue
-        people.append(
-            {
-                "person_id": person_id,
-                "name": name,
-                "nickname": nickname,
-                "title": title,
-                "employment_type": employment_type,
-                "affiliation": affiliation,
-                "access_level": access_level,
-                "status": status,
-                "department_raw": department_raw,
-                "source": source,
-                "advisor": advisor,
-                "chart_path": rooted_path(
-                    department_raw,
-                    affiliation=affiliation,
-                    source=source,
-                    advisor=advisor,
-                ),
-            }
-        )
+        person = {
+            "person_id": person_id,
+            "name": name,
+            "nickname": nickname,
+            "title": title,
+            "employment_type": employment_type,
+            "affiliation": affiliation,
+            "access_level": access_level,
+            "status": status,
+            "department_raw": department_raw,
+            "source": source,
+            "advisor": advisor,
+            "chart_path": rooted_path(
+                department_raw,
+                affiliation=affiliation,
+                source=source,
+                advisor=advisor,
+            ),
+        }
+        if status == "retired":
+            departed.append(dict(person))
+            if not include_retired:
+                continue
+        people.append(person)
 
     unmatched = place_professors(people)
     annotate(people)
+    since: dict[str, tuple] = {}
+    if departed:
+        with psycopg.connect(database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    _DEPARTED_SINCE_SQL, {"people": [person["person_id"] for person in departed]}
+                )
+                since = {row[0]: (row[1], row[2]) for row in cursor.fetchall()}
 
     return {
         "observations": observations,
@@ -440,4 +529,7 @@ def org_chart(database_url: str, *, include_retired: bool = False) -> dict[str, 
         "tree": build_tree(people),
         "unmapped_accounts": unmapped,
         "include_retired": include_retired,
+        # Never in the tree, never in the counts above, always returned: the
+        # live chart is who is here, this is who was.
+        "departed": departed_block(departed, since),
     }

@@ -1964,6 +1964,109 @@
       });
     }
 
+    // 내부 직원은 이름(닉네임) -- 류형규(hk) -- because that is how people
+    // are called inside the company (HK, 2026-10-07). Keyed on the internal
+    // tab rather than on affiliation, so a 방문 연구원 -- a student with a
+    // company account and a company nickname -- is written the same way.
+    function orgUsesNickname(person) {
+      return person.source === 'roster_seed_2' && Boolean(person.nickname);
+    }
+
+    function orgDisplayName(person) {
+      return orgUsesNickname(person) ? `${person.name}(${person.nickname})` : person.name;
+    }
+
+    function orgPersonCard(person, extra) {
+      const card = document.createElement('button');
+      card.className = 'button';
+      card.style.cssText = 'text-align:left;display:grid;gap:4px;padding:11px 12px';
+      const name = document.createElement('strong');
+      name.textContent = orgDisplayName(person);
+      const sub = document.createElement('small');
+      sub.style.color = 'var(--muted)';
+      const nickname = orgUsesNickname(person) ? null : person.nickname;
+      sub.textContent = [nickname, person.employment_type || person.title]
+        .filter(Boolean).join(' · ');
+      card.append(name, sub);
+      (extra || []).forEach((line) => {
+        const more = document.createElement('small');
+        more.style.color = 'var(--muted)';
+        more.textContent = line;
+        card.appendChild(more);
+      });
+      // 회사원이면서 학생: the engagement, written on the student's card.
+      if (person.company_mark && person.member_group === '학생') {
+        const mark = document.createElement('span');
+        mark.className = 'badge ok';
+        mark.textContent = person.company_mark;
+        card.appendChild(mark);
+      }
+      if (person.status === 'absent_from_sheet') {
+        const warn = document.createElement('span');
+        warn.className = 'badge wait';
+        warn.textContent = '시트에 없음';
+        card.appendChild(warn);
+      }
+      card.addEventListener('click', () => {
+        $('person-id').value = person.person_id;
+        if (!$('person-day').value) $('person-day').value = yesterdayKST();
+        showPage('person');
+        runPersonDay();
+      });
+      return card;
+    }
+
+    function orgGrid() {
+      const grid = document.createElement('div');
+      grid.style.cssText = 'display:grid;gap:10px;margin-top:8px;'
+        + 'grid-template-columns:repeat(auto-fill,minmax(200px,1fr))';
+      return grid;
+    }
+
+    function orgBandLabel(name, count) {
+      const label = document.createElement('div');
+      label.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:10px;'
+        + 'padding-top:8px;border-top:1px solid var(--line-soft,#1e2734);'
+        + 'font:500 12px/1 system-ui;color:var(--muted,#6d7b8e)';
+      const text = document.createElement('span');
+      text.textContent = name;
+      const n = document.createElement('span');
+      n.className = 'badge';
+      n.textContent = `${count}명`;
+      label.append(text, n);
+      return label;
+    }
+
+    // 퇴사 · 연구계약종료: who was here, kept out of the live chart and its
+    // counts. The date is when the roster first said so -- the sheet has no
+    // leaving date -- and a departure older than the first sync says that
+    // instead of borrowing the sync's date.
+    function orgDeparted(departed, host) {
+      host.textContent = '';
+      const members = departed.members || [];
+      if (!members.length) {
+        const empty = document.createElement('p');
+        empty.className = 'help';
+        empty.textContent = '로스터에 퇴사·계약종료로 표시된 사람이 없습니다.';
+        host.appendChild(empty);
+        return;
+      }
+      (departed.bands || []).forEach((band) => {
+        if (!band.people) return;
+        const grid = orgGrid();
+        members.filter((person) => person.departure === band.name).forEach((person) => {
+          const where = person.departure === '연구계약종료' && person.advisor
+            ? person.advisor : (person.department_raw || '소속 미상');
+          const when = person.departed_before_first_sync
+            ? '첫 동기화 이전부터'
+            : (person.departed_seen_at
+              ? `${new Date(person.departed_seen_at).toLocaleDateString()} 확인` : '확인 시점 미상');
+          grid.appendChild(orgPersonCard(person, [where, when]));
+        });
+        host.append(orgBandLabel(band.name, band.people), grid);
+      });
+    }
+
     function orgGroups(nodes, host) {
       nodes.forEach((node) => {
         if ((node.members || []).length) {
@@ -1983,67 +2086,19 @@
           // Banded: 정규직 -> 계약직 · 인턴 under the company, 교수 -> 학생
           // in a lab. The bands and their order come from the server, which
           // is the one place that rule is written; this only titles them.
-          const newGrid = () => {
-            const grid = document.createElement('div');
-            grid.style.cssText = 'display:grid;gap:10px;margin-top:8px;'
-              + 'grid-template-columns:repeat(auto-fill,minmax(200px,1fr))';
-            return grid;
-          };
-          const personCard = (person) => {
-            const card = document.createElement('button');
-            card.className = 'button';
-            card.style.cssText = 'text-align:left;display:grid;gap:4px;padding:11px 12px';
-            const name = document.createElement('strong');
-            name.textContent = person.name;
-            const sub = document.createElement('small');
-            sub.style.color = 'var(--muted)';
-            sub.textContent = [person.nickname, person.employment_type || person.title]
-              .filter(Boolean).join(' · ');
-            card.append(name, sub);
-            // 회사원이면서 학생: the engagement, written on the student's card.
-            if (person.company_mark && person.member_group === '학생') {
-              const mark = document.createElement('span');
-              mark.className = 'badge ok';
-              mark.textContent = person.company_mark;
-              card.appendChild(mark);
-            }
-            if (person.status === 'absent_from_sheet') {
-              const warn = document.createElement('span');
-              warn.className = 'badge wait';
-              warn.textContent = '시트에 없음';
-              card.appendChild(warn);
-            }
-            card.addEventListener('click', () => {
-              $('person-id').value = person.person_id;
-              if (!$('person-day').value) $('person-day').value = yesterdayKST();
-              showPage('person');
-              runPersonDay();
-            });
-            return card;
-          };
           block.appendChild(head);
           const bands = node.groups || [];
           if (bands.length <= 1) {
-            const grid = newGrid();
-            node.members.forEach((person) => grid.appendChild(personCard(person)));
+            const grid = orgGrid();
+            node.members.forEach((person) => grid.appendChild(orgPersonCard(person)));
             block.appendChild(grid);
           } else {
             bands.forEach((band) => {
-              const label = document.createElement('div');
-              label.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:10px;'
-                + 'padding-top:8px;border-top:1px solid var(--line-soft,#1e2734);'
-                + 'font:500 12px/1 system-ui;color:var(--muted,#6d7b8e)';
-              const text = document.createElement('span');
-              text.textContent = band.name;
-              const n = document.createElement('span');
-              n.className = 'badge';
-              n.textContent = `${band.people}명`;
-              label.append(text, n);
-              const grid = newGrid();
+              const grid = orgGrid();
               node.members
                 .filter((person) => person.member_group === band.name)
-                .forEach((person) => grid.appendChild(personCard(person)));
-              block.append(label, grid);
+                .forEach((person) => grid.appendChild(orgPersonCard(person)));
+              block.append(orgBandLabel(band.name, band.people), grid);
             });
           }
           host.appendChild(block);
@@ -2083,6 +2138,9 @@
         const people = $('org-people');
         people.textContent = '';
         orgGroups(chart.tree || [], people);
+        const departed = chart.departed || { people: 0, bands: [], members: [] };
+        orgDeparted(departed, $('org-departed'));
+        $('org-departed-badge').textContent = `${departed.people || 0}명`;
 
         $('org-badge').textContent = `${(chart.tree || []).length} 루트`;
         $('org-people-badge').textContent = `${chart.people || 0}명`;

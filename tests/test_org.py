@@ -713,3 +713,49 @@ def test_a_refresh_reports_a_missing_tab_as_an_unusable_roster() -> None:
     with pytest.raises(UnusableRoster) as error:
         sync_workbook("postgresql://unreachable/nowhere", data, refuse_empty=True)
     assert "roaster_seed_ext" in str(error.value)
+
+
+def test_leaving_is_banded_by_where_the_person_sat() -> None:
+    """The sheet writes 퇴사 for everyone; the block says which kind of leaving.
+
+    A 방문 연구원 on the internal tab is a lab member whose contract ended,
+    not an employee who resigned.
+    """
+    from rlwrld_worklog.org.chart import (
+        COMPANY_ROOT,
+        DEPARTED_COMPANY,
+        DEPARTED_LAB,
+        LAB_ROOT,
+        departure_band,
+    )
+
+    assert departure_band({"chart_path": [COMPANY_ROOT, "Model Team"], "affiliation": "internal"}) == DEPARTED_COMPANY
+    assert departure_band({"chart_path": [LAB_ROOT, "주한별 교수님"], "affiliation": "student"}) == DEPARTED_LAB
+    assert departure_band({"chart_path": [COMPANY_ROOT], "affiliation": "student"}) == DEPARTED_LAB
+    assert departure_band({"chart_path": [LAB_ROOT], "affiliation": "professor"}) == DEPARTED_LAB
+
+
+def test_the_departed_block_is_banded_newest_first_and_honest_about_old_leavers() -> None:
+    from datetime import datetime, timezone
+
+    from rlwrld_worklog.org.chart import COMPANY_ROOT, LAB_ROOT, departed_block
+
+    def person(person_id: str, name: str, root: str, affiliation: str) -> dict:
+        return {"person_id": person_id, "name": name, "chart_path": [root], "affiliation": affiliation}
+
+    people = [
+        person("p_a", "가", COMPANY_ROOT, "internal"),
+        person("p_b", "나", COMPANY_ROOT, "internal"),
+        person("p_c", "다", LAB_ROOT, "student"),
+    ]
+    since = {
+        "p_a": (datetime(2026, 9, 3, tzinfo=timezone.utc), True),
+        "p_b": (datetime(2026, 10, 1, tzinfo=timezone.utc), False),
+    }
+    block = departed_block(people, since)
+    assert block["people"] == 3
+    assert block["bands"] == [{"name": "퇴사", "people": 2}, {"name": "연구계약종료", "people": 1}]
+    assert [m["person_id"] for m in block["members"]] == ["p_b", "p_a", "p_c"]
+    assert block["members"][1]["departed_before_first_sync"] is True
+    # No observation found: said as unknown, never given a made-up date.
+    assert block["members"][2]["departed_seen_at"] is None
