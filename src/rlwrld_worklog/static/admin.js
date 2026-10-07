@@ -3425,7 +3425,7 @@
     // multiplying by a rate we fetched separately. So the rate and both
     // timestamps sit at the top of the screen rather than in a tooltip: a
     // converted price with nothing next to it is a number nobody can check.
-    const cpState = { data: null, category: 'gpu', q: '', provider: '', model: '', viewing: null };
+    const cpState = { data: null, category: 'gpu', q: '', provider: '', model: '', region: '', viewing: null };
 
     const CP_STATE_TEXT = {
       empty: '아직 한 번도 가져오지 않았습니다. "다시 가져오기"를 누르세요.',
@@ -3595,6 +3595,7 @@
         if (row.category !== 'gpu' || !row.gpu_model) return;
         if (cpState.provider && row.provider !== cpState.provider) return;
         if (cpState.model && row.gpu_model !== cpState.model) return;
+        if (cpState.region && (row.region || '') !== cpState.region) return;
         if (cpState.q) {
           const hay = `${row.label} ${row.sku} ${row.gpu_model}`.toLowerCase();
           if (!hay.includes(cpState.q)) return;
@@ -3720,6 +3721,7 @@
       if (row.category !== cpState.category) return false;
       if (cpState.provider && row.provider !== cpState.provider) return false;
       if (cpState.model && row.gpu_model !== cpState.model) return false;
+      if (cpState.region && (row.region || '') !== cpState.region) return false;
       if (cpState.q) {
         const hay = `${row.label} ${row.sku} ${cpSpec(row.spec)}`.toLowerCase();
         if (!hay.includes(cpState.q)) return false;
@@ -3758,6 +3760,26 @@
         modelSelect.value = models.includes(chosen) ? chosen : '';
         cpState.model = modelSelect.value;
       }
+      // Only the regions actually on screen. AWS prices by region and the
+      // others do not, so this is mostly an AWS control -- a vendor with no
+      // region is left out of the list rather than offered as "".
+      const regionSelect = $('cp-region');
+      const regions = Array.from(new Set(
+        (data.rows || []).filter((r) => r.region).map((r) => r.region),
+      )).sort();
+      if (regionSelect.options.length - 1 !== regions.length) {
+        const chosen = cpState.region;
+        rmClear(regionSelect);
+        regionSelect.appendChild(rmEl('option', { text: '모든 리전' }));
+        regions.forEach((region) => {
+          const option = rmEl('option', { text: region });
+          option.value = region;
+          regionSelect.appendChild(option);
+        });
+        regionSelect.value = regions.includes(chosen) ? chosen : '';
+        cpState.region = regionSelect.value;
+      }
+
       // Storage has no GPU, so the filter would silently empty the table.
       modelSelect.disabled = cpState.category === 'storage';
 
@@ -3894,6 +3916,9 @@
     });
     $('cp-model').addEventListener('change', function () {
       cpState.model = this.value; renderCloudPricing();
+    });
+    $('cp-region').addEventListener('change', function () {
+      cpState.region = this.value; renderCloudPricing();
     });
     $('cp-history-open').addEventListener('click', () => $('cp-drawer').classList.remove('hidden'));
     $('cp-history-close').addEventListener('click', () => $('cp-drawer').classList.add('hidden'));

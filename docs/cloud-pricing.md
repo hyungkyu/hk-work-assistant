@@ -95,6 +95,33 @@ Nebius 는 한 장씩 판다. 머신 단가를 그대로 늘어놓으면 **포�
 
 ---
 
+## 키는 벤더 & 리전
+
+HK, 2026-10-07: "vendor & region 두개의 필드를 두자. 키는 벤더&리전, 다른
+곳은 리전이 없을거야."
+
+한 줄의 신원은 `(벤더, 리전, 분류, sku)` 다. AWS 는 리전마다 값이 다르다 —
+같은 `p5.48xlarge` 가 서울 $75.96, 버지니아 $55.04 로 **38% 차이**다. 리전이
+키에 없으면 둘째 리전은 둘째 행이 아니라 충돌이다. 그래서 그동안 한 리전만
+담겨 있었다. 누가 정한 게 아니라 표 모양이 강요한 것이었다.
+
+리전을 공개하지 않는 곳은 `NULL` 이고, 그건 빈 값이 아니라 **"이 벤더는 값을
+리전으로 나누지 않는다"** 는 답이다. 그래서 `''` 로 바꿔 저장하지 않는다.
+
+**함정 하나.** 포스트그레스는 UNIQUE 안의 NULL 을 서로 다른 값으로 본다.
+평범한 `UNIQUE(..., region, ...)` 였다면 리전 없는 네 곳은 같은 행을 두 번
+넣어도 막지 못하고, 비교 화면에서 값이 조용히 두 배가 된다. 그래서 유일
+인덱스는 `COALESCE(region,'')` 로 건다 — 키에서만 접고 칸은 NULL 로 읽힌다.
+
+`cloud_price_run` 도 벤더&리전 단위다. AWS 는 가격표 판 번호를 리전마다 따로
+내는데, 벤더당 한 칸이면 하나밖에 기억 못 해서 둘째 리전은 매번 202MB 를
+다시 받게 된다.
+
+리전 목록은 `AWS_REGIONS` (기본 `ap-northeast-2` 하나). `WORKLOG_AWS_REGIONS`
+환경변수로 배포 없이 바꿀 수 있다.
+
+---
+
 ## 리프레시 규칙
 
 ```
@@ -163,11 +190,12 @@ Nebius 는 한 장씩 판다. 머신 단가를 그대로 늘어놓으면 **포�
 | --- | --- |
 | `sql/migrations/0015_cloud_pricing.sql` | 스냅샷·행·공급자별 결과·변경 |
 | `sql/migrations/0016_cloud_price_gpu_spec.sql` | GPU 모델·개수·메모리 |
+| `sql/migrations/0018_cloud_price_region_key.sql` | 키를 벤더&리전으로 |
 | `src/rlwrld_worklog/cloud_pricing.py` | 해시·비교·스냅샷 규칙·페이로드 (순수 + DB) |
 | `src/rlwrld_worklog/cloud_pricing_sources.py` | 다섯 어댑터와 환율 (네트워크) |
 | `src/rlwrld_worklog/cloud_pricing_web.py` | 라우트 |
 | `static/admin.{html,js}` | 화면 |
-| `tests/test_cloud_pricing.py` | 46개 |
+| `tests/test_cloud_pricing.py` | 56개 |
 | `tests/fixtures/cloud_pricing/` | 실제 페이지에서 잘라낸 고정 입력 |
 
 라우트는 전부 `require_super_admin_session`. GPU-hour 단가는 협상 카드라

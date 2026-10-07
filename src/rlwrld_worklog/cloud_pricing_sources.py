@@ -35,6 +35,7 @@ import csv
 import io
 import itertools
 import json
+import os
 import re
 import urllib.error
 import urllib.request
@@ -51,14 +52,35 @@ USER_AGENT = "rlwrld-worklog-cloud-pricing/1.0 (+internal backoffice)"
 # comparing Seoul against Virginia would be comparing two different products.
 AWS_REGION = "ap-northeast-2"
 
-AWS_EC2_CSV = (
-    "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/current/"
-    f"{AWS_REGION}/index.csv"
-)
-AWS_S3_JSON = (
-    "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/"
-    f"{AWS_REGION}/index.json"
-)
+# Which AWS regions to carry. One for now; the key is (vendor, region) so
+# adding one is this list plus a refresh, and each costs about 200MB on the
+# first fetch after AWS publishes a new edition and nothing afterwards.
+#
+# WORKLOG_AWS_REGIONS overrides it, comma separated, so a region can be tried
+# without a deploy.
+AWS_REGIONS: tuple[str, ...] = (AWS_REGION,)
+
+_AWS_OFFERS = "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws"
+
+
+def aws_regions() -> tuple[str, ...]:
+    configured = os.environ.get("WORKLOG_AWS_REGIONS", "").strip()
+    if not configured:
+        return AWS_REGIONS
+    named = tuple(part.strip() for part in configured.split(",") if part.strip())
+    return named or AWS_REGIONS
+
+
+def aws_ec2_csv(region: str) -> str:
+    return f"{_AWS_OFFERS}/AmazonEC2/current/{region}/index.csv"
+
+
+def aws_s3_json(region: str) -> str:
+    return f"{_AWS_OFFERS}/AmazonS3/current/{region}/index.json"
+
+
+AWS_EC2_CSV = aws_ec2_csv(AWS_REGION)
+AWS_S3_JSON = aws_s3_json(AWS_REGION)
 NEBIUS_URL = "https://nebius.com/prices"
 KAKAO_URL = "https://www.kakaocloud.com/pricing/calculator"
 NAVER_GPU_URL = "https://www.ncloud.com/product/compute/gpuServer"
@@ -352,7 +374,9 @@ def _qualifier(text: str) -> str | None:
 # ----------------------------------------------------------------------- AWS
 
 
-def parse_aws_csv(stream: Iterator[str]) -> tuple[list[PriceRow], str]:
+def parse_aws_csv(
+    stream: Iterator[str], region: str = AWS_REGION
+) -> tuple[list[PriceRow], str]:
     reader = csv.reader(stream)
     meta: dict[str, str] = {}
     for _ in range(5):
@@ -417,7 +441,7 @@ def parse_aws_csv(stream: Iterator[str]) -> tuple[list[PriceRow], str]:
                 PriceRow(
                     provider="aws", category="gpu", sku=instance, label=instance,
                     amount=amount, currency=field(row, "Currency") or "USD",
-                    unit=field(row, "Unit") or "Hrs", region=AWS_REGION,
+                    unit=field(row, "Unit") or "Hrs", region=region,
                     gpu_model=AWS_GPU_MODEL.get(family),
                     gpu_count=count,
                     gpu_memory_gb=per_gpu,
@@ -439,15 +463,15 @@ def parse_aws_csv(stream: Iterator[str]) -> tuple[list[PriceRow], str]:
                     provider="aws", category="storage", sku=f"ebs-{volume}",
                     label=f"EBS {volume}", amount=amount,
                     currency=field(row, "Currency") or "USD",
-                    unit=field(row, "Unit") or "GB-Mo", region=AWS_REGION,
+                    unit=field(row, "Unit") or "GB-Mo", region=region,
                     spec={"매체": field(row, "Storage Media")},
                 )
             )
     return rows, meta.get("Version", "")
 
 
-def _aws_s3_rows() -> list[PriceRow]:
-    document = _get_json(AWS_S3_JSON, timeout=60)
+def _aws_s3_rows(region: str = AWS_REGION) -> list[PriceRow]:
+    document = _get_json(aws_s3_json(region), timeout=60)
     products = document.get("products") or {}
     terms = (document.get("terms") or {}).get("OnDemand") or {}
     rows: list[PriceRow] = []
@@ -472,14 +496,19 @@ def _aws_s3_rows() -> list[PriceRow]:
                     PriceRow(
                         provider="aws", category="storage", sku=f"s3-{usage}",
                         label=f"S3 {storage_class}", amount=amount, currency="USD",
-                        unit=str(dimension.get("unit") or "GB-Mo"), region=AWS_REGION,
+                        unit=str(dimension.get("unit") or "GB-Mo"), region=region,
                         spec={"등급": storage_class},
                     )
                 )
     return rows
 
 
-def fetch_aws(*, known_version: str | None = None, timeout: float = 180.0) -> SourceResult:
+def fetch_aws(
+    *,
+    region: str = AWS_REGION,
+    known_version: str | None = None,
+    timeout: float = 180.0,
+) -> SourceResult:
     """AWS, from the official bulk price list.
 
     The EC2 file is 200MB, so it is streamed and filtered a row at a time
@@ -487,7 +516,8 @@ def fetch_aws(*, known_version: str | None = None, timeout: float = 180.0) -> So
     still the edition we already hold. The version is in the file's own header,
     which costs the first few kilobytes to read.
     """
-    response = _open(AWS_EC2_CSV, timeout=timeout)
+    source = aws_ec2_csv(region)
+    response = _open(source, timeout=timeout)
     with response:
         stream = io.TextIOWrapper(response, encoding="utf-8", newline="")
         if known_version:
@@ -503,25 +533,26 @@ def fetch_aws(*, known_version: str | None = None, timeout: float = 180.0) -> So
                 # tells the refresh to keep the rows it already has rather
                 # than read this as AWS having withdrawn every machine.
                 return SourceResult(
-                    provider="aws", rows=[], outcome="ok", reused=True,
+                    provider="aws", region=region, rows=[], outcome="ok", reused=True,
                     detail=f"AWS 가격표 판({version})이 그대로라 내려받지 않았습니다",
-                    source_url=AWS_EC2_CSV, source_version=version,
+                    source_url=source, source_version=version,
                 )
             # Same wrapper, chained behind the lines already taken off it: a
             # second wrapper would start mid-row, and readlines() would pull
             # 200MB into memory to save reading it once.
-            rows, version = parse_aws_csv(itertools.chain(head, stream))
+            rows, version = parse_aws_csv(itertools.chain(head, stream), region)
         else:
-            rows, version = parse_aws_csv(stream)
+            rows, version = parse_aws_csv(stream, region)
 
     if not rows:
         raise SourceError(
-            "the AWS price list parsed but held no GPU instances -- "
+            f"the AWS price list for {region} parsed but held no GPU instances -- "
             "the column layout or the instance families have moved"
         )
-    rows.extend(_aws_s3_rows())
+    rows.extend(_aws_s3_rows(region))
     return SourceResult(
-        provider="aws", rows=rows, source_url=AWS_EC2_CSV, source_version=version
+        provider="aws", region=region, rows=rows,
+        source_url=source, source_version=version,
     )
 
 
@@ -803,6 +834,8 @@ def parse_naver(markup: str) -> list[PriceRow]:
 def fetch_naver(*, timeout: float = 40.0) -> SourceResult:
     return SourceResult(
         provider="naver",
+        # Naver's price page quotes 한국 and offers no other region.
+        region="KR",
         rows=parse_naver(_get_text(NAVER_GPU_URL, timeout=timeout)),
         source_url=NAVER_GPU_URL,
         detail="GPU 시간 요금만. 스토리지 요금은 네이버가 계산기에서 그려 넣어 페이지에 값이 없습니다.",
@@ -936,30 +969,49 @@ FETCHERS: dict[str, Callable[..., SourceResult]] = {
 
 def fetch_all(
     *,
-    known_versions: Mapping[str, str] | None = None,
+    known_versions: Mapping[tuple[str, str], str] | None = None,
     only: Sequence[str] | None = None,
+    regions: Sequence[str] | None = None,
 ) -> list[SourceResult]:
-    """Ask every provider, and let each one fail on its own.
+    """Ask every vendor -- AWS once per region -- and let each ask fail alone.
 
-    One provider's bad afternoon must not cost the other four. Each failure
-    comes back as a result rather than an exception, and :func:`carry_forward`
-    in :mod:`cloud_pricing` keeps that provider's last known prices on the
+    One vendor's bad afternoon must not cost the other four, and one region's
+    must not cost the other regions. Each failure comes back as a result
+    rather than an exception, and :func:`carry_forward` in
+    :mod:`cloud_pricing` keeps that vendor+region's last known prices on the
     screen with the reason printed beside them.
+
+    `known_versions` is keyed by (provider, region or "") -- AWS publishes a
+    version per region, and one slot per vendor could only remember one of
+    them, which would make every region after the first re-download 200MB on
+    every refresh.
     """
     versions = dict(known_versions or {})
+    wanted = tuple(regions) if regions is not None else aws_regions()
     results: list[SourceResult] = []
     for provider, fetcher in FETCHERS.items():
         if only and provider not in only:
             continue
-        try:
-            if provider == "aws":
-                results.append(fetcher(known_version=versions.get("aws")))
-            else:
-                results.append(fetcher())
-        except SourceError as error:
-            results.append(SourceResult.failure(provider, str(error)))
-        except Exception as error:  # a parser bug must not take the refresh down
-            results.append(
-                SourceResult.failure(provider, f"{type(error).__name__}: {error}")
-            )
+        # AWS is the one vendor that prices by region, so it is the one asked
+        # more than once. The rest publish a single rate card.
+        asks: list[dict[str, Any]] = (
+            [{"region": region, "known_version": versions.get(("aws", region))}
+             for region in wanted]
+            if provider == "aws"
+            else [{}]
+        )
+        for ask in asks:
+            try:
+                results.append(fetcher(**ask))
+            except SourceError as error:
+                results.append(
+                    SourceResult.failure(provider, str(error), region=ask.get("region"))
+                )
+            except Exception as error:  # a parser bug must not take the refresh down
+                results.append(
+                    SourceResult.failure(
+                        provider, f"{type(error).__name__}: {error}",
+                        region=ask.get("region"),
+                    )
+                )
     return results

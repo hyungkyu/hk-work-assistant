@@ -890,3 +890,13 @@ def test_the_region_a_price_belongs_to_is_on_screen(script: str) -> None:
     """HK, 2026-10-06: AWS는 리전별로 가격이 다르다고 들었는데."""
     assert "['리전', '']" in script
     assert "text: row.region || '—'," in script
+
+
+def test_the_screen_can_be_narrowed_to_one_region(html: str, script: str) -> None:
+    """HK, 2026-10-07: 키는 벤더&리전. Once a vendor can appear in more than
+    one region, the list has to be able to hold one of them still."""
+    assert 'id="cp-region"' in html
+    assert "if (cpState.region && (row.region || '') !== cpState.region) return false;" in script
+    # Only regions that are on screen; a vendor with no region is not offered
+    # as an empty option.
+    assert "(data.rows || []).filter((r) => r.region).map((r) => r.region)" in script

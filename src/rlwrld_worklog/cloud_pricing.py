@@ -114,8 +114,14 @@ class PriceRow:
         object.__setattr__(self, "amount", Decimal(str(self.amount)))
 
     @property
-    def key(self) -> tuple[str, str, str]:
-        return (self.provider, self.category, self.sku)
+    def key(self) -> tuple[str, str, str, str]:
+        """Vendor and region together, then what the thing is.
+
+        `p5.48xlarge` in Seoul and the same name in Virginia are two prices,
+        not one row that keeps changing. A vendor that does not divide its
+        prices by region contributes "" here and is unaffected.
+        """
+        return (self.provider, self.region or "", self.category, self.sku)
 
     def identity(self) -> str:
         """Everything a change would have to move. The unit of the hash.
@@ -129,6 +135,7 @@ class PriceRow:
         return "|".join(
             [
                 self.provider,
+                self.region or "",
                 self.category,
                 self.sku,
                 amount_key(self.amount),
@@ -143,6 +150,9 @@ class SourceResult:
     """What one provider's fetcher came back with, including having failed."""
 
     provider: str
+    # Which region this answer is about. None for a vendor that publishes one
+    # rate card for everywhere.
+    region: str | None = None
     rows: list[PriceRow] = field(default_factory=list)
     outcome: str = "ok"
     detail: str | None = None
@@ -164,8 +174,18 @@ class SourceResult:
         return self.ok and not self.reused
 
     @classmethod
-    def failure(cls, provider: str, detail: str, *, source_url: str | None = None) -> "SourceResult":
-        return cls(provider=provider, outcome="failed", detail=detail, source_url=source_url)
+    def failure(
+        cls,
+        provider: str,
+        detail: str,
+        *,
+        region: str | None = None,
+        source_url: str | None = None,
+    ) -> "SourceResult":
+        return cls(
+            provider=provider, region=region, outcome="failed",
+            detail=detail, source_url=source_url,
+        )
 
 
 @dataclass(frozen=True)
@@ -211,6 +231,7 @@ def content_hash(rows: Iterable[PriceRow]) -> str:
 @dataclass
 class PriceChange:
     provider: str
+    region: str | None
     category: str
     sku: str
     label: str
@@ -235,19 +256,19 @@ class PriceDiff:
         out: list[PriceChange] = []
         for row in self.added:
             out.append(
-                PriceChange(row.provider, row.category, row.sku, row.label, "added",
-                            None, row.amount, row.currency, row.unit)
+                PriceChange(row.provider, row.region, row.category, row.sku, row.label,
+                            "added", None, row.amount, row.currency, row.unit)
             )
         for row, before in self.changed:
             out.append(
-                PriceChange(row.provider, row.category, row.sku, row.label, "changed",
-                            before, row.amount, row.currency, row.unit)
+                PriceChange(row.provider, row.region, row.category, row.sku, row.label,
+                            "changed", before, row.amount, row.currency, row.unit)
             )
         for old in self.removed:
             out.append(
                 PriceChange(
-                    str(old["provider"]), str(old["category"]), str(old["sku"]),
-                    str(old["label"]), "removed",
+                    str(old["provider"]), old.get("region"), str(old["category"]),
+                    str(old["sku"]), str(old["label"]), "removed",
                     Decimal(str(old["amount"])), None,
                     str(old["currency"]), str(old["unit"]),
                 )
@@ -262,7 +283,12 @@ def diff_rows(incoming: Sequence[PriceRow], existing: Sequence[Mapping[str, Any]
     whose price held is not a change: the screen is about money.
     """
     before = {
-        (str(row["provider"]), str(row["category"]), str(row["sku"])): row
+        (
+            str(row["provider"]),
+            str(row.get("region") or ""),
+            str(row["category"]),
+            str(row["sku"]),
+        ): row
         for row in existing
     }
     diff = PriceDiff()
@@ -296,12 +322,20 @@ def carry_forward(
     prices; dropping its rows would record a fabricated deletion and then, on
     the next successful refresh, a fabricated re-addition.
     """
-    answered = {result.provider for result in results if result.supplies_rows}
+    # Per vendor AND region: AWS answering for Seoul says nothing about
+    # whether the Virginia rate card was read, and dropping Virginia's rows
+    # because Seoul came back would record a region's worth of deletions that
+    # nobody observed.
+    answered = {
+        (result.provider, result.region or "")
+        for result in results
+        if result.supplies_rows
+    }
     rows: list[PriceRow] = [
         row for result in results if result.supplies_rows for row in result.rows
     ]
     for old in existing:
-        if str(old["provider"]) in answered:
+        if (str(old["provider"]), str(old.get("region") or "")) in answered:
             continue
         rows.append(
             PriceRow(
@@ -466,6 +500,7 @@ def build_payload(
         "runs": [
             {
                 "provider": run["provider"],
+                "region": run.get("region"),
                 "outcome": run["outcome"],
                 "detail": run.get("detail"),
                 "source_url": run.get("source_url"),
@@ -495,14 +530,15 @@ _ROWS_SQL = """
            gpu_model, gpu_count, gpu_memory_gb
     FROM cloud_price
     WHERE snapshot_id = %s
-    ORDER BY provider, category, sort, sku
+    ORDER BY provider, COALESCE(region, ''), category, sort, sku
 """
 
 _RUNS_SQL = """
-    SELECT provider, outcome, detail, source_url, source_version, row_count, fetched_at
+    SELECT provider, region, outcome, detail, source_url, source_version,
+           row_count, fetched_at
     FROM cloud_price_run
     WHERE snapshot_id = %s
-    ORDER BY provider
+    ORDER BY provider, COALESCE(region, '')
 """
 
 _HISTORY_SQL = """
@@ -572,16 +608,16 @@ def read_snapshot(database_url: str, snapshot_id: int) -> dict[str, Any]:
             runs = _dicts(cursor, _RUNS_SQL, (snapshot_id,))
             changes = _dicts(
                 cursor,
-                "SELECT provider, category, sku, label, type, before_amount, after_amount,"
-                "       currency, unit"
+                "SELECT provider, region, category, sku, label, type, before_amount,"
+                "       after_amount, currency, unit"
                 "  FROM cloud_price_change WHERE snapshot_id = %s"
-                " ORDER BY provider, category, sku",
+                " ORDER BY provider, COALESCE(region, ''), category, sku",
                 (snapshot_id,),
             )
     payload = build_payload(snapshot=snapshot, rows=rows, runs=runs, history=[])
     payload["changes"] = [
         {
-            **{k: change[k] for k in ("provider", "category", "sku", "label", "type", "currency", "unit")},
+            **{k: change[k] for k in ("provider", "region", "category", "sku", "label", "type", "currency", "unit")},
             "before": (None if change["before_amount"] is None else amount_key(change["before_amount"]).rstrip("0").rstrip(".")),
             "after": (None if change["after_amount"] is None else amount_key(change["after_amount"]).rstrip("0").rstrip(".")),
         }
@@ -590,11 +626,15 @@ def read_snapshot(database_url: str, snapshot_id: int) -> dict[str, Any]:
     return payload
 
 
-def previous_versions(database_url: str) -> dict[str, str]:
-    """What each provider called its rate card last time it answered.
+def previous_versions(database_url: str) -> dict[tuple[str, str], str]:
+    """What each vendor+region called its rate card last time it answered.
 
-    AWS publishes a version on a 202MB file. Knowing the version we already
-    hold is what lets the fetcher decide not to download it again.
+    AWS publishes a version per region on a 202MB file each. Knowing the one
+    we already hold is what lets the fetcher decide not to download it again,
+    and remembering it per region is what stops a second region re-downloading
+    every time because the first one's version was the only slot.
+
+    Keyed by (provider, region or "").
     """
     import psycopg
 
@@ -605,7 +645,7 @@ def previous_versions(database_url: str) -> dict[str, str]:
                 return {}
             runs = _dicts(cursor, _RUNS_SQL, (snapshot["id"],))
     return {
-        str(run["provider"]): str(run["source_version"])
+        (str(run["provider"]), str(run.get("region") or "")): str(run["source_version"])
         for run in runs
         if run["outcome"] == "ok" and run["source_version"]
     }
@@ -646,10 +686,19 @@ def apply_refresh(
             # Nothing moved: keep the snapshot, move the clock and the rate.
             # This is the branch that stops the history filling with identical
             # rate cards every time somebody presses the button.
-            if snapshot is not None and digest == str(snapshot["content_hash"]):
+            # `diff.moved == 0` as well as the hash, because they can disagree
+            # exactly once: when the identity scheme itself changes. Adding
+            # region to the hash makes every string different while no price
+            # has moved, and writing a snapshot for that would put a history
+            # entry with nothing in it in front of whoever opens the drawer.
+            # What the history is about is movement.
+            if snapshot is not None and (
+                digest == str(snapshot["content_hash"]) or diff.moved == 0
+            ):
                 cursor.execute(
                     "UPDATE cloud_price_snapshot SET refreshed_at = %s, fx_rate = %s,"
-                    "       fx_as_of = %s, fx_source = %s, fx_base = %s, fx_quote = %s"
+                    "       fx_as_of = %s, fx_source = %s, fx_base = %s, fx_quote = %s,"
+                    "       content_hash = %s"
                     " WHERE id = %s",
                     (
                         taken_at,
@@ -658,6 +707,9 @@ def apply_refresh(
                         fx.source if fx else None,
                         fx.base if fx else "USD",
                         fx.quote if fx else "KRW",
+                        # Re-stated so a changed identity scheme settles after
+                        # one refresh rather than re-deciding every time.
+                        digest,
                         snapshot["id"],
                     ),
                 )
@@ -708,12 +760,12 @@ def apply_refresh(
             for change in diff.as_changes():
                 cursor.execute(
                     "INSERT INTO cloud_price_change"
-                    " (snapshot_id, provider, category, sku, label, type, before_amount,"
-                    "  after_amount, currency, unit)"
-                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    " (snapshot_id, provider, region, category, sku, label, type,"
+                    "  before_amount, after_amount, currency, unit)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (
-                        snapshot_id, change.provider, change.category, change.sku,
-                        change.label, change.type, change.before_amount,
+                        snapshot_id, change.provider, change.region, change.category,
+                        change.sku, change.label, change.type, change.before_amount,
                         change.after_amount, change.currency, change.unit,
                     ),
                 )
@@ -752,13 +804,14 @@ def _refresh_descriptions(cursor, snapshot_id: int, rows: Sequence[PriceRow]) ->
 
     for row in rows:
         cursor.execute(
-            "UPDATE cloud_price SET label = %s, region = %s, spec = %s,"
+            "UPDATE cloud_price SET label = %s, spec = %s,"
             "       gpu_model = %s, gpu_count = %s, gpu_memory_gb = %s"
-            " WHERE snapshot_id = %s AND provider = %s AND category = %s AND sku = %s",
+            " WHERE snapshot_id = %s AND provider = %s"
+            "   AND COALESCE(region, '') = %s AND category = %s AND sku = %s",
             (
-                row.label, row.region, Jsonb(dict(row.spec)),
+                row.label, Jsonb(dict(row.spec)),
                 row.gpu_model, row.gpu_count, row.gpu_memory_gb,
-                snapshot_id, row.provider, row.category, row.sku,
+                snapshot_id, row.provider, row.region or "", row.category, row.sku,
             ),
         )
 
@@ -787,19 +840,20 @@ def _write_runs(
     """
     if replace:
         cursor.execute("DELETE FROM cloud_price_run WHERE snapshot_id = %s", (snapshot_id,))
-    held: dict[str, int] = {}
+    held: dict[tuple[str, str], int] = {}
     for row in rows:
-        held[row.provider] = held.get(row.provider, 0) + 1
+        slot = (row.provider, row.region or "")
+        held[slot] = held.get(slot, 0) + 1
     for result in results:
         cursor.execute(
             "INSERT INTO cloud_price_run"
-            " (snapshot_id, provider, outcome, detail, source_url, source_version,"
-            "  row_count, fetched_at)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            " (snapshot_id, provider, region, outcome, detail, source_url,"
+            "  source_version, row_count, fetched_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
-                snapshot_id, result.provider, result.outcome, result.detail,
-                result.source_url, result.source_version,
-                held.get(result.provider, 0), when,
+                snapshot_id, result.provider, result.region, result.outcome,
+                result.detail, result.source_url, result.source_version,
+                held.get((result.provider, result.region or ""), 0), when,
             ),
         )
 
@@ -808,6 +862,7 @@ def _run_summary(results: Sequence[SourceResult]) -> list[dict[str, Any]]:
     return [
         {
             "provider": result.provider,
+            "region": result.region,
             "outcome": result.outcome,
             "detail": result.detail,
             "rows": len(result.rows),

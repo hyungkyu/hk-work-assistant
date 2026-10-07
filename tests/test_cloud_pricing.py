@@ -662,3 +662,136 @@ def test_a_vessl_sku_does_not_change_when_vessl_rewords_its_status_chip() -> Non
     assert one("셀프서브") == "NVIDIA H100 SXM"
     assert one("무엇이든새로운말") == "NVIDIA H100 SXM"
     assert one("") == "NVIDIA H100 SXM"
+
+
+# --- vendor and region are the key ------------------------------------------
+
+
+def test_the_same_machine_in_two_regions_is_two_prices() -> None:
+    """HK, 2026-10-07: 키는 벤더&리전.
+
+    p5.48xlarge is $75.96/hr in Seoul and $55.04 in Virginia. Under a key
+    without region the second is not a second row, it is a collision.
+    """
+    seoul = row(provider="aws", sku="p5.48xlarge", region="ap-northeast-2",
+                amount=Decimal("75.9552"), unit="Hrs")
+    virginia = row(provider="aws", sku="p5.48xlarge", region="us-east-1",
+                   amount=Decimal("55.04"), unit="Hrs")
+    assert seoul.key != virginia.key
+    assert cp.content_hash([seoul]) != cp.content_hash([virginia])
+    # Both present, neither read as a change to the other.
+    assert cp.diff_rows([seoul, virginia], []).moved == 2
+
+
+def test_a_vendor_with_no_region_is_not_two_different_rows() -> None:
+    """"다른 곳은 리전이 없을거야" -- and None must behave as one value, not
+    as a value that differs from itself."""
+    one = row(provider="nebius", sku="H100", region=None)
+    two = row(provider="nebius", sku="H100", region=None)
+    assert one.key == two.key
+    existing = [{"provider": "nebius", "category": "gpu", "sku": "H100",
+                 "label": "H100", "amount": Decimal("3.85"), "currency": "USD",
+                 "unit": "GPU-hour", "region": None}]
+    assert cp.diff_rows([one], existing).moved == 0
+
+
+def test_a_region_failing_does_not_delete_the_other_regions_prices() -> None:
+    """AWS answering for Seoul says nothing about Virginia."""
+    existing = [
+        {"provider": "aws", "category": "gpu", "sku": "p5.48xlarge", "label": "p5.48xlarge",
+         "amount": Decimal("55.04"), "currency": "USD", "unit": "Hrs",
+         "region": "us-east-1", "spec": {}, "sort": 0},
+        {"provider": "aws", "category": "gpu", "sku": "p5.48xlarge", "label": "p5.48xlarge",
+         "amount": Decimal("75.9552"), "currency": "USD", "unit": "Hrs",
+         "region": "ap-northeast-2", "spec": {}, "sort": 0},
+    ]
+    results = [
+        cp.SourceResult(provider="aws", region="ap-northeast-2", rows=[
+            row(provider="aws", sku="p5.48xlarge", region="ap-northeast-2",
+                amount=Decimal("75.9552"), unit="Hrs")]),
+        cp.SourceResult.failure("aws", "the price list could not be reached",
+                                region="us-east-1"),
+    ]
+    carried = cp.carry_forward(results, existing)
+    assert {(r.region, str(r.amount)) for r in carried} == {
+        ("ap-northeast-2", "75.9552"), ("us-east-1", "55.04"),
+    }
+    assert cp.diff_rows(carried, existing).removed == []
+
+
+def test_a_changed_identity_scheme_does_not_invent_a_history_entry() -> None:
+    """Adding region to the hash makes every string new while no price moved.
+
+    The guard is that a refresh whose diff is empty is an unchanged refresh,
+    whatever the hash says -- the history is about movement.
+    """
+    rows = [row()]
+    assert cp.diff_rows(rows, [{"provider": "nebius", "category": "gpu", "sku": "H100",
+                                "label": "NVIDIA HGX H100", "amount": Decimal("3.85"),
+                                "currency": "USD", "unit": "GPU-hour",
+                                "region": None}]).moved == 0
+
+
+def test_aws_regions_can_be_named_without_a_deploy(monkeypatch) -> None:
+    monkeypatch.setenv("WORKLOG_AWS_REGIONS", "us-east-1, ap-northeast-1")
+    assert sources.aws_regions() == ("us-east-1", "ap-northeast-1")
+    monkeypatch.setenv("WORKLOG_AWS_REGIONS", "  ")
+    assert sources.aws_regions() == sources.AWS_REGIONS
+
+
+def test_each_aws_region_is_read_from_its_own_price_list() -> None:
+    assert "ap-northeast-2" in sources.aws_ec2_csv("ap-northeast-2")
+    assert sources.aws_ec2_csv("us-east-1") != sources.aws_ec2_csv("ap-northeast-2")
+
+
+def test_a_version_is_remembered_per_region_not_per_vendor() -> None:
+    """One slot per vendor would make every region after the first re-download
+    202MB on every refresh."""
+    rows, version = sources.parse_aws_csv(
+        iter(fixture("aws_ec2.csv").splitlines(keepends=True)), "us-east-1"
+    )
+    assert {r.region for r in rows} == {"us-east-1"}
+    assert version == "20260925174521"
+
+
+@REQUIRES_DATABASE
+def test_two_regions_of_one_vendor_live_side_by_side(database: str) -> None:
+    seoul = row(provider="aws", sku="p5.48xlarge", region="ap-northeast-2",
+                amount=Decimal("75.9552"), unit="Hrs", gpu_model="H100", gpu_count=8)
+    virginia = row(provider="aws", sku="p5.48xlarge", region="us-east-1",
+                   amount=Decimal("55.04"), unit="Hrs", gpu_model="H100", gpu_count=8)
+    cp.apply_refresh(
+        database,
+        [cp.SourceResult(provider="aws", region="ap-northeast-2", rows=[seoul]),
+         cp.SourceResult(provider="aws", region="us-east-1", rows=[virginia])],
+        fx("1360"),
+        now=NOW,
+    )
+    payload = cp.read_current(database)
+    by_region = {r["region"]: r for r in payload["rows"]}
+    assert set(by_region) == {"ap-northeast-2", "us-east-1"}
+    assert by_region["us-east-1"]["amount"] == "55.04"
+    # And each region's fetch is recorded separately.
+    assert {run["region"] for run in payload["runs"]} == {"ap-northeast-2", "us-east-1"}
+
+
+@REQUIRES_DATABASE
+def test_a_region_less_vendor_cannot_be_stored_twice(database: str) -> None:
+    """Postgres counts NULLs in a UNIQUE as distinct from each other, so the
+    index folds NULL to '' -- without that, every Kakao price could be
+    inserted a second time and silently doubled in a comparison."""
+    import psycopg
+
+    cp.apply_refresh(
+        database, [cp.SourceResult(provider="nebius", rows=[row()])], fx(), now=NOW,
+    )
+    snapshot = cp.read_current(database)["snapshot"]["id"]
+    with psycopg.connect(database) as connection:
+        with connection.cursor() as cursor:
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                cursor.execute(
+                    "INSERT INTO cloud_price"
+                    " (snapshot_id, provider, category, sku, label, amount, currency, unit)"
+                    " VALUES (%s, 'nebius', 'gpu', 'H100', 'dup', 1, 'USD', 'GPU-hour')",
+                    (snapshot,),
+                )
