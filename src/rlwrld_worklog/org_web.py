@@ -1,15 +1,19 @@
-"""The organisation and the digests, served read-only to the backoffice.
+"""The organisation and the digests, served to the backoffice.
 
-Everything here reads what a batch already wrote. Nothing on these routes
-collects, syncs, or generates: the org chart changes when the roster sync
-next runs, and a person's day changes when the digest batch next builds it.
-That is the contract HK set on 2026-09-11 -- 이건 코드여야지, 네가 하면 안됨
--- and a screen that could regenerate its own contents would quietly break it.
+Everything here reads what a batch already wrote, and nothing generates: a
+person's day changes when the digest batch next builds it. That is the
+contract HK set on 2026-09-11 -- 이건 코드여야지, 네가 하면 안됨.
 
-The one exception is `resolve`, which is a person answering a question the
-system asked: whose account this is. It is a POST, it carries CSRF like every
-other mutation, and what it writes is an identity marked `resolved` so a
-reader can always tell a person's answer from what the roster said.
+Two POSTs, each a person acting rather than the screen acting on its own:
+
+* `resolve` -- a person answering whose an unknown account is. What it writes
+  is an identity marked `resolved`, so a reader can always tell a person's
+  answer from what the roster said.
+* `refresh` -- a person asking for the roster sync now instead of waiting for
+  the daily batch (HK, 2026-10-07). It runs the same code as `worklog org
+  sync --apply`; the sheet stays the only place the chart comes from.
+
+Both carry CSRF like every other mutation.
 """
 
 from __future__ import annotations
@@ -21,7 +25,13 @@ from typing import Annotated, Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from .admin_web import _require_csrf, require_page_access, require_super_admin_session
+from .admin_web import (
+    _require_csrf,
+    require_page_access,
+    require_super_admin_session,
+    session_actor,
+    store,
+)
 
 router = APIRouter(prefix="/api/v1/admin/org")
 
@@ -44,8 +54,59 @@ def org_chart_route(
     """The org chart from the newest roster observation of each tab."""
     require_page_access("org")(request)
     from .org.chart import org_chart
+    from .org.sync import roster_sheet_url
 
-    return org_chart(_database_url(), include_retired=include_retired)
+    return {
+        **org_chart(_database_url(), include_retired=include_retired),
+        "roster_url": roster_sheet_url(),
+    }
+
+
+@router.post("/refresh")
+def refresh_route(request: Request) -> dict[str, Any]:
+    """Read the roster sheet again and record what it says now.
+
+    An unchanged workbook writes nothing -- the same digest check the daily
+    batch uses -- so pressing the button twice does not fill the history
+    with identical observations.
+    """
+    current = require_super_admin_session(request)
+    _require_csrf(request, current)
+    database_url = _database_url()
+    token_path = store().secret_path("google_token")
+    if not token_path.is_file():
+        raise HTTPException(
+            status_code=503,
+            detail="the Google token is not configured: authorize it on the 연결 screen",
+        )
+    from .google_auth import DRIVE_READONLY_SCOPE, load_credentials
+    from .org.sheet import export_workbook
+    from .org.sync import UnusableRoster, sync_workbook
+
+    try:
+        data = export_workbook(load_credentials(token_path, [DRIVE_READONLY_SCOPE]))
+    except Exception as error:  # noqa: BLE001 -- Google's errors have no common base
+        # Said as the sheet's failure rather than a 500: an expired token or a
+        # Drive outage is not a bug in the chart.
+        raise HTTPException(status_code=502, detail=f"the roster sheet could not be read: {error}") from error
+    try:
+        outcome = sync_workbook(database_url, data, refuse_empty=True)
+    except UnusableRoster as error:
+        # A missing tab or an emptied one: refused before anything is written,
+        # because recording it would retire everybody in that tab.
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    store().audit(
+        "org.refreshed",
+        actor=session_actor(current),
+        details={
+            "workbook_sha256": outcome["workbook_sha256"],
+            "tabs": [
+                {key: tab[key] for key in ("source", "observation_id", "people", "unchanged_workbook")}
+                for tab in outcome["tabs"]
+            ],
+        },
+    )
+    return outcome
 
 
 @router.get("/status")

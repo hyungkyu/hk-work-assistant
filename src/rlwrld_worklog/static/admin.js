@@ -2089,9 +2089,38 @@
         line.textContent = chart.reason
           ? chart.reason
           : `로스터 관측 ${chart.observed_at ? new Date(chart.observed_at).toLocaleString() : '없음'} 기준`;
+        if (chart.roster_url) $('org-roster-link').href = chart.roster_url;
       } catch (error) {
         line.textContent = `조직도를 불러오지 못했습니다: ${error.message}`;
         $('org-badge').textContent = '조회 실패';
+      }
+    }
+
+    // Runs the roster sync now: the same code as the daily batch, started by a
+    // person. A sheet that has not changed since the last read writes nothing,
+    // and the line says so rather than leaving the click looking ignored.
+    async function refreshOrg() {
+      const button = $('org-refresh');
+      const label = button.textContent;
+      const line = $('org-refresh-line');
+      button.disabled = true; button.textContent = '시트 읽는 중…';
+      try {
+        const result = await api('/api/v1/admin/org/refresh', { method: 'POST', body: '{}' });
+        const tabs = result.tabs || [];
+        const unchanged = tabs.length && tabs.every((tab) => tab.unchanged_workbook);
+        const people = tabs.reduce((sum, tab) => sum + (tab.people || 0), 0);
+        const left = tabs.reduce((sum, tab) => sum + (tab.absent_from_sheet || 0), 0);
+        const message = unchanged
+          ? '시트가 마지막으로 읽은 뒤 바뀌지 않았습니다'
+          : `시트를 다시 읽었습니다 · ${people}명${left ? ` · 시트에서 빠진 ${left}명` : ''}`;
+        line.textContent = `${message} (${new Date().toLocaleTimeString()})`;
+        await loadOrg();
+        toast(message);
+      } catch (error) {
+        line.textContent = `새로고침 실패: ${error.message}`;
+        toast(error.message, true);
+      } finally {
+        button.disabled = false; button.textContent = label;
       }
     }
 
@@ -2831,6 +2860,7 @@
     $('pairs-more').addEventListener('click', () => loadPairs());
     $('pairs-state').addEventListener('change', () => loadPairs({ reset: true }));
     $('pairs-person').addEventListener('change', () => loadPairs({ reset: true }));
+    $('org-refresh').addEventListener('click', refreshOrg);
     $('unmapped-reload').addEventListener('click', loadUnmapped);
     $('unmapped-state').addEventListener('change', loadUnmapped);
     $('search-q').addEventListener('keydown', (event) => { if (event.key === 'Enter') runSearch(); });

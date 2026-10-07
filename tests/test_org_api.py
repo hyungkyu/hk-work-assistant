@@ -4,10 +4,12 @@ These call the route callables with the same minimal request stub the other
 API suites use, which still exercises authentication, argument validation and
 the read-only contract — the part these routes are responsible for.
 
-The contract worth stating: nothing here collects or generates. The org chart
-changes when the roster sync runs and a person's day changes when the digest
-batch builds it (HK, 2026-09-11: 이건 코드여야지, 네가 하면 안됨). The one
-mutation is a person answering whose an unknown account is.
+The contract worth stating: nothing here generates. The org chart changes when
+the roster sync runs -- on the daily batch, or when a person presses 새로고침
+(HK, 2026-10-07) -- and a person's day changes when the digest batch builds it
+(HK, 2026-09-11: 이건 코드여야지, 네가 하면 안됨). The two mutations are a
+person answering whose an unknown account is, and a person asking for that
+sync now.
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ def owner(config) -> FakeRequest:
 
 ROUTES = (
     (org_web.org_chart_route, {}),
+    (org_web.refresh_route, {}),
     (org_web.org_status_route, {}),
     (org_web.unmapped_route, {}),
     (org_web.digest_status_route, {}),
@@ -80,8 +83,34 @@ def test_resolving_needs_a_person_or_an_explicit_judgement(
     assert error.value.status_code == 400
 
 
+def test_a_refresh_without_a_google_token_says_where_to_set_it(
+    owner: FakeRequest, monkeypatch
+) -> None:
+    """Checked before Drive is called: a missing token is a setup gap, not an outage."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unreachable/nowhere")
+    monkeypatch.setattr(org_web, "_require_csrf", lambda *_args, **_kwargs: None)
+    with pytest.raises(HTTPException) as error:
+        org_web.refresh_route(owner)
+    assert error.value.status_code == 503
+    assert "연결" in error.value.detail
+
+
+def test_the_chart_names_the_sheet_it_comes_from(owner: FakeRequest, monkeypatch) -> None:
+    from rlwrld_worklog.org import chart
+    from rlwrld_worklog.org.sheet import ROSTER_SHEET_ID
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unreachable/nowhere")
+    monkeypatch.setattr(chart, "org_chart", lambda *_args, **_kwargs: {"tree": [], "people": 0})
+    body = org_web.org_chart_route(owner)
+    assert body["roster_url"] == f"https://docs.google.com/spreadsheets/d/{ROSTER_SHEET_ID}/edit"
+
+
 def test_every_reading_route_is_a_get_and_only_resolve_is_a_post() -> None:
-    """A screen that could regenerate its own contents would break the protocol."""
+    """A screen that could regenerate its own contents would break the protocol.
+
+    Refresh is the one deliberate exception: a person pressing a button, CSRF
+    and all, to run the same sync the batch runs.
+    """
     from rlwrld_worklog.web import app
 
     schema = app.openapi()["paths"]
@@ -90,6 +119,7 @@ def test_every_reading_route_is_a_get_and_only_resolve_is_a_post() -> None:
     }
     assert org_paths == {
         "/api/v1/admin/org/chart": ["get"],
+        "/api/v1/admin/org/refresh": ["post"],
         "/api/v1/admin/org/status": ["get"],
         "/api/v1/admin/org/unmapped": ["get"],
         "/api/v1/admin/org/unmapped/resolve": ["post"],

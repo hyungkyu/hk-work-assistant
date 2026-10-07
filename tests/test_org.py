@@ -685,3 +685,31 @@ def test_the_renderer_titles_the_bands_and_shows_the_mark() -> None:
     assert GROUP_PROFESSOR in html
     assert GROUP_STUDENT in html
     assert "정규직" in html
+
+
+def test_a_refresh_refuses_a_tab_with_nobody_in_it_before_writing() -> None:
+    """Recording an emptied tab would retire everybody in it.
+
+    The database URL points nowhere on purpose: the refusal must come before
+    any connection is attempted.
+    """
+    from rlwrld_worklog.org.sync import UnusableRoster, sync_workbook
+
+    data = _workbook(
+        {
+            "roster_seed_2": [["이름", "조직"], ["직원", "RLWRLD | Model Team"]],
+            "roaster_seed_ext": [["이름", "소속 학교 연구실 지도교수님"]],
+        }
+    )
+    with pytest.raises(UnusableRoster) as error:
+        sync_workbook("postgresql://unreachable/nowhere", data, refuse_empty=True)
+    assert "roster_seed_ext" in str(error.value)
+
+
+def test_a_refresh_reports_a_missing_tab_as_an_unusable_roster() -> None:
+    from rlwrld_worklog.org.sync import UnusableRoster, sync_workbook
+
+    data = _workbook({"roster_seed_2": [["이름"], ["직원"]]})
+    with pytest.raises(UnusableRoster) as error:
+        sync_workbook("postgresql://unreachable/nowhere", data, refuse_empty=True)
+    assert "roaster_seed_ext" in str(error.value)

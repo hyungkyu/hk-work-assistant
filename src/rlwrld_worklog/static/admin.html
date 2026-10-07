@@ -348,7 +348,14 @@
 
       <section class="page" id="page-org">
         <h1>조직도</h1>
-        <p class="lead">로스터 관측에서 배치가 만듭니다. 이 화면은 읽기 전용이고, 조직도가 바뀌는 유일한 경로는 다음 로스터 sync 입니다.</p>
+        <p class="lead">원본은 <a id="org-roster-link" href="https://docs.google.com/spreadsheets/d/15QsaBGnDu3ACJ8ucqeO0fu5FhDiXGjhYmzKr0KANQPw/edit" target="_blank" rel="noreferrer">로스터 시트</a>입니다.
+           사람·팀은 시트에서 고치고, 매일 배치나 새로고침 버튼으로 다시 읽어 옵니다. 이 화면에서 직접 고치지는 않습니다.</p>
+        <div class="collection-toolbar">
+          <span class="help" id="org-refresh-line"></span>
+          <div class="work-filters">
+            <button class="button primary" id="org-refresh" data-requires="super_admin">새로고침</button>
+          </div>
+        </div>
         <div class="grid three" id="org-counts"></div>
         <article class="card" style="margin-top:16px">
           <div class="card-header"><h2>팀</h2><span class="badge" id="org-badge">확인 중</span></div>
