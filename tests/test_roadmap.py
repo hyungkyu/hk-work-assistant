@@ -44,7 +44,7 @@ PRODUCTS = [
 
 def item(**overrides: Any) -> dict[str, Any]:
     base = {
-        "item_key": "1", "team_id": "rp", "product_id": 1, "horizon": "now", "kind": "dev",
+        "item_key": "1", "team_id": "rp", "product_id": 1, "horizon": "2026-09", "kind": "dev",
         "text_ko": "가", "text_en": "a", "text_ja": "ア", "source_url": None,
         "hash": "abc1234567",
         "horizon_override": False, "product_override": False, "kind_override": False,
@@ -105,8 +105,33 @@ def test_the_payload_keeps_the_shape_the_screen_already_read() -> None:
         "teams", "families", "items", "history", "snapshot", "source", "generated",
     ):
         assert key in payload, key
-    assert [h["id"] for h in payload["horizons"]] == ["now", "next", "soon", "someday"]
+    assert [h["id"] for h in payload["horizons"]] == ["2026-09", "later", "undated"]
     assert [k["id"] for k in payload["kinds"]] == ["dev", "ops"]
+
+
+def test_a_month_a_row_names_becomes_a_column_in_order() -> None:
+    """December written by one team adds a column; nobody edits a list."""
+    payload = build([
+        item(item_key="a", horizon="2026-11"), item(item_key="b", horizon="2026-09"),
+        item(item_key="c", horizon="undated"), item(item_key="d", horizon="2026-11"),
+    ])
+    assert [h["id"] for h in payload["horizons"]] == ["2026-09", "2026-11", "later", "undated"]
+    assert payload["horizons"][1]["label"] == {"ko": "2026년 11월", "en": "Nov 2026", "ja": "2026年11月"}
+
+
+def test_a_struck_row_is_reported_done() -> None:
+    assert build([item(done=True)])["items"][0]["done"] is True
+    assert build([item()])["items"][0]["done"] is False
+
+
+@pytest.mark.parametrize("value", ["2026-10", "later", "undated"])
+def test_a_month_or_a_tail_column_is_a_horizon(value: str) -> None:
+    assert roadmap.is_horizon(value)
+
+
+@pytest.mark.parametrize("value", ["now", "someday", "2026-13", "2026-1", "", None])
+def test_anything_else_is_not_a_horizon(value: Any) -> None:
+    assert not roadmap.is_horizon(value)
 
 
 def test_an_empty_roadmap_still_answers_with_a_snapshot_field() -> None:
@@ -335,9 +360,9 @@ def test_editing_an_item_raises_the_flag_that_protects_it(seeded: str) -> None:
     """The point of the whole schema: a hand-made correction survives a refresh."""
     item = roadmap.read_mapping(seeded)["items"][0]
     assert item["overrides"] == []
-    changed = roadmap.update_item(seeded, item["key"], {"kind": "ops", "horizon": "someday"})
+    changed = roadmap.update_item(seeded, item["key"], {"kind": "ops", "horizon": "undated"})
     assert changed["kind"] == "ops"
-    assert changed["horizon"] == "someday"
+    assert changed["horizon"] == "undated"
     assert changed["overrides"] == ["horizon", "kind"]
     # And it is reported to the screen, so the control can say it was set by hand.
     payload = roadmap.read_roadmap(seeded)
@@ -350,7 +375,7 @@ def test_an_item_cannot_be_given_a_horizon_that_does_not_exist(seeded: str) -> N
     item = roadmap.read_mapping(seeded)["items"][0]
     with pytest.raises(roadmap.RoadmapEditError) as refused:
         roadmap.update_item(seeded, item["key"], {"horizon": "someyear"})
-    assert "horizon must be one of" in str(refused.value)
+    assert "horizon must be YYYY-MM" in str(refused.value)
 
 
 @needs_db
@@ -405,7 +430,7 @@ def test_a_page_that_returns_no_rows_changes_nothing(
     request = session_for("super_admin")
     session = admin_web.store().read_session(request.cookies[SESSION_COOKIE])
     request.headers["x-csrf-token"] = session["csrf"]
-    monkeypatch.setattr("rlwrld_worklog.roadmap_refresh.fetch_table_rows", lambda c, p: [])
+    monkeypatch.setattr("rlwrld_worklog.roadmap_refresh.read_page", lambda c, p: [])
     applied: list[Any] = []
     monkeypatch.setattr(
         "rlwrld_worklog.roadmap_refresh.apply_refresh",

@@ -3037,10 +3037,15 @@
           className: 'badge wait', text: rmU('staleTag'), title: rmU('staleHint'),
         }));
       }
+      // Struck through on the page: kept, and said, rather than dropped.
+      if (item.done) {
+        text.appendChild(document.createTextNode(' '));
+        text.appendChild(rmEl('span', { className: 'badge ok', text: rmU('done') }));
+      }
       text.appendChild(document.createTextNode(' '));
       text.appendChild(roadmapLink(item.src, rmU('origin')));
       text.appendChild(roadmapLink(item.det, rmU('detail')));
-      return rmEl('li', {}, [text]);
+      return rmEl('li', { className: item.done ? 'done' : '' }, [text]);
     }
 
     // The same tag on every row reads as noise, so the tag becomes a heading
@@ -3076,6 +3081,9 @@
     function roadmapTrackNode(rows, tag) {
       const data = roadmapState.data;
       const grid = rmEl('div', { className: 'grid' }, [rmEl('div', { className: 'corner' })]);
+      // One column per month the teams have written, so the count is not fixed.
+      grid.style.gridTemplateColumns = `104px repeat(${data.horizons.length}, minmax(260px, 1fr))`;
+      grid.style.minWidth = `${104 + 260 * data.horizons.length}px`;
       data.horizons.forEach((horizon) => {
         grid.appendChild(rmEl('div', {
           className: 'hcell', dataset: { h: horizon.id }, text: rmL(horizon.label),
@@ -3464,11 +3472,10 @@
         row.appendChild(cell('kind', mapSelect(
           [{ value: 'dev', label: '개발성' }, { value: 'ops', label: '운영성' }], item.kind,
           (value) => saveItem(item.key, { kind: value }, '구분'))));
+        // The same columns the roadmap screen shows: months as the teams wrote
+        // them, then 향후 and 미정. A month appears here once a row names it.
         row.appendChild(cell('horizon', mapSelect(
-          [
-            { value: 'now', label: '이번달' }, { value: 'next', label: '다음달' },
-            { value: 'soon', label: '곧' }, { value: 'someday', label: '언젠가' },
-          ], item.horizon,
+          data.horizons.map((h) => ({ value: h.id, label: h.label.ko })), item.horizon,
           (value) => saveItem(item.key, { horizon: value }, '시간축'))));
         items.appendChild(row);
       });

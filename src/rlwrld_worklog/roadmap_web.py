@@ -178,7 +178,7 @@ def refresh_route(request: Request) -> dict[str, Any]:
     from datetime import datetime, timezone
 
     from .notion_client import NotionApiError, NotionClient
-    from .roadmap_refresh import apply_refresh, fetch_table_rows, parse_table
+    from .roadmap_refresh import apply_refresh, parse_updates, read_page
 
     token_path = store().secret_path("notion_token")
     if not token_path.exists():
@@ -188,12 +188,12 @@ def refresh_route(request: Request) -> dict[str, Any]:
         )
     client = NotionClient(token_path.read_text(encoding="utf-8").strip())
     try:
-        rows = fetch_table_rows(client, ROADMAP_PAGE_ID)
+        blocks = read_page(client, ROADMAP_PAGE_ID)
     except NotionApiError as error:
         # Said rather than raised as a 500: a Notion outage and a broken
         # parser are different problems with different fixes.
         raise HTTPException(status_code=502, detail=f"Notion refused: {error}") from error
-    items = parse_table(rows)
+    items = parse_updates(blocks)
     if not items:
         # Writing an empty refresh would delete the whole roadmap and record it
         # as ninety-five deliberate deletions.

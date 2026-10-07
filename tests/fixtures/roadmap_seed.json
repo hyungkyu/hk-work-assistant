@@ -379,7 +379,7 @@
   {
    "id": 0,
    "team": "rp",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "rrc_new",
    "fam": "RRP",
    "prod": "RRC",
@@ -401,7 +401,7 @@
   {
    "id": 1,
    "team": "rp",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "rrc_new",
    "fam": "RRP",
    "prod": "RRC",
@@ -423,7 +423,7 @@
   {
    "id": 2,
    "team": "rp",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "rrc_new",
    "fam": "RRP",
    "prod": "RRC",
@@ -445,7 +445,7 @@
   {
    "id": 3,
    "team": "rp",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "rrc_new",
    "fam": "RRP",
    "prod": "Motion & Vision",
@@ -467,7 +467,7 @@
   {
    "id": 4,
    "team": "rp",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "rrc_new",
    "fam": "BENCH",
    "prod": "Simulation",
@@ -489,7 +489,7 @@
   {
    "id": 5,
    "team": "rp",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "rrc_new",
    "fam": "RRP",
    "prod": "Motion & Vision",
@@ -511,7 +511,7 @@
   {
    "id": 6,
    "team": "rp",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "rrc_new",
    "fam": "RRP",
    "prod": "Teleoperation",
@@ -533,7 +533,7 @@
   {
    "id": 7,
    "team": "rp",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "rrc_new",
    "fam": "RRP",
    "prod": "Teleoperation",
@@ -555,7 +555,7 @@
   {
    "id": 8,
    "team": "rp",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "rrc_stab",
    "fam": "RRP",
    "prod": "RRC",
@@ -577,7 +577,7 @@
   {
    "id": 9,
    "team": "rp",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "rrc_stab",
    "fam": "RRP",
    "prod": "RRC",
@@ -599,7 +599,7 @@
   {
    "id": 10,
    "team": "rp",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "rrc_stab",
    "fam": "DATA",
    "prod": "Data Contract",
@@ -621,7 +621,7 @@
   {
    "id": 11,
    "team": "rp",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "rrc_stab",
    "fam": "DATA",
    "prod": "Data Contract",
@@ -643,7 +643,7 @@
   {
    "id": 12,
    "team": "rp",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "misc",
    "fam": "RRP",
    "prod": "rldx_serving",
@@ -665,7 +665,7 @@
   {
    "id": 13,
    "team": "rp",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "misc",
    "fam": "RHP",
    "prod": "HW Integration",
@@ -687,7 +687,7 @@
   {
    "id": 14,
    "team": "rp",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "hrdexdb",
    "fam": "DATA",
    "prod": "HRDexDB",
@@ -709,7 +709,7 @@
   {
    "id": 15,
    "team": "rp",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "hrdexdb",
    "fam": "DATA",
    "prod": "HRDexDB",
@@ -731,7 +731,7 @@
   {
    "id": 16,
    "team": "rp",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "hrdexdb",
    "fam": "DATA",
    "prod": "HRDexDB",
@@ -753,7 +753,7 @@
   {
    "id": 17,
    "team": "rp",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "rrc_new",
    "fam": "RRP",
    "prod": "RRC",
@@ -775,7 +775,7 @@
   {
    "id": 18,
    "team": "rp",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "rrc_new",
    "fam": "DATA",
    "prod": "Dataset Capture",
@@ -797,7 +797,7 @@
   {
    "id": 19,
    "team": "rp",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "rrc_new",
    "fam": "DATA",
    "prod": "Dataset Capture",
@@ -819,7 +819,7 @@
   {
    "id": 20,
    "team": "rp",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "rrc_new",
    "fam": "RRP",
    "prod": "Motion & Vision",
@@ -841,7 +841,7 @@
   {
    "id": 21,
    "team": "rp",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "rrc_new",
    "fam": "RRP",
    "prod": "Motion & Vision",
@@ -863,7 +863,7 @@
   {
    "id": 22,
    "team": "rp",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "rrc_new",
    "fam": "RRP",
    "prod": "Motion & Vision",
@@ -885,7 +885,7 @@
   {
    "id": 23,
    "team": "rp",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "rrc_stab",
    "fam": "RRP",
    "prod": "RRC",
@@ -907,7 +907,7 @@
   {
    "id": 24,
    "team": "rp",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "rrc_stab",
    "fam": "DATA",
    "prod": "Data Contract",
@@ -929,7 +929,7 @@
   {
    "id": 25,
    "team": "rp",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "rrc_stab",
    "fam": "LAAS",
    "prod": "Release & Compliance",
@@ -951,7 +951,7 @@
   {
    "id": 27,
    "team": "rp",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "hrdexdb",
    "fam": "DATA",
    "prod": "HRDexDB",
@@ -973,7 +973,7 @@
   {
    "id": 28,
    "team": "rp",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "hrdexdb",
    "fam": "DATA",
    "prod": "HRDexDB",
@@ -995,7 +995,7 @@
   {
    "id": 29,
    "team": "rp",
-   "hz": "soon",
+   "hz": "later",
    "grp": "lt",
    "fam": "RRP",
    "prod": "RRC",
@@ -1017,7 +1017,7 @@
   {
    "id": 30,
    "team": "rp",
-   "hz": "soon",
+   "hz": "later",
    "grp": "lt",
    "fam": "RRP",
    "prod": "Motion & Vision",
@@ -1039,7 +1039,7 @@
   {
    "id": 31,
    "team": "rp",
-   "hz": "soon",
+   "hz": "later",
    "grp": "lt",
    "fam": "RRP",
    "prod": "Motion & Vision",
@@ -1061,7 +1061,7 @@
   {
    "id": 32,
    "team": "rp",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "lt",
    "fam": "LAAS",
    "prod": "Release & Compliance",
@@ -1083,7 +1083,7 @@
   {
    "id": 33,
    "team": "rp",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "lt",
    "fam": "RRP",
    "prod": "RRC",
@@ -1105,7 +1105,7 @@
   {
    "id": 34,
    "team": "rp",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "lt",
    "fam": "RHP",
    "prod": "HW Integration",
@@ -1127,7 +1127,7 @@
   {
    "id": 35,
    "team": "rp",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "lt",
    "fam": "DATA",
    "prod": "HRDexDB",
@@ -1149,7 +1149,7 @@
   {
    "id": 39,
    "team": "infra",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "data",
    "fam": "DATA",
    "prod": "Data Governance",
@@ -1171,7 +1171,7 @@
   {
    "id": 40,
    "team": "infra",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "data",
    "fam": "INFRA",
    "prod": "Dashboard",
@@ -1193,7 +1193,7 @@
   {
    "id": 41,
    "team": "infra",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "data",
    "fam": "DATA",
    "prod": "Data Contract",
@@ -1215,7 +1215,7 @@
   {
    "id": 42,
    "team": "infra",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "opt",
    "fam": "INFRA",
    "prod": "GPU Optimization",
@@ -1237,7 +1237,7 @@
   {
    "id": 43,
    "team": "infra",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "ops",
    "fam": "INFRA",
    "prod": "Operations",
@@ -1259,7 +1259,7 @@
   {
    "id": 44,
    "team": "infra",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "ops",
    "fam": "INFRA",
    "prod": "Operations",
@@ -1281,7 +1281,7 @@
   {
    "id": 45,
    "team": "infra",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "ops",
    "fam": "INFRA",
    "prod": "Operations",
@@ -1303,7 +1303,7 @@
   {
    "id": 46,
    "team": "infra",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "ops",
    "fam": "INFRA",
    "prod": "Operations",
@@ -1325,7 +1325,7 @@
   {
    "id": 47,
    "team": "infra",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "ops",
    "fam": "INFRA",
    "prod": "Operations",
@@ -1347,7 +1347,7 @@
   {
    "id": 48,
    "team": "infra",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "data",
    "fam": "DATA",
    "prod": "Data Governance",
@@ -1369,7 +1369,7 @@
   {
    "id": 49,
    "team": "infra",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "ops",
    "fam": "INFRA",
    "prod": "Operations",
@@ -1391,7 +1391,7 @@
   {
    "id": 50,
    "team": "infra",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "ops",
    "fam": "INFRA",
    "prod": "Operations",
@@ -1413,7 +1413,7 @@
   {
    "id": 51,
    "team": "infra",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "ops",
    "fam": "INFRA",
    "prod": "GPU Optimization",
@@ -1435,7 +1435,7 @@
   {
    "id": 52,
    "team": "infra",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "data",
    "fam": "DATA",
    "prod": "Foundry",
@@ -1457,7 +1457,7 @@
   {
    "id": 53,
    "team": "infra",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "data",
    "fam": "DATA",
    "prod": "Data Contract",
@@ -1479,7 +1479,7 @@
   {
    "id": 54,
    "team": "infra",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "opt",
    "fam": "INFRA",
    "prod": "GPU Optimization",
@@ -1501,7 +1501,7 @@
   {
    "id": 55,
    "team": "infra",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "ops",
    "fam": "INFRA",
    "prod": "Operations",
@@ -1523,7 +1523,7 @@
   {
    "id": 56,
    "team": "infra",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "ops",
    "fam": "INFRA",
    "prod": "Operations",
@@ -1545,7 +1545,7 @@
   {
    "id": 57,
    "team": "infra",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "ops",
    "fam": "INFRA",
    "prod": "Operations",
@@ -1567,7 +1567,7 @@
   {
    "id": 58,
    "team": "infra",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "ops",
    "fam": "INFRA",
    "prod": "Storage",
@@ -1589,7 +1589,7 @@
   {
    "id": 59,
    "team": "loop",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "common",
    "fam": "RRP",
    "prod": "LOOP",
@@ -1611,7 +1611,7 @@
   {
    "id": 60,
    "team": "loop",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "common",
    "fam": "RRP",
    "prod": "LOOP",
@@ -1633,7 +1633,7 @@
   {
    "id": 61,
    "team": "loop",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "desktop",
    "fam": "RRP",
    "prod": "LOOP Desktop",
@@ -1655,7 +1655,7 @@
   {
    "id": 62,
    "team": "loop",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "desktop",
    "fam": "DATA",
    "prod": "Dataset Capture",
@@ -1677,7 +1677,7 @@
   {
    "id": 63,
    "team": "loop",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "desktop",
    "fam": "RRP",
    "prod": "LOOP Desktop",
@@ -1699,7 +1699,7 @@
   {
    "id": 64,
    "team": "loop",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "desktop",
    "fam": "BENCH",
    "prod": "Evaluation",
@@ -1721,7 +1721,7 @@
   {
    "id": 65,
    "team": "loop",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "web",
    "fam": "DATA",
    "prod": "Dataset Capture",
@@ -1743,7 +1743,7 @@
   {
    "id": 66,
    "team": "loop",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "web",
    "fam": "RRP",
    "prod": "LOOP Web",
@@ -1765,7 +1765,7 @@
   {
    "id": 67,
    "team": "loop",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "web",
    "fam": "BENCH",
    "prod": "Evaluation",
@@ -1787,7 +1787,7 @@
   {
    "id": 68,
    "team": "loop",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "ship",
    "fam": "RRP",
    "prod": "LOOP",
@@ -1809,7 +1809,7 @@
   {
    "id": 69,
    "team": "loop",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "ship",
    "fam": "LAAS",
    "prod": "Install & Setup",
@@ -1831,7 +1831,7 @@
   {
    "id": 70,
    "team": "loop",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "ship",
    "fam": "LAAS",
    "prod": "Monitoring",
@@ -1853,7 +1853,7 @@
   {
    "id": 71,
    "team": "loop",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "lt",
    "fam": "RRP",
    "prod": "LOOP Web",
@@ -1875,7 +1875,7 @@
   {
    "id": 72,
    "team": "loop",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "lt",
    "fam": "DATA",
    "prod": "Dataset Capture",
@@ -1897,7 +1897,7 @@
   {
    "id": 73,
    "team": "loop",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "lt",
    "fam": "RRP",
    "prod": "LOOP",
@@ -1919,7 +1919,7 @@
   {
    "id": 74,
    "team": "loop",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "lt",
    "fam": "CLOUD",
    "prod": "Cloud Inference",
@@ -1941,7 +1941,7 @@
   {
    "id": 75,
    "team": "loop",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "lt",
    "fam": "DATA",
    "prod": "Mannequin",
@@ -1963,7 +1963,7 @@
   {
    "id": 76,
    "team": "hw",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "ref",
    "fam": "RHP",
    "prod": "Reference HW",
@@ -1985,7 +1985,7 @@
   {
    "id": 77,
    "team": "hw",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "ref",
    "fam": "LAAS",
    "prod": "Certification",
@@ -2007,7 +2007,7 @@
   {
    "id": 78,
    "team": "hw",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "odm",
    "fam": "RHP",
    "prod": "ODM",
@@ -2029,7 +2029,7 @@
   {
    "id": 79,
    "team": "hw",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "test",
    "fam": "RHP",
    "prod": "HW Test",
@@ -2051,7 +2051,7 @@
   {
    "id": 80,
    "team": "hw",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "test",
    "fam": "RHP",
    "prod": "HW Test",
@@ -2073,7 +2073,7 @@
   {
    "id": 81,
    "team": "hw",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "src",
    "fam": "RHP",
    "prod": "HW Sourcing",
@@ -2095,7 +2095,7 @@
   {
    "id": 82,
    "team": "hw",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "src",
    "fam": "RHP",
    "prod": "HW Sourcing",
@@ -2117,7 +2117,7 @@
   {
    "id": 83,
    "team": "hw",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "src",
    "fam": "RHP",
    "prod": "HW Sourcing",
@@ -2139,7 +2139,7 @@
   {
    "id": 84,
    "team": "hw",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "dev",
    "fam": "RHP",
    "prod": "ALDEX",
@@ -2161,7 +2161,7 @@
   {
    "id": 85,
    "team": "hw",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "dev",
    "fam": "RHP",
    "prod": "RLWRLD Hand",
@@ -2183,7 +2183,7 @@
   {
    "id": 86,
    "team": "hw",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "dev",
    "fam": "RHP",
    "prod": "ALLEX",
@@ -2205,7 +2205,7 @@
   {
    "id": 87,
    "team": "hw",
-   "hz": "now",
+   "hz": "2026-09",
    "grp": "dev",
    "fam": "BENCH",
    "prod": "All Hands Up",
@@ -2227,7 +2227,7 @@
   {
    "id": 88,
    "team": "hw",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "test",
    "fam": "RHP",
    "prod": "HW Test",
@@ -2249,7 +2249,7 @@
   {
    "id": 89,
    "team": "hw",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "test",
    "fam": "RHP",
    "prod": "HW Test",
@@ -2271,7 +2271,7 @@
   {
    "id": 90,
    "team": "hw",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "test",
    "fam": "LAAS",
    "prod": "Client Support",
@@ -2293,7 +2293,7 @@
   {
    "id": 91,
    "team": "hw",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "src",
    "fam": "RHP",
    "prod": "HW Sourcing",
@@ -2315,7 +2315,7 @@
   {
    "id": 92,
    "team": "hw",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "dev",
    "fam": "RHP",
    "prod": "ALDEX",
@@ -2337,7 +2337,7 @@
   {
    "id": 93,
    "team": "hw",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "dev",
    "fam": "RHP",
    "prod": "RLWRLD Hand",
@@ -2359,7 +2359,7 @@
   {
    "id": 94,
    "team": "hw",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "dev",
    "fam": "RHP",
    "prod": "ALLEX",
@@ -2381,7 +2381,7 @@
   {
    "id": 95,
    "team": "hw",
-   "hz": "next",
+   "hz": "2026-10",
    "grp": "sim",
    "fam": "BENCH",
    "prod": "Simulation",
@@ -2403,7 +2403,7 @@
   {
    "id": 96,
    "team": "hw",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "lt",
    "fam": "RHP",
    "prod": "Reference HW",
@@ -2425,7 +2425,7 @@
   {
    "id": 97,
    "team": "hw",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "lt",
    "fam": "RHP",
    "prod": "ODM",
@@ -2447,7 +2447,7 @@
   {
    "id": 98,
    "team": "hw",
-   "hz": "someday",
+   "hz": "undated",
    "grp": "lt",
    "fam": "RHP",
    "prod": "RLWRLD Hand",

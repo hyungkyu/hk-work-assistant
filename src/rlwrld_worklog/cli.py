@@ -2427,7 +2427,7 @@ def roadmap_refresh(args: argparse.Namespace) -> int:
 
     from .admin_store import AdminStore
     from .notion_client import NotionClient
-    from .roadmap_refresh import apply_refresh, diff_items, fetch_table_rows, parse_table
+    from .roadmap_refresh import apply_refresh, diff_items, read_items
     from .roadmap_web import ROADMAP_PAGE_ID
 
     database_url = args.database_url or os.environ.get("DATABASE_URL")
@@ -2438,7 +2438,7 @@ def roadmap_refresh(args: argparse.Namespace) -> int:
         raise SystemExit(f"Notion token is missing: {token_path}")
 
     client = NotionClient(token_path.read_text(encoding="utf-8").strip())
-    items = parse_table(fetch_table_rows(client, ROADMAP_PAGE_ID))
+    items = read_items(client, ROADMAP_PAGE_ID)
     if not items:
         raise SystemExit("the roadmap page returned no rows; nothing was changed")
 
@@ -2457,6 +2457,8 @@ def roadmap_refresh(args: argparse.Namespace) -> int:
             "changed": len(diff.changed),
             "removed": len(diff.removed),
             "carried": len(diff.carried),
+            "unchanged": len(diff.same),
+            "toggled": len(diff.toggled),
         }, ensure_ascii=False, sort_keys=True))
         return 0
 

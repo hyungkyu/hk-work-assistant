@@ -221,15 +221,16 @@
     #page-roadmap .note { border: 1px solid #705a2c; background: #2b2415; color: var(--warning);
       border-radius: 9px; padding: 9px 12px; font-size: 12.5px; line-height: 1.55; margin: 0 18px 14px; }
     #page-roadmap .track { overflow-x: auto; overflow-y: hidden; border-top: 1px solid var(--line); }
-    #page-roadmap .grid { display: grid; grid-template-columns: 104px repeat(4, minmax(300px, 1fr)); min-width: 1330px; }
+    /* Columns are set per render from the number of months the teams wrote. */
+    #page-roadmap .grid { display: grid; grid-template-columns: 104px repeat(5, minmax(260px, 1fr)); min-width: 1404px; }
     #page-roadmap .hcell, #page-roadmap .corner { position: sticky; top: 0; background: #0e141d;
       border-bottom: 1px solid var(--line); padding: 9px 13px; font-size: 11.5px; letter-spacing: .06em;
       text-transform: uppercase; color: var(--muted); font-weight: 600; }
     #page-roadmap .corner { left: 0; z-index: 3; border-right: 1px solid var(--line); }
-    #page-roadmap .hcell[data-h="now"] { color: var(--accent); }
-    #page-roadmap .hcell[data-h="next"] { color: var(--accent-2); }
-    #page-roadmap .hcell[data-h="soon"] { color: var(--warning); }
-    #page-roadmap .hcell[data-h="someday"] { color: #b89cff; }
+    #page-roadmap li.done .tx { text-decoration: line-through; opacity: .62; }
+    #page-roadmap li.done .tx .badge, #page-roadmap li.done .tx a { text-decoration: none; display: inline-block; }
+    #page-roadmap .hcell[data-h="later"] { color: var(--warning); }
+    #page-roadmap .hcell[data-h="undated"] { color: #b89cff; }
     #page-roadmap .lane { position: sticky; left: 0; z-index: 2; background: #0e141d;
       border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 13px 12px;
       font-size: 12.5px; font-weight: 600; display: flex; gap: 7px; align-items: flex-start; }
@@ -272,6 +273,8 @@
     .kindtag.added { background: #102b22; color: var(--accent); border: 1px solid #286b52; }
     .kindtag.changed { background: #2b2415; color: var(--warning); border: 1px solid #705a2c; }
     .kindtag.removed { background: #2a1618; color: var(--danger); border: 1px solid #7b3838; }
+    .kindtag.completed { background: #102b22; color: var(--accent); border: 1px solid #286b52; }
+    .kindtag.reopened { background: #2b2415; color: var(--warning); border: 1px solid #705a2c; }
 
     /* 로드맵 매핑 — 표 안의 버튼과 건수가 두 줄로 접히지 않게. */
     #page-mapping .audit td { vertical-align: middle; }

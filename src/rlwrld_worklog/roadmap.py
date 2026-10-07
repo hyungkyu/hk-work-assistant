@@ -14,12 +14,35 @@ split is what lets the payload be tested without a database.
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any, Iterable, Mapping, Sequence
 
-from .roadmap_copy import GROUP_LABELS, HORIZONS, KINDS, TEAM_NOTES, UI_COPY
+from .roadmap_copy import GROUP_LABELS, KINDS, LATER, TEAM_NOTES, UI_COPY, UNDATED, month_label
 
-HORIZON_IDS = tuple(horizon["id"] for horizon in HORIZONS)
 KIND_IDS = tuple(kind["id"] for kind in KINDS)
+
+# A horizon is a month, or one of the two columns after the months.
+MONTH = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+TAIL_HORIZONS = (LATER["id"], UNDATED["id"])
+
+# The relative columns of the 202609 snapshot table, as months. Only an old
+# seed payload still says these; migration 0019 moved the stored rows the same way.
+LEGACY_HORIZONS = {"now": "2026-09", "next": "2026-10", "soon": "later", "someday": "undated"}
+
+
+def is_horizon(value: Any) -> bool:
+    return isinstance(value, str) and (bool(MONTH.match(value)) or value in TAIL_HORIZONS)
+
+
+def horizons_for(values: Iterable[str]) -> list[dict[str, Any]]:
+    """The screen's columns: every month the rows name, in order, then 향후 and 미정.
+
+    Computed rather than listed, so a team writing December adds a column
+    without anybody editing this file. The two tail columns are always there,
+    so the layout does not jump when one of them happens to be empty.
+    """
+    months = sorted({value for value in values if MONTH.match(str(value))})
+    return [{"id": month, "label": month_label(month)} for month in months] + [LATER, UNDATED]
 
 OFFICIAL_SOURCE = "https://app.notion.com/p/3ce6cbdff6f68086b8f7cc174bbb040d"
 
@@ -69,6 +92,8 @@ def build_payload(
                 "det": product.get("detail_url") or OFFICIAL_SOURCE,
                 "detLabel": team_labels.get(owner, {"ko": owner, "en": owner, "ja": owner}),
                 "hash": row["hash"],
+                # Struck through on the page: the source's way of saying done.
+                "done": bool(row.get("done")),
                 # The page is Korean and a refresh cannot translate. When a
                 # row's Korean moves ahead of the translation beside it, the
                 # screen has to say so -- English that reads as current and
@@ -88,7 +113,7 @@ def build_payload(
         "ui": UI_COPY,
         "groups": GROUP_LABELS,
         "teamNotes": TEAM_NOTES,
-        "horizons": list(HORIZONS),
+        "horizons": horizons_for(row["horizon"] for row in items),
         "kinds": list(KINDS),
         "teams": [{"id": team["id"], "label": _labels(team)} for team in teams],
         "families": [
@@ -112,7 +137,7 @@ _PRODUCTS_SQL = (
 )
 _ITEMS_SQL = """
 SELECT item_key, team_id, product_id, horizon, kind,
-       text_ko, text_en, text_ja, source_url, hash, translated_hash,
+       text_ko, text_en, text_ja, source_url, hash, translated_hash, done,
        horizon_override, product_override, kind_override
 FROM roadmap_item
 ORDER BY sort, id
@@ -293,7 +318,7 @@ def seed_from_payload(database_url: str, payload: Mapping[str, Any]) -> dict[str
                     """,
                     (
                         str(item["id"]), item["team"], product_ids[item["prod"]],
-                        item["hz"], item["kind"],
+                        LEGACY_HORIZONS.get(item["hz"], item["hz"]), item["kind"],
                         item["t"]["ko"], item["t"]["en"], item["t"]["ja"],
                         item.get("src"), item.get("hash") or text_hash(item["t"]["ko"]),
                         snapshot_id, sort,
@@ -379,6 +404,8 @@ def read_mapping(database_url: str) -> dict[str, Any]:
         ],
         "teams": [{"id": row["id"], "label": _labels(row)} for row in teams],
         "families": [{"id": row["id"], "label": _labels(row)} for row in families],
+        # What the horizon selector offers: the same columns the screen shows.
+        "horizons": horizons_for(row["horizon"] for row in items),
     }
 
 
@@ -493,8 +520,8 @@ def update_item(database_url: str, item_key: str, changes: Mapping[str, Any]) ->
         raise RoadmapEditError("nothing to change")
     if "kind" in changes and changes["kind"] not in KIND_IDS:
         raise RoadmapEditError(f"kind must be one of: {', '.join(KIND_IDS)}")
-    if "horizon" in changes and changes["horizon"] not in HORIZON_IDS:
-        raise RoadmapEditError(f"horizon must be one of: {', '.join(HORIZON_IDS)}")
+    if "horizon" in changes and not is_horizon(changes["horizon"]):
+        raise RoadmapEditError(f"horizon must be YYYY-MM or one of: {', '.join(TAIL_HORIZONS)}")
 
     fields = dict(changes)
     for field in ("product", "kind", "horizon"):

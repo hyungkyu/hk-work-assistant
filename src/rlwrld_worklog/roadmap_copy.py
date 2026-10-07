@@ -7,15 +7,14 @@ UI_COPY = {'staleTag': {'ko': '번역 대기', 'en': 'not retranslated', 'ja': '
 'title': {'ko': 'RLWRLD 플랫폼 팀 로드맵',
            'en': 'RLWRLD Platform Team Roadmap',
            'ja': 'RLWRLD プラットフォームチーム ロードマップ'},
- 'sub': {'ko': 'Notion 「Platform Team Roadmap」 202609 스냅샷 기준 초안 · 원본 최종 수정 2026-09-06',
-         'en': 'Draft from the 202609 snapshot of the Notion “Platform Team Roadmap” · source last '
-               'edited 2026-09-06',
-         'ja': 'Notion「Platform Team Roadmap」202609 スナップショットに基づくドラフト · 原本最終更新 2026-09-06'},
+ 'sub': {'ko': 'Notion 「Platform Team Roadmap」 팀별 갱신 내역을 달마다 누적',
+         'en': 'The team updates on the Notion “Platform Team Roadmap”, accumulated month by month',
+         'ja': 'Notion「Platform Team Roadmap」のチーム別更新を月ごとに累積'},
  'byteam': {'ko': '부서별', 'en': 'By team', 'ja': '部署別'},
  'byproduct': {'ko': '제품별', 'en': 'By product', 'ja': '製品別'},
- 'now': {'ko': '이번달 (2026-09)', 'en': 'This month (2026-09)', 'ja': '今月 (2026-09)'},
- 'next': {'ko': '다음달 (2026-10)', 'en': 'Next month (2026-10)', 'ja': '来月 (2026-10)'},
- 'long': {'ko': '장기 (4Q~)', 'en': 'Long term (Q4 onward)', 'ja': '長期 (4Q〜)'},
+ 'done': {'ko': '완료', 'en': 'Done', 'ja': '完了'},
+ 'completed': {'ko': '완료', 'en': 'Completed', 'ja': '完了'},
+ 'reopened': {'ko': '완료 취소', 'en': 'Reopened', 'ja': '完了取消'},
  'items': {'ko': '건', 'en': 'items', 'ja': '件'},
  'search': {'ko': '항목 검색', 'en': 'Search items', 'ja': '項目を検索'},
  'allteams': {'ko': '전체 팀', 'en': 'All teams', 'ja': '全チーム'},
@@ -50,10 +49,14 @@ UI_COPY = {'staleTag': {'ko': '번역 대기', 'en': 'not retranslated', 'ja': '
  'nohist': {'ko': '아직 기록된 변경이 없습니다. 현행화를 한 번 실행하면 이 자리에 쌓입니다.',
             'en': 'No changes recorded yet. They accumulate here once a refresh has run.',
             'ja': 'まだ記録された変更はありません。最新化を一度実行するとここに蓄積されます。'},
- 'rule': {'ko': '‘곧’은 원본에 분기(4Q)가 명시된 항목, ‘언젠가’는 시점 표기가 없는 항목입니다.',
-          'en': '“Soon” holds items the source dates to a quarter (Q4); “someday” holds items with '
-                'no stated date.',
-          'ja': '「まもなく」は原本に四半期（4Q）が明記された項目、「いつか」は時期の記載がない項目です。'}}
+ 'rule': {'ko': '각 팀 갱신의 ‘이번달·다음달’을 실제 달로 옮겨 쌓습니다. 같은 달을 다시 쓰면 최신 갱신이 이전 것을 '
+                '대신합니다. ‘향후’는 최신 장기계획, ‘미정’은 원본이 일정 미정이라고 적은 항목, 취소선은 완료입니다.',
+          'en': 'Each team update’s “this month” and “next month” are filed under the actual month. '
+                'When a month is written again, the newer update replaces the older. “Later” is the '
+                'newest long-term plan, “undated” is what the source calls unscheduled, and a '
+                'strike-through means done.',
+          'ja': '各チーム更新の「今月・来月」を実際の月に移して積み上げます。同じ月が再度書かれると最新の更新が置き換えます。'
+                '「今後」は最新の長期計画、「未定」は原本が日程未定とした項目、取り消し線は完了です。'}}
 
 GROUP_LABELS = {'rrc_new': {'ko': 'RRC 신규 기능 추가', 'en': 'New RRC features', 'ja': 'RRC 新規機能の追加'},
  'rrc_stab': {'ko': 'RRC 내부 기능 안정화', 'en': 'Stabilising RRC internals', 'ja': 'RRC 内部機能の安定化'},
@@ -75,20 +78,22 @@ GROUP_LABELS = {'rrc_new': {'ko': 'RRC 신규 기능 추가', 'en': 'New RRC fea
  'dev': {'ko': 'HW Develop', 'en': 'HW Develop', 'ja': 'HW Develop'},
  'sim': {'ko': 'URDF Simulation', 'en': 'URDF Simulation', 'ja': 'URDF Simulation'}}
 
-TEAM_NOTES = {'hd': {'ko': '공식 로드맵 미작성 — Platform Team Roadmap 표의 Human Data 행이 이번달·다음달·장기 모두 공란입니다. 8월 플랫폼 팀 '
-              '위클리에서 일부만 확인됩니다.',
-        'en': 'No roadmap written — the Human Data row of the Platform Team Roadmap is blank '
-              'across this month, next month and long term. Only partial information exists in the '
-              'August platform weekly.',
-        'ja': '公式ロードマップ未作成 — Platform Team Roadmap の Human Data '
-              '行は今月・来月・長期ともに空欄です。8月のプラットフォーム週次で一部のみ確認できます。'}}
+TEAM_NOTES = {'hd': {'ko': '초안 단계 — 2026-09-30 갱신에 과제 이름만 적혀 있고 세부 내용은 아직 없습니다.',
+        'en': 'Draft — the 2026-09-30 update names the workstreams but does not yet describe them.',
+        'ja': 'ドラフト段階 — 2026-09-30 の更新は課題名のみで、詳細はまだありません。'}}
 
-HORIZONS = [{'id': 'now',
-  'label': {'ko': '이번달 · 2026-09', 'en': 'This month · 2026-09', 'ja': '今月 · 2026-09'}},
- {'id': 'next',
-  'label': {'ko': '다음달 · 2026-10', 'en': 'Next month · 2026-10', 'ja': '来月 · 2026-10'}},
- {'id': 'soon', 'label': {'ko': '곧 · 분기 명시', 'en': 'Soon · quarter stated', 'ja': 'まもなく · 四半期明示'}},
- {'id': 'someday', 'label': {'ko': '언젠가 · 일정 미정', 'en': 'Someday · no date', 'ja': 'いつか · 日程未定'}}]
+# The two columns after the months. A month is labelled by `month_label`.
+LATER = {'id': 'later', 'label': {'ko': '향후 · 장기계획', 'en': 'Later · long term', 'ja': '今後 · 長期計画'}}
+UNDATED = {'id': 'undated', 'label': {'ko': '미정', 'en': 'Undated', 'ja': '未定'}}
+
+_MONTHS_EN = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+
+
+def month_label(month: str) -> dict[str, str]:
+    """`2026-10` as each language writes it."""
+    year, number = month.split('-')
+    index = int(number)
+    return {'ko': f'{year}년 {index}월', 'en': f'{_MONTHS_EN[index - 1]} {year}', 'ja': f'{year}年{index}月'}
 
 KINDS = [{'id': 'dev', 'label': {'ko': '개발성', 'en': 'Development', 'ja': '開発性'}, 'color': '#68a8ff'},
  {'id': 'ops', 'label': {'ko': '운영성', 'en': 'Operational', 'ja': '運用性'}, 'color': '#65d6a6'}]

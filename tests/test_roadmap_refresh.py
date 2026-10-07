@@ -7,7 +7,9 @@ network. The write is exercised against a real Postgres when
 
 from __future__ import annotations
 
+import itertools
 import os
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -21,107 +23,186 @@ DATABASE_URL = os.environ.get("ROADMAP_TEST_DATABASE_URL") or os.environ.get("WO
 needs_db = pytest.mark.skipif(not DATABASE_URL, reason="ROADMAP_TEST_DATABASE_URL / WORKLOG_TEST_DATABASE_URL is not set")
 
 
-def cell(text: str) -> list[dict[str, Any]]:
-    return [{"plain_text": text}]
+_ids = itertools.count()
 
 
-def table_row(block_id: str, *values: str) -> dict[str, Any]:
-    return {"id": block_id, "type": "table_row", "table_row": {"cells": [cell(v) for v in values]}}
+def blk(kind: str, text: str = "", *children: dict[str, Any], struck: bool = False, id: str | None = None) -> dict[str, Any]:
+    runs = [{"plain_text": text, "annotations": {"strikethrough": struck}}] if text else []
+    block: dict[str, Any] = {"id": id or f"b{next(_ids)}", "type": kind, kind: {"rich_text": runs}}
+    if children:
+        block["children"] = list(children)
+        block["has_children"] = True
+    return block
 
 
-HEADER = table_row("head", "팀", "이번달", "다음달", "장기계획")
+def bullet(text: str, *children: dict[str, Any], **kw: Any) -> dict[str, Any]:
+    return blk("bulleted_list_item", text, *children, **kw)
+
+
+def section(title: str) -> dict[str, Any]:
+    return blk("heading_3", title)
+
+
+def period(title: str) -> dict[str, Any]:
+    return blk("heading_4", title)
+
+
+def para(text: str) -> dict[str, Any]:
+    return blk("paragraph", text)
+
+
+def filed(items: list[refresh.ParsedItem]) -> list[tuple[str, str, str]]:
+    return [(item.team, refresh.horizon_for(item), item.text_ko) for item in items]
 
 
 # --- reading the page -----------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "heading, written, expected",
+    [
+        ("2026/10 (이번달)", date(2026, 9, 30), "2026-10"),
+        ("이번달 (10월)", date(2026, 9, 30), "2026-10"),
+        ("다음달 (11월)", date(2026, 9, 30), "2026-11"),
+        ("이번달", date(2026, 9, 1), "2026-09"),
+        ("다음달", date(2026, 9, 2), "2026-10"),
+        # Written at the very end of a month with no month named: the team means
+        # the month that is about to start, as every 09-30 section spelled out.
+        ("이번달", date(2026, 9, 30), "2026-10"),
+        ("다음달", date(2026, 9, 30), "2026-11"),
+        ("다음달", date(2026, 12, 2), "2027-01"),
+        ("1월", date(2026, 12, 28), "2027-01"),
+        ("장기계획", date(2026, 9, 1), "later"),
+        ("장기계획 (12월 중심)", date(2026, 9, 30), "later"),
+        ("메모", date(2026, 9, 30), None),
+    ],
+)
+def test_a_period_heading_becomes_an_absolute_month(heading: str, written: date, expected: str | None) -> None:
+    assert refresh.period_for(heading, written) == expected
+
+
+def test_months_accumulate_and_the_newest_section_replaces_a_month() -> None:
+    """HK, 2026-10-07: 9, 10, 11 and 향후, growing as the teams write."""
+    blocks = [
+        section("20260930 HW"),
+        period("이번달 (10월)"), bullet("10월 갱신본"),
+        period("다음달 (11월)"), bullet("11월 계획"),
+        period("장기계획"), bullet("새 장기계획"),
+        section("20260901 HW"),
+        period("이번달"), bullet("9월 계획"),
+        period("다음달"), bullet("9월에 적은 10월 예고"),
+        period("장기계획"), bullet("옛 장기계획"),
+    ]
+    assert filed(refresh.parse_updates(blocks)) == [
+        ("hw", "2026-09", "9월 계획"),
+        ("hw", "2026-10", "10월 갱신본"),
+        ("hw", "2026-11", "11월 계획"),
+        ("hw", "later", "새 장기계획"),
+    ]
+
+
+def test_one_teams_newer_section_does_not_replace_another_teams_month() -> None:
+    blocks = [
+        section("20260930 HW"), period("이번달 (10월)"), bullet("HW 10월"),
+        section("20260901 LOOP"), period("다음달"), bullet("LOOP 10월"),
+    ]
+    assert filed(refresh.parse_updates(blocks)) == [
+        ("hw", "2026-10", "HW 10월"), ("loop", "2026-10", "LOOP 10월"),
+    ]
+
+
 def test_a_bullet_with_children_is_a_label_and_each_child_an_entry() -> None:
     """`• Desktop` over four things Desktop will do is four entries, as the seed has it."""
-    entries = refresh.cell_entries("• RRC 신규\n    ◦ Task orchestrator\n    ◦ new session\n• HRDexDB")
-    assert entries == ["RRC 신규 — Task orchestrator", "RRC 신규 — new session", "HRDexDB"]
-
-
-def test_the_page_indent_and_a_hand_typed_indent_read_the_same() -> None:
-    """The page indents by two and six; a hand-typed cell by nought and four."""
-    page = refresh.cell_entries("  • Web\n      ◦ 데이터셋 조회\n  • 끝")
-    typed = refresh.cell_entries("• Web\n    ◦ 데이터셋 조회\n• 끝")
-    assert page == typed == ["Web — 데이터셋 조회", "끝"]
+    blocks = [
+        section("20260901 LOOP"), period("이번달"),
+        bullet("Desktop", bullet("셋업 지원"), bullet("데이터 수집")),
+        bullet("Cloud Inference"),
+    ]
+    assert [item.text_ko for item in refresh.parse_updates(blocks)] == [
+        "Desktop — 셋업 지원", "Desktop — 데이터 수집", "Cloud Inference",
+    ]
 
 
 def test_a_third_level_folds_into_its_parent() -> None:
-    entries = refresh.cell_entries("• RRC\n    ◦ Vision\n        ▪ 6D pose\n        ▪ HRDexDB 쿼리")
-    assert entries == ["RRC — Vision — 6D pose, HRDexDB 쿼리"]
-
-
-def test_a_heading_joins_the_first_entry_under_it() -> None:
-    entries = refresh.cell_entries("고객에게 제공 가능한 버전 준비\n\n  • QA\n  • 설치 도구")
-    assert entries == ["고객에게 제공 가능한 버전 준비 — QA", "설치 도구"]
-
-
-def test_the_live_page_cell_that_came_back_empty_is_read() -> None:
-    """Every bullet under a heading is indented. The old reader took each one
-    for a sub-bullet of the heading and folded LOOP's whole month into one row."""
-    text = (
-        "내부에서 테스트 가능한 첫 버전 준비\n\n"
-        "  • Desktop 과 Web 2가지 형태로 서비스 개발 진행\n"
-        "  • 공통\n      ◦ Email/Password 기반 사용자 인증\n"
-        "  • Web\n      ◦ 데이터셋 조회\n      ◦ 체크포인트 성능(성공률) 비교"
-    )
-    assert refresh.cell_entries(text) == [
-        "내부에서 테스트 가능한 첫 버전 준비 — Desktop 과 Web 2가지 형태로 서비스 개발 진행",
-        "공통 — Email/Password 기반 사용자 인증",
-        "Web — 데이터셋 조회",
-        "Web — 체크포인트 성능(성공률) 비교",
+    blocks = [
+        section("20260930 HW"), period("이번달 (10월)"),
+        bullet("ODM 프로젝트", bullet("요구사항 정리", bullet("핸드 ↔ 손목 통합"), bullet("헤드 외장 디자인"))),
+    ]
+    assert [item.text_ko for item in refresh.parse_updates(blocks)] == [
+        "ODM 프로젝트 — 요구사항 정리 — 핸드 ↔ 손목 통합, 헤드 외장 디자인",
     ]
 
 
-def test_blank_lines_and_stray_whitespace_do_not_become_items() -> None:
-    assert refresh.cell_entries("\n\n   \n• 하나\n\n• 둘\n  \n") == ["하나", "둘"]
-
-
-def test_a_cell_without_bullets_is_still_read() -> None:
-    """A heading with nothing under it is an entry by itself."""
-    assert refresh.cell_entries("데이터\n운영") == ["데이터", "운영"]
-
-
-def test_the_table_becomes_one_row_per_bullet_per_column() -> None:
-    rows = [HEADER, table_row("r1", "LOOP", "• 하나\n• 둘", "• 셋", "")]
-    items = refresh.parse_table(rows)
-    assert [(i.team, i.column, i.text_ko) for i in items] == [
-        ("loop", "now", "하나"), ("loop", "now", "둘"), ("loop", "next", "셋"),
+def test_a_paragraph_heads_the_first_entry_under_it() -> None:
+    blocks = [
+        section("20260901 LOOP"), period("다음달"),
+        para("고객에게 제공 가능한 버전 준비"), bullet("QA"), bullet("설치 도구"),
     ]
-    assert items[0].key == "r1:now:0"
-    assert items[0].block_id == "r1"
+    assert [item.text_ko for item in refresh.parse_updates(blocks)] == [
+        "고객에게 제공 가능한 버전 준비 — QA", "설치 도구",
+    ]
+
+
+def test_an_empty_slot_is_not_a_plan() -> None:
+    """`Wheeled Humanoid:` with nothing after it, and an empty bullet, are slots."""
+    blocks = [
+        section("20260902 Robotics Platform"), period("이번달"),
+        bullet("신규 HW Integration (일정이 아직 미정이라 추가하면서 업데이트 하겠습니다)",
+               bullet("Wheeled Humanoid:"), bullet("Hand: "), bullet("")),
+        bullet("RLHND", bullet("")),
+    ]
+    items = refresh.parse_updates(blocks)
+    assert filed(items) == [
+        ("rp", "undated", "신규 HW Integration (일정이 아직 미정이라 추가하면서 업데이트 하겠습니다)"),
+        ("rp", "2026-09", "RLHND"),
+    ]
+
+
+def test_a_struck_line_is_done_and_a_struck_label_finishes_its_children() -> None:
+    blocks = [
+        section("20260930 HW"), period("이번달 (10월)"),
+        bullet("ALDEX 엄지 설계", struck=True),
+        bullet("HW Test", bullet("지그 구축", struck=True), bullet("파지력 측정")),
+        bullet("HW Sourcing", bullet("Ruiyan Hand"), struck=True),
+    ]
+    assert [(item.text_ko, item.done) for item in refresh.parse_updates(blocks)] == [
+        ("ALDEX 엄지 설계", True),
+        ("HW Test — 지그 구축", True),
+        ("HW Test — 파지력 측정", False),
+        ("HW Sourcing — Ruiyan Hand", True),
+    ]
+
+
+def test_an_item_is_keyed_by_its_own_block() -> None:
+    """A position in a cell shifted whenever a line was inserted above it."""
+    blocks = [section("20260930 HW"), period("이번달 (10월)"), bullet("HW Test", bullet("지그", id="leaf-1"))]
+    item = refresh.parse_updates(blocks)[0]
+    assert (item.key, item.block_id) == ("leaf-1", "leaf-1")
 
 
 def test_a_team_name_nobody_told_us_about_is_skipped_not_guessed() -> None:
     """A wrong team is worse than a missing one, and shows up as a loud gap."""
-    rows = [HEADER, table_row("r1", "새로운 팀", "• 하나", "", "")]
-    assert refresh.parse_table(rows) == []
+    blocks = [section("20260930 새로운 팀"), period("이번달 (10월)"), bullet("하나")]
+    assert refresh.parse_updates(blocks) == []
 
 
-def test_the_long_column_splits_on_whether_a_quarter_is_written_down() -> None:
-    rows = [HEADER, table_row("r1", "HW", "", "", "• 4Q 안에 끝낸다\n• 언젠가 한다")]
-    items = refresh.parse_table(rows)
-    assert [refresh.horizon_for(item) for item in items] == ["soon", "someday"]
+def test_a_section_intro_and_an_unknown_period_are_not_items() -> None:
+    blocks = [
+        section("20260930 Robotics Platform"), para("4Q 로드맵 정리"),
+        period("메모"), bullet("메모 줄"),
+        period("2026/10 (이번달)"), bullet("하나"),
+    ]
+    assert filed(refresh.parse_updates(blocks)) == [("rp", "2026-10", "하나")]
 
 
-def test_the_source_saying_the_date_is_undecided_means_someday() -> None:
-    rows = [HEADER, table_row("r1", "HW", "• 신규 HW (일정이 아직 미정이라 추가하겠습니다)", "", "")]
-    item = refresh.parse_table(rows)[0]
-    assert refresh.horizon_for(item) == "someday"
-
-
-def test_this_month_and_next_month_are_taken_as_written() -> None:
-    rows = [HEADER, table_row("r1", "HW", "• 하나", "• 둘", "")]
-    assert [refresh.horizon_for(i) for i in refresh.parse_table(rows)] == ["now", "next"]
-
-
-def test_only_the_snapshot_table_is_read() -> None:
-    """The write-ups below it are how the table got that way, not more rows."""
-
-    rows = refresh.fetch_table_rows(PagedClient(), "page")
-    assert [row["id"] for row in rows] == ["t1-row"]
+def test_items_come_out_months_first_in_page_order() -> None:
+    blocks = [
+        section("20260930 HW"), period("장기계획"), bullet("장기"), period("다음달 (11월)"), bullet("11"),
+        section("20260901 HW"), period("이번달"), bullet("9-a"), bullet("9-b"),
+    ]
+    items = refresh.parse_updates(blocks)
+    assert [item.text_ko for item in items] == ["9-a", "9-b", "11", "장기"]
+    assert [item.sort for item in items] == [0, 1, 2, 3]
 
 
 class PagedClient:
@@ -129,18 +210,37 @@ class PagedClient:
     responses, not blocks. A fake that yielded blocks is how a refresh that
     always read an empty page passed its tests (2026-09-30)."""
 
+    def __init__(self) -> None:
+        self.asked: list[str] = []
+
     def iter_block_children(self, block_id: str):
+        self.asked.append(block_id)
         if block_id == "page":
-            yield {"results": [{"id": "p1", "type": "paragraph"}], "has_more": True}
-            yield {"results": [{"id": "t1", "type": "table"}, {"id": "t2", "type": "table"}], "has_more": False}
-        elif block_id == "t1":
-            yield {"results": [table_row("t1-row", "HW", "• 하나", "", "")], "has_more": False}
+            yield {"results": [para("안내"), blk("heading_2", "팀별 로드맵(202609)"),
+                               {"id": "t1", "type": "table", "has_children": True}], "has_more": True}
+            yield {"results": [blk("heading_2", "팀별 로드맵 갱신 내역"), section("20260930 HW"),
+                               period("이번달 (10월)"),
+                               {**bullet("HW Test"), "id": "parent", "has_children": True}],
+                   "has_more": False}
+        elif block_id == "parent":
+            yield {"results": [bullet("지그 구축")], "has_more": False}
         else:
             yield {"results": [], "has_more": False}
 
 
-def test_the_table_is_found_on_a_later_page_of_the_listing() -> None:
-    assert refresh.fetch_table_rows(PagedClient(), "page")[0]["id"] == "t1-row"
+def test_the_update_log_is_read_with_its_nested_bullets_and_the_table_is_not() -> None:
+    client = PagedClient()
+    items = refresh.read_items(client, "page")
+    assert filed(items) == [("hw", "2026-10", "HW Test — 지그 구축")]
+    assert "t1" not in client.asked, "the stale snapshot table is never opened"
+
+
+def test_a_page_without_the_update_log_reads_as_empty() -> None:
+    class Bare:
+        def iter_block_children(self, block_id: str):
+            yield {"results": [para("내용 없음")], "has_more": False}
+
+    assert refresh.read_items(Bare(), "page") == []
 
 
 # --- the diff -------------------------------------------------------------
@@ -148,14 +248,14 @@ def test_the_table_is_found_on_a_later_page_of_the_listing() -> None:
 
 def existing(key: str, text: str, team: str = "rp") -> dict[str, Any]:
     return {
-        "item_key": key, "team_id": team, "product_id": 1, "horizon": "now", "kind": "dev",
+        "item_key": key, "team_id": team, "product_id": 1, "horizon": "2026-09", "kind": "dev",
         "text_ko": text, "hash": roadmap.text_hash(text),
         "horizon_override": False, "product_override": False, "kind_override": False,
     }
 
 
 def parsed(key: str, text: str, team: str = "rp") -> refresh.ParsedItem:
-    return refresh.ParsedItem(key=key, team=team, column="now", text_ko=text, block_id="b")
+    return refresh.ParsedItem(key=key, team=team, column="2026-09", text_ko=text, block_id="b")
 
 
 def test_the_same_row_twice_is_not_a_change() -> None:
@@ -216,8 +316,8 @@ def test_rows_are_only_paired_within_a_team() -> None:
 def test_between_two_alike_rows_the_one_in_the_same_column_wins() -> None:
     now = existing("1", "HRDexDB object 추가")
     later = existing("2", "Object 추가")
-    later["horizon"] = "next"
-    item = refresh.ParsedItem(key="b:next:0", team="rp", column="next", text_ko="HRDexDB — Object 추가", block_id="b")
+    later["horizon"] = "2026-10"
+    item = refresh.ParsedItem(key="b:next:0", team="rp", column="2026-10", text_ko="HRDexDB — Object 추가", block_id="b")
     diff = refresh.diff_items([item], [now, later])
     assert [key for key, _ in diff.changed] == ["2"]
 
@@ -265,6 +365,26 @@ def test_the_change_list_names_the_team_and_the_words() -> None:
     assert removed.team == "loop" and removed.before == "사라짐"
 
 
+def test_a_strike_added_to_an_unchanged_line_is_a_completion() -> None:
+    item = parsed("a", "ALDEX 엄지 설계")
+    item.done = True
+    diff = refresh.diff_items([item], [existing("a", "ALDEX 엄지 설계")])
+    assert diff.same == [("a", item)]
+    assert [change.type for change in diff.as_changes()] == ["completed"]
+
+
+def test_a_strike_taken_away_is_a_reopening() -> None:
+    row = existing("a", "ALDEX 엄지 설계")
+    row["done"] = True
+    diff = refresh.diff_items([parsed("a", "ALDEX 엄지 설계")], [row])
+    assert [change.type for change in diff.as_changes()] == ["reopened"]
+
+
+def test_an_unchanged_line_records_no_change() -> None:
+    diff = refresh.diff_items([parsed("a", "가")], [existing("a", "가")])
+    assert diff.as_changes() == []
+
+
 # --- writing it -----------------------------------------------------------
 
 
@@ -282,7 +402,7 @@ def test_a_refresh_that_matches_the_seed_changes_nothing_and_re_keys_quietly(see
     before = roadmap.read_roadmap(seeded)
     incoming = [
         refresh.ParsedItem(
-            key=f"blk:{row['hz']}:{index}", team=row["team"], column="now",
+            key=f"blk:{row['hz']}:{index}", team=row["team"], column="2026-09",
             text_ko=row["t"]["ko"], block_id="blk",
         )
         for index, row in enumerate(before["items"])
@@ -302,17 +422,17 @@ def test_a_refresh_leaves_a_hand_pinned_horizon_alone(seeded: str) -> None:
     """The promise the mapping screen makes."""
     mapping = roadmap.read_mapping(seeded)
     item = mapping["items"][0]
-    roadmap.update_item(seeded, item["key"], {"horizon": "someday"})
+    roadmap.update_item(seeded, item["key"], {"horizon": "undated"})
 
     incoming = [
         refresh.ParsedItem(
-            key=item["key"], team=item["team"], column="now",
+            key=item["key"], team=item["team"], column="2026-09",
             text_ko=item["text_ko"], block_id="blk",
         )
     ]
     refresh.apply_refresh(seeded, incoming, label="핀 확인")
     after = {row["key"]: row for row in roadmap.read_mapping(seeded)["items"]}
-    assert after[item["key"]]["horizon"] == "someday"
+    assert after[item["key"]]["horizon"] == "undated"
     assert "horizon" in after[item["key"]]["overrides"]
 
 
@@ -322,11 +442,11 @@ def test_a_shift_down_the_cell_re_keys_without_a_collision_and_keeps_each_overri
     holds. Keys are unique, so writing them one by one used to abort the refresh."""
     mapping = roadmap.read_mapping(seeded)
     first, second = mapping["items"][0], mapping["items"][1]
-    roadmap.update_item(seeded, second["key"], {"horizon": "someday"})
+    roadmap.update_item(seeded, second["key"], {"horizon": "undated"})
     incoming = [
-        refresh.ParsedItem(key="blk:now:0", team=first["team"], column="now", text_ko="새로 끼운 줄", block_id="blk"),
-        refresh.ParsedItem(key=second["key"], team=first["team"], column="now", text_ko=first["text_ko"], block_id="blk"),
-        refresh.ParsedItem(key="blk:now:2", team=second["team"], column="now", text_ko=second["text_ko"], block_id="blk"),
+        refresh.ParsedItem(key="blk:now:0", team=first["team"], column="2026-09", text_ko="새로 끼운 줄", block_id="blk"),
+        refresh.ParsedItem(key=second["key"], team=first["team"], column="2026-09", text_ko=first["text_ko"], block_id="blk"),
+        refresh.ParsedItem(key="blk:now:2", team=second["team"], column="2026-09", text_ko=second["text_ko"], block_id="blk"),
     ]
     refresh.apply_refresh(seeded, incoming, label="밀림")
     after = {row["text_ko"]: row for row in roadmap.read_mapping(seeded)["items"]}
@@ -343,7 +463,7 @@ def test_a_refresh_never_moves_a_row_between_products(seeded: str) -> None:
     item = mapping["items"][0]
     incoming = [
         refresh.ParsedItem(
-            key=item["key"], team=item["team"], column="now",
+            key=item["key"], team=item["team"], column="2026-09",
             text_ko=item["text_ko"] + " (수정)", block_id="blk",
         )
     ]
@@ -359,10 +479,10 @@ def test_the_change_history_comes_back_to_the_screen(seeded: str) -> None:
     keep, drop = mapping["items"][0], mapping["items"][1]
     incoming = [
         refresh.ParsedItem(
-            key=keep["key"], team=keep["team"], column="now",
+            key=keep["key"], team=keep["team"], column="2026-09",
             text_ko=keep["text_ko"] + " (고침)", block_id="blk",
         ),
-        refresh.ParsedItem(key="blk:now:99", team="rp", column="now", text_ko="새 줄", block_id="blk"),
+        refresh.ParsedItem(key="blk:now:99", team="rp", column="2026-09", text_ko="새 줄", block_id="blk"),
     ]
     result = refresh.apply_refresh(seeded, incoming, label="이력", prev_html_url="./history/x.html")
     assert result["changed"] == 1 and result["added"] == 1
@@ -382,7 +502,7 @@ def test_the_change_history_comes_back_to_the_screen(seeded: str) -> None:
 def test_a_row_born_in_a_refresh_lands_somewhere_visible(seeded: str) -> None:
     """Guessing its product would be a wrong answer dressed as a right one."""
     incoming = [
-        refresh.ParsedItem(key="blk:now:0", team="rp", column="now", text_ko="처음 보는 줄", block_id="blk")
+        refresh.ParsedItem(key="blk:now:0", team="rp", column="2026-09", text_ko="처음 보는 줄", block_id="blk")
     ]
     refresh.apply_refresh(seeded, incoming, label="신규")
     payload = roadmap.read_roadmap(seeded)
@@ -399,7 +519,7 @@ def test_a_changed_row_says_its_translation_is_behind(seeded: str) -> None:
     target = before["items"][0]
     incoming = [
         refresh.ParsedItem(
-            key=target["id"], team=target["team"], column="now",
+            key=target["id"], team=target["team"], column="2026-09",
             text_ko=target["t"]["ko"] + " (원문 수정)", block_id="blk",
         )
     ]
@@ -417,8 +537,34 @@ def test_a_changed_row_says_its_translation_is_behind(seeded: str) -> None:
 def test_a_row_born_in_a_refresh_is_marked_untranslated(seeded: str) -> None:
     refresh.apply_refresh(
         seeded,
-        [refresh.ParsedItem(key="blk:now:0", team="rp", column="now", text_ko="새 줄", block_id="blk")],
+        [refresh.ParsedItem(key="blk:now:0", team="rp", column="2026-09", text_ko="새 줄", block_id="blk")],
         label="신규 번역",
     )
     row = next(i for i in roadmap.read_roadmap(seeded)["items"] if i["t"]["ko"] == "새 줄")
     assert row["stale"] is True
+
+
+@needs_db
+def test_an_unchanged_line_moved_to_another_month_is_refiled(seeded: str) -> None:
+    """Same block, same words, slipped from October to November. Writing nothing
+    for an unchanged line would leave it in October."""
+    item = roadmap.read_mapping(seeded)["items"][0]
+    moved = refresh.ParsedItem(key=item["key"], team=item["team"], column="2026-11",
+                               text_ko=item["text_ko"], block_id="blk")
+    result = refresh.apply_refresh(seeded, [moved], label="이월")
+    assert result["unchanged"] == 1
+    after = {row["key"]: row for row in roadmap.read_mapping(seeded)["items"]}
+    assert after[item["key"]]["horizon"] == "2026-11"
+
+
+@needs_db
+def test_a_struck_line_is_stored_done_and_said_in_the_history(seeded: str) -> None:
+    item = roadmap.read_mapping(seeded)["items"][0]
+    struck = refresh.ParsedItem(key=item["key"], team=item["team"], column="2026-09",
+                                text_ko=item["text_ko"], block_id="blk", done=True)
+    result = refresh.apply_refresh(seeded, [struck], label="완료")
+    assert result["toggled"] == 1
+    payload = roadmap.read_roadmap(seeded)
+    row = next(r for r in payload["items"] if r["id"] == item["key"])
+    assert row["done"] is True
+    assert any(change["type"] == "completed" for change in payload["history"][0]["changes"])
