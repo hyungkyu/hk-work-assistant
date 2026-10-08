@@ -40,6 +40,8 @@ class SyncResult:
     identities: int = 0
     identities_new: int = 0
     absent_from_sheet: int = 0
+    # Email cells that held something other than an email, read as empty.
+    rejected_emails: int = 0
     unchanged_workbook: bool = False
     duplicate_rows: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -58,6 +60,7 @@ class SyncResult:
             "identities": self.identities,
             "identities_new": self.identities_new,
             "absent_from_sheet": self.absent_from_sheet,
+            "rejected_emails": self.rejected_emails,
             "unchanged_workbook": self.unchanged_workbook,
             # Reported, never merged: two rows folding onto one person is
             # either a sheet mistake or deliberate, and only a person knows.
@@ -111,6 +114,7 @@ def write_observation(
     result = SyncResult(dry_run=dry_run, source=source, rows=len(records))
     result.rows_in_sheet = len(records) if rows_in_sheet is None else rows_in_sheet
     result.rows_without_a_name = max(0, result.rows_in_sheet - len(records))
+    result.rejected_emails = sum(record.get("rejected_emails", 0) for record in records)
     result.duplicate_rows = [
         f"{identifier}: {' / '.join(rows)}" for identifier, rows in duplicates(records)
     ]

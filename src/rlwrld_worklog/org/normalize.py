@@ -153,8 +153,24 @@ def _clean(value: Any) -> str:
     return "" if text.lower() in _PLACEHOLDER else text
 
 
+# The fields that must hold an email to be used at all.
+EMAIL_FIELDS = ("email", "email_personal", "email_school", "email_alt")
+
+
+def _not_an_email(value: str) -> bool:
+    return bool(value) and "@" not in value
+
+
 def normalize_rows(rows: Iterable[dict], *, source: str) -> list[dict]:
-    """Clean a tab's rows. A row with no name is not a person and is dropped."""
+    """Clean a tab's rows. A row with no name is not a person and is dropped.
+
+    An email column holding something that is not an email is read as empty.
+    On 2026-10-08 the official-email column briefly held dates -- start dates,
+    by the look of them -- and the 09:31 sync stored seventeen of them as
+    identities and keyed people by them. Dates are never stored (HK,
+    2026-09-04), and a value that is not an email names nobody. The count is
+    kept on the record so a sync can say how many it dropped.
+    """
     out: list[dict] = []
     for row in rows:
         record: dict[str, Any] = {}
@@ -166,6 +182,10 @@ def normalize_rows(rows: Iterable[dict], *, source: str) -> list[dict]:
                 record[standard] = _clean(value)
         if not record.get("name"):
             continue
+        rejected = [field for field in EMAIL_FIELDS if _not_an_email(record.get(field, ""))]
+        for field in rejected:
+            record[field] = ""
+        record["rejected_emails"] = len(rejected)
         record["source"] = source
         record["employment_type"] = employment_of(record, source)
         record["affiliation"] = affiliation_of(record, source)

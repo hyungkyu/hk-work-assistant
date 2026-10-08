@@ -790,3 +790,21 @@ def test_only_an_email_carries_a_person_across_a_change_of_key() -> None:
     record = {"name": "새 사람", "email": "new@rlwrld.ai", "slurm_id": "shared", "github": "gh"}
     known = {("slurm", "shared"): "p_someone_else", ("github", "gh"): "p_someone_else"}
     assert resolve_person_id(record, known) == person_id(record)
+
+
+def test_a_date_in_an_email_column_is_read_as_empty() -> None:
+    """2026-10-08 09:31: the official-email column held dates, and they were
+    stored as identities. Dates are never stored, and a non-email names nobody.
+    """
+    from rlwrld_worklog.org.normalize import normalize_rows
+    from rlwrld_worklog.org.plan import plan
+
+    rows = [
+        {"이름": "가", "email (official)": "2025-05-13 00:00:00", "email (personal)": "ga@example.com"},
+        {"이름": "나", "email (official)": "na@rlwrld.ai"},
+    ]
+    records = normalize_rows(rows, source="roster_seed_2")
+    assert records[0]["email"] == "" and records[0]["rejected_emails"] == 1
+    assert records[1]["email"] == "na@rlwrld.ai" and records[1]["rejected_emails"] == 0
+    identities = plan(records, 1)["identity"]
+    assert all("2025-05-13" not in value for _, value in identities)
