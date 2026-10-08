@@ -61,14 +61,48 @@ def team_rows(department: str) -> list[dict]:
     return out
 
 
-def plan(records: list[dict], observation_id: int) -> dict[str, Any]:
-    """The rows one observation implies, with no database involved."""
+# The identities that may carry a person across a change of key. Strong ones
+# only: each names one human. `slurm` is left out because a cluster login can
+# be a shared account, and following it would fold two people into one.
+STICKY_KINDS = ("email_official", "email_personal", "email_school", "github", "slack", "notion")
+
+
+def resolve_person_id(record: dict, known: dict[tuple[str, str], str] | None = None) -> str:
+    """The person this row already is, if any of its identities says so.
+
+    `person_id` hashes whichever email happens to be filled in, so filling in
+    a new one changed the key: on 2026-10-08 the sheet gained official emails
+    and 171 people became new people overnight, each leaving a copy of
+    themselves behind as 시트에 없음. An identity already on file is the
+    stronger fact -- the same personal email is the same person -- so it wins,
+    in `IDENTITY_FIELDS` order. With nothing on file the hash still decides.
+    """
+    if known:
+        for field, kind in IDENTITY_FIELDS:
+            if kind not in STICKY_KINDS:
+                continue
+            value = (record.get(field) or "").strip()
+            if value and (kind, value) in known:
+                return known[(kind, value)]
+    return person_id(record)
+
+
+def plan(
+    records: list[dict],
+    observation_id: int,
+    known: dict[tuple[str, str], str] | None = None,
+) -> dict[str, Any]:
+    """The rows one observation implies, with no database involved.
+
+    `known` is the identity table as it stood before this observation, which
+    keeps a person's id when the sheet changes which email they are keyed by.
+    """
     persons: dict[str, Any] = {}
     states: list[dict] = []
     teams: dict[str, dict] = {}
     identities: dict[tuple[str, str], str] = {}
     for record in records:
-        identifier = person_id(record)
+        identifier = resolve_person_id(record, known)
         persons[identifier] = record.get("name")
         nodes = team_rows(record.get("department") or "")
         for node in nodes:

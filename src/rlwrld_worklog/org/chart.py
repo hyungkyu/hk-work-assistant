@@ -465,8 +465,13 @@ def org_chart(database_url: str, *, include_retired: bool = False) -> dict[str, 
                 {"kind": row[0], "value": row[1], "events": row[2]} for row in cursor.fetchall()
             ]
 
+    # Who the sheet lists right now, per tab, by name -- including those it
+    # lists as 퇴사. A 시트에 없음 row under a name the same tab still lists is
+    # that person's old id, not a person who left: see `superseded` below.
+    listed = {(row[10], row[1]) for row in rows if row[7] != "absent_from_sheet"}
     people = []
     departed = []
+    superseded = []
     for row in rows:
         (
             person_id,
@@ -500,6 +505,14 @@ def org_chart(database_url: str, *, include_retired: bool = False) -> dict[str, 
                 advisor=advisor,
             ),
         }
+        if status == "absent_from_sheet" and (source, name) in listed:
+            # The copy a change of key left behind (2026-10-08: official
+            # emails were filled in and the id followed the email). The
+            # person is on the chart under their current id; showing this
+            # one too put 171 people on the page twice, 39 of them in the
+            # live bands although the sheet says 퇴사.
+            superseded.append(person_id)
+            continue
         if status == "retired":
             departed.append(dict(person))
             if not include_retired:
@@ -532,4 +545,7 @@ def org_chart(database_url: str, *, include_retired: bool = False) -> dict[str, 
         # Never in the tree, never in the counts above, always returned: the
         # live chart is who is here, this is who was.
         "departed": departed_block(departed, since),
+        # Old ids hidden above. Counted rather than dropped silently: their
+        # history still sits under the old id until it is merged.
+        "superseded_ids": len(superseded),
     }

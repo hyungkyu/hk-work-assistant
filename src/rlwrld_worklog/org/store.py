@@ -134,7 +134,9 @@ def write_observation(
             observation_id = int(cursor.fetchone()[0])
             result.observation_id = observation_id
 
-            written = plan(records, observation_id)
+            cursor.execute("SELECT kind, value, person_id FROM org_identity")
+            known = {(kind, value): person for kind, value, person in cursor.fetchall()}
+            written = plan(records, observation_id, known)
             _write_teams(cursor, written["team"], result)
             _write_people(cursor, written["person"], observation_id, result)
             _write_states(cursor, written["person_state"], result)

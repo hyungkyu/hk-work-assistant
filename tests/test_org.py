@@ -759,3 +759,32 @@ def test_the_departed_block_is_banded_newest_first_and_honest_about_old_leavers(
     assert block["members"][1]["departed_before_first_sync"] is True
     # No observation found: said as unknown, never given a made-up date.
     assert block["members"][2]["departed_seen_at"] is None
+
+
+def test_filling_in_an_email_does_not_make_a_new_person() -> None:
+    """2026-10-08: official emails were added and 171 people changed id.
+
+    An identity already on file names the person; the hash only decides for
+    somebody the system has never seen.
+    """
+    from rlwrld_worklog.org.plan import person_id, plan, resolve_person_id
+
+    before = {"name": "장주철", "email_personal": "almighty@example.com"}
+    after = {**before, "email": "joochul@rlwrld.ai"}
+    old = person_id(before)
+    assert person_id(after) != old  # the defect, stated
+    known = {("email_personal", "almighty@example.com"): old}
+    assert resolve_person_id(after, known) == old
+    assert resolve_person_id(after) == person_id(after)
+
+    record = {**after, "affiliation": "internal", "access_level": "staff_equivalent", "status": "active"}
+    written = plan([record], 7, known)
+    assert list(written["person"]) == [old]
+    assert written["identity"][("email_official", "joochul@rlwrld.ai")] == old
+
+
+def test_a_shared_cluster_login_does_not_fold_two_people() -> None:
+    from rlwrld_worklog.org.plan import person_id, resolve_person_id
+
+    record = {"name": "새 사람", "email": "new@rlwrld.ai", "slurm_id": "shared"}
+    assert resolve_person_id(record, {("slurm", "shared"): "p_someone_else"}) == person_id(record)
