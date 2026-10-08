@@ -61,10 +61,11 @@ def team_rows(department: str) -> list[dict]:
     return out
 
 
-# The identities that may carry a person across a change of key. Strong ones
-# only: each names one human. `slurm` is left out because a cluster login can
-# be a shared account, and following it would fold two people into one.
-STICKY_KINDS = ("email_official", "email_personal", "email_school", "github", "slack", "notion")
+# The identities that may carry a person across a change of key: emails, and
+# only emails (HK, 2026-10-08 -- 사번은 곤란, 이메일로 하자). An email names
+# one human and the sheet already holds three of them per person; a cluster
+# login can be shared, and following it would fold two people into one.
+STICKY_KINDS = ("email_official", "email_personal", "email_school")
 
 
 def resolve_person_id(record: dict, known: dict[tuple[str, str], str] | None = None) -> str:
@@ -75,7 +76,8 @@ def resolve_person_id(record: dict, known: dict[tuple[str, str], str] | None = N
     and 171 people became new people overnight, each leaving a copy of
     themselves behind as 시트에 없음. An identity already on file is the
     stronger fact -- the same personal email is the same person -- so it wins,
-    in `IDENTITY_FIELDS` order. With nothing on file the hash still decides.
+    in `IDENTITY_FIELDS` order -- official, then personal, then school. With
+    no email on file the hash still decides.
     """
     if known:
         for field, kind in IDENTITY_FIELDS:

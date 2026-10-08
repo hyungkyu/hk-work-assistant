@@ -783,8 +783,10 @@ def test_filling_in_an_email_does_not_make_a_new_person() -> None:
     assert written["identity"][("email_official", "joochul@rlwrld.ai")] == old
 
 
-def test_a_shared_cluster_login_does_not_fold_two_people() -> None:
+def test_only_an_email_carries_a_person_across_a_change_of_key() -> None:
+    """HK, 2026-10-08: identity is by email. Accounts never decide who someone is."""
     from rlwrld_worklog.org.plan import person_id, resolve_person_id
 
-    record = {"name": "새 사람", "email": "new@rlwrld.ai", "slurm_id": "shared"}
-    assert resolve_person_id(record, {("slurm", "shared"): "p_someone_else"}) == person_id(record)
+    record = {"name": "새 사람", "email": "new@rlwrld.ai", "slurm_id": "shared", "github": "gh"}
+    known = {("slurm", "shared"): "p_someone_else", ("github", "gh"): "p_someone_else"}
+    assert resolve_person_id(record, known) == person_id(record)
