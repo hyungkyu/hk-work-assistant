@@ -48,6 +48,17 @@ def owner(config):
     return FakeRequest(cookies={SESSION_COOKIE: token}), csrf
 
 
+@pytest.fixture()
+def company_user(config):
+    token, _ = admin_web.store().create_session(
+        subject="staff",
+        email="staff@rlwrld.ai",
+        role="company_user",
+        auth_method="google",
+    )
+    return FakeRequest(cookies={SESSION_COOKIE: token})
+
+
 HTML = """
 <nav id="nav">
   <div class="nav-group">
@@ -161,6 +172,29 @@ def test_anonymous_callers_are_refused(config) -> None:
     with pytest.raises(HTTPException) as error:
         menu_web.menu_route(FakeRequest())
     assert error.value.status_code == 401
+
+
+def test_a_company_user_can_read_the_access_decisions(
+    config, company_user, monkeypatch
+) -> None:
+    """Public entries are unknowable if the menu read itself is owner-only."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    found = menu_web.menu_route(company_user)
+
+    assert found["pages"]
+    assert found["source"] == "markup"
+
+
+def test_a_company_user_still_cannot_save_the_menu(
+    config, company_user
+) -> None:
+    with pytest.raises(HTTPException) as error:
+        menu_web.save_menu_route(
+            company_user,
+            menu_web.SaveMenu(entries=[menu_web.MenuEntry(page_id="work")]),
+        )
+    assert error.value.status_code == 403
 
 
 def test_saving_is_refused_without_csrf(config, owner) -> None:

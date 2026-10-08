@@ -15,7 +15,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .admin_web import _require_csrf, require_super_admin_session
+from .admin_web import _require_csrf, require_reader_session, require_super_admin_session
 
 router = APIRouter(prefix="/api/v1/admin/menu")
 
@@ -32,7 +32,12 @@ def menu_route(request: Request) -> dict[str, Any]:
     navigation because a query failed is a backoffice nobody can use to find
     out why the query failed.
     """
-    require_super_admin_session(request)
+    # Every signed-in company user needs the saved access decisions in order
+    # to discover which menu entries are public.  Keeping this read behind the
+    # owner guard leaves the safe, owner-only HTML defaults in place and makes
+    # every public entry invisible.  Saving the arrangement remains owner-only
+    # below.
+    require_reader_session(request)
     from . import menu
 
     declared = menu.declared_pages()
