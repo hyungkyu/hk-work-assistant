@@ -77,3 +77,58 @@ def test_the_number_outranks_an_email_that_was_reassigned() -> None:
         {"employee_no": "1002", "email": "team@rlwrld.ai", "name": "새사람"}, known
     )
     assert found == "p_new_joiner"
+
+
+def test_the_roster_sheet_can_be_moved_without_a_patch(monkeypatch) -> None:
+    """HK, 2026-10-12: 로스터 소스 파일 주소가 바뀌었다.
+
+    A spreadsheet id is a deployment fact, and it had to be a code change.
+    The cost of that is not the patch -- it is the hours between the sheet
+    moving and the batch finding out, during which the sync reports success
+    against a file nobody is editing any more.
+    """
+    import importlib
+
+    from rlwrld_worklog.org import sheet
+
+    monkeypatch.setenv("WORKLOG_ROSTER_SHEET_ID", "moved-somewhere-else")
+    importlib.reload(sheet)
+    try:
+        assert sheet.ROSTER_SHEET_ID == "moved-somewhere-else"
+    finally:
+        monkeypatch.delenv("WORKLOG_ROSTER_SHEET_ID")
+        importlib.reload(sheet)
+
+
+def test_an_employee_number_is_a_declared_identity_kind() -> None:
+    """The first sync against the new sheet died on this.
+
+    `org_identity.kind` is an allowlist, which is what keeps a typo from
+    becoming a table of junk -- so the fix is to declare the kind, not to
+    drop the rule. The code that writes it shipped one patch ahead of the
+    migration that permits it, which is the ordering that fails in
+    production and nowhere else.
+    """
+    from pathlib import Path
+
+    migrations = Path(__file__).resolve().parents[1] / "sql" / "migrations"
+    allowed = "".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(migrations.glob("*.sql"))
+        if "org_identity_kind_check" in path.read_text(encoding="utf-8")
+    )
+    assert "'employee_no'" in allowed
+
+    from rlwrld_worklog.org.normalize import IDENTITY_FIELDS
+
+    kinds = {kind for _, kind in IDENTITY_FIELDS}
+    assert kinds <= {
+        "employee_no",
+        "email_official",
+        "email_personal",
+        "email_school",
+        "github",
+        "slack",
+        "notion",
+        "slurm",
+    }, "a kind the database would refuse"

@@ -17,6 +17,7 @@ stored token's scopes rather than assumed, after being wrongly asserted once.
 from __future__ import annotations
 
 import hashlib
+import os
 import io
 from typing import Any
 
@@ -25,7 +26,13 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # The roster HK pointed at. Overridable, because a sheet id is a deployment
 # fact rather than a law, but defaulted so the batch needs no configuration to
 # do the right thing.
-ROSTER_SHEET_ID = "15QsaBGnDu3ACJ8ucqeO0fu5FhDiXGjhYmzKr0KANQPw"
+# HK, 2026-10-12: 로스터 소스 파일 주소가 바뀌었다. Read from the
+# environment first, because waiting for a patch every time a spreadsheet
+# moves is the kind of coupling that makes somebody keep using the old file.
+ROSTER_SHEET_ID = (
+    os.environ.get("WORKLOG_ROSTER_SHEET_ID")
+    or "1HfziZuLWwz-1mGBuGbGhqjfVjOdfO--zkGPmx6lFoP8"
+)
 
 # The names this code stores, and the tab names the sheet actually uses.
 #
