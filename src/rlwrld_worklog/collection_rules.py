@@ -1548,7 +1548,7 @@ CALENDAR_V10 = SourceRule(
 V10 = CollectionRule(
     version="V10",
     title="공식 API 원본 원장 + 구캘 반복 일정 발생 수집 (calendar occurrences)",
-    status="active",
+    status="superseded",
     effective=EffectivePeriod(
         start="2026-09-17",
         end=None,
@@ -1612,15 +1612,16 @@ NOTION_V11 = replace(
 V11 = CollectionRule(
     version="V11",
     title="공식 API 원본 원장 + 핀 고정 페이지 본문 해시 비교 (pinned pages)",
-    # Pending until a page is pinned: before that the collector's behaviour is
-    # V10's exactly, because an empty pin list takes no path V10 did not.
-    status="pending",
+    # Active from the day notion-seeds.json first pinned a page. Before that the
+    # collector's behaviour was V10's exactly, because an empty pin list takes no
+    # path V10 did not.
+    status="active",
     effective=EffectivePeriod(
-        start=None,
+        start="2026-10-12",
         end=None,
         basis=(
-            "pending: the collector can pin seed pages; this version takes effect on the day "
-            "notion-seeds.json first pins one."
+            "observed: notion-seeds.json pinned the Platform Team Roadmap page "
+            "(3ce6cbdff6f68086b8f7cc174bbb040d) on 2026-10-12, on HK's instruction."
         ),
     ),
     summary=(
@@ -1650,7 +1651,7 @@ V11 = CollectionRule(
 
 RULES: tuple[CollectionRule, ...] = (V0, V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11)
 
-ACTIVE_RULE_VERSION = "V10"
+ACTIVE_RULE_VERSION = "V11"
 
 # Content digests of every published version. A published rule is frozen: if
 # editing one changes its meaning, the digest moves and import fails here,
@@ -1725,6 +1726,7 @@ PUBLISHED_DIGESTS: dict[str, str] = {
     "V8": "sha256:0c44b9e1e3c3abe12801f3543f5a7b4ccf4adcc5ddba1bc4dd47021cd3e89aaa",
     "V9": "sha256:df78b1d883f31568093d35e36ac5ed587b6b10a2dfadb16a6dd15cb4bed6a293",
     "V10": "sha256:221cb9252406d2b72e6fad5bea5012d10b978214835c84894dc14284c56356b9",
+    "V11": "sha256:0e9da3d05aa3173597c94db146720a2f5024481427313e0d94dafdf022a1c3ce",
 }
 
 
