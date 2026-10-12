@@ -333,6 +333,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     org_status_parser.add_argument("--database-url", default=None)
 
+    org_reset_parser = org_commands.add_parser(
+        "reset",
+        help="Drop everybody the roster sheet no longer lists, keeping anyone a "
+        "person made a decision about. Count only without --apply",
+    )
+    org_reset_parser.add_argument("--database-url", default=None)
+    org_reset_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Delete, then rebuild the digests of the days those people had",
+    )
+
     digest_parser = subparsers.add_parser(
         "digest", help="Per-person daily digests, built from the timeline"
     )
@@ -1393,6 +1405,25 @@ def org_command(args: argparse.Namespace) -> int:
             raise SystemExit(str(error)) from error
         _print_json("org_resolve", outcome)
         return 0 if outcome.get("ok") else 1
+
+    if args.org_command == "reset":
+        from .org.reset import reset
+
+        outcome = reset(database_url, apply=args.apply)
+        payload = outcome.as_dict()
+        if args.apply and outcome.days_to_rebuild:
+            # The activity that used to land on a stale copy lands on the
+            # person it belongs to once the day is rebuilt. Without the
+            # network: meeting-note bodies come back with the nightly batch.
+            from . import digest as digest_module
+
+            rebuilt = []
+            for day in outcome.days_to_rebuild:
+                built = digest_module.build_day(database_url, date.fromisoformat(day))
+                rebuilt.append({"day": day, "events": built.as_dict().get("events")})
+            payload["rebuilt"] = rebuilt
+        _print_json("org_reset", payload)
+        return 0
 
     if args.org_command == "status":
         from .org.store import org_status
