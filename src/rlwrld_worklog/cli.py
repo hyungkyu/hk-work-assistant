@@ -445,7 +445,8 @@ def build_parser() -> argparse.ArgumentParser:
         "reconcile",
         help="Count one person's day in every layer (source → 원장 → 타임라인 → 다이제스트)",
     )
-    reconcile_parser.add_argument("--person-name", required=True)
+    reconcile_parser.add_argument("--person-name", default=None)
+    reconcile_parser.add_argument("--person-id", default=None)
     reconcile_parser.add_argument("--since", default=None)
     reconcile_parser.add_argument("--until", default=None)
     reconcile_parser.add_argument("--database-url", default=None)
@@ -514,6 +515,12 @@ def build_parser() -> argparse.ArgumentParser:
         "instead of half a million",
     )
     embed_parser.add_argument(
+        "--person-id",
+        default=None,
+        help="The same, by roster id -- the thing that does not move when two "
+        "people share a name",
+    )
+    embed_parser.add_argument(
         "--blocks",
         action="store_true",
         help="Embed conversation blocks instead of single messages. A block "
@@ -529,7 +536,8 @@ def build_parser() -> argparse.ArgumentParser:
         "blocks",
         help="Cut the conversations one person took part in into blocks",
     )
-    blocks_parser.add_argument("--person-name", required=True)
+    blocks_parser.add_argument("--person-name", default=None)
+    blocks_parser.add_argument("--person-id", default=None)
     blocks_parser.add_argument("--database-url", default=None)
     blocks_parser.add_argument(
         "--apply", action="store_true", help="Write the blocks. Without it, count only"
@@ -541,7 +549,8 @@ def build_parser() -> argparse.ArgumentParser:
         "pairs",
         help="Propose the question each of one person's answers was answering",
     )
-    pairs_parser.add_argument("--person-name", required=True)
+    pairs_parser.add_argument("--person-name", default=None)
+    pairs_parser.add_argument("--person-id", default=None)
     pairs_parser.add_argument("--database-url", default=None)
     pairs_parser.add_argument(
         "--apply", action="store_true", help="Write the candidates. Without it, count only"
@@ -573,7 +582,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="What HK actually said last time something like this came up",
     )
     precedent.add_argument("situation", nargs="?", default=None)
-    precedent.add_argument("--person-name", required=True)
+    precedent.add_argument("--person-name", default=None)
+    precedent.add_argument("--person-id", default=None)
     precedent.add_argument("--database-url", default=None)
     precedent.add_argument("--limit", type=_positive_int, default=8)
     precedent.add_argument(
@@ -2018,13 +2028,8 @@ def embed_command(args: argparse.Namespace) -> int:
     if not database_url:
         raise SystemExit("DATABASE_URL or --database-url is required")
     person_id = None
-    if args.person_name:
-        from . import digest as digest_module
-
-        match = digest_module.resolve_people(database_url, [args.person_name])
-        if not match["resolved"]:
-            raise SystemExit(f"찾지 못함: {args.person_name}")
-        person_id = next(iter(match["resolved"].values()))
+    if args.person_name or getattr(args, "person_id", None):
+        person_id = _resolve_one_person(database_url, args)
 
     embedder = LocalEmbedder(args.model or DEFAULT_MODEL)
     result = embed_corpus(
@@ -2048,10 +2053,7 @@ def pairs_command(args: argparse.Namespace) -> int:
     database_url = args.database_url or os.environ.get("DATABASE_URL")
     if not database_url:
         raise SystemExit("DATABASE_URL or --database-url is required")
-    match = digest_module.resolve_people(database_url, [args.person_name])
-    if not match["resolved"]:
-        raise SystemExit(f"찾지 못함: {args.person_name}")
-    person_id = next(iter(match["resolved"].values()))
+    person_id = _resolve_one_person(database_url, args)
 
     if args.agreement:
         _print_json("pair_agreement", agreement(database_url, person_id))
@@ -2104,10 +2106,7 @@ def blocks_command(args: argparse.Namespace) -> int:
     database_url = args.database_url or os.environ.get("DATABASE_URL")
     if not database_url:
         raise SystemExit("DATABASE_URL or --database-url is required")
-    match = digest_module.resolve_people(database_url, [args.person_name])
-    if not match["resolved"]:
-        raise SystemExit(f"찾지 못함: {args.person_name}")
-    person_id = next(iter(match["resolved"].values()))
+    person_id = _resolve_one_person(database_url, args)
 
     result = build_blocks(
         database_url,
@@ -2157,10 +2156,7 @@ def precedents_command(args: argparse.Namespace) -> int:
     if not args.situation:
         raise SystemExit("give the situation to match, in quotes")
 
-    match = digest_module.resolve_people(database_url, [args.person_name])
-    if not match["resolved"]:
-        raise SystemExit(f"찾지 못함: {args.person_name}")
-    person_id = next(iter(match["resolved"].values()))
+    person_id = _resolve_one_person(database_url, args)
 
     embedder = None
     if not args.no_embedding:
@@ -2468,6 +2464,48 @@ def roadmap_refresh(args: argparse.Namespace) -> int:
     )
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0
+
+def _resolve_one_person(database_url: str, args) -> str:
+    """The person a command is about, by id when given and by name otherwise.
+
+    HK, 2026-10-12: the nightly batch stopped because two roster rows are
+    both called 류형규 -- a duplicate waiting on a merge nobody has approved
+    yet. A name is not a key here and never was: people share them, people
+    change them, and the roster holds duplicates until somebody decides.
+    So every command that takes a person also takes `--person-id`, which is
+    the thing that does not move, and an ambiguous name now says which ids
+    it found instead of only that it failed.
+    """
+    from . import digest as digest_module
+
+    given = getattr(args, "person_id", None)
+    if given:
+        import psycopg
+
+        with psycopg.connect(database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT 1 FROM org_person WHERE person_id = %s", (given,)
+                )
+                if cursor.fetchone() is None:
+                    raise SystemExit(f"그런 사람이 없습니다: {given}")
+        return given
+
+    name = getattr(args, "person_name", None)
+    if not name:
+        raise SystemExit("--person-name 또는 --person-id 가 필요합니다")
+
+    match = digest_module.resolve_people(database_url, [name])
+    if match["ambiguous"]:
+        candidates = match["ambiguous"][name]
+        raise SystemExit(
+            f"이름이 여럿입니다: {name} -> {', '.join(candidates)}\n"
+            "--person-id 로 하나를 지정하세요."
+        )
+    if not match["resolved"]:
+        raise SystemExit(f"찾지 못함: {name}")
+    return next(iter(match["resolved"].values()))
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)

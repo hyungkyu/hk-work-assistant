@@ -139,12 +139,26 @@ echo "=== conversation blocks, and their vectors"
 # blocks in 38 seconds, so a night's worth is seconds and a backlog clears in
 # one run. A cap still exists so an unexpected rebuild cannot turn the
 # nightly batch into an hour.
+# By id when it is configured, because a name is not a key.
+#
+# 2026-10-12: this stopped for a night. Two roster rows are both called
+# 류형규 -- a duplicate waiting on a merge nobody has approved -- so the
+# lookup was ambiguous and both the block build and the embedding exited
+# non-zero. The precedent search kept answering from the index it already
+# had, which is the failure that is quiet: nothing is missing, it is just
+# older than it looks. Set WORKLOG_BLOCKS_PERSON_ID in collect.env.
+blocks_person_id="${WORKLOG_BLOCKS_PERSON_ID:-}"
 blocks_person="${WORKLOG_BLOCKS_PERSON:-류형규}"
+if [ -n "$blocks_person_id" ]; then
+  person_flag=(--person-id "$blocks_person_id")
+else
+  person_flag=(--person-name "$blocks_person")
+fi
 embed_max="${WORKLOG_EMBED_MAX:-5000}"
-if [ -n "$blocks_person" ] && [ "$embed_max" != "0" ]; then
-  blocks_out=$("$worklog" blocks --person-name "$blocks_person" --apply 2>&1) || status=1
+if [ -n "${person_flag[1]}" ] && [ "$embed_max" != "0" ]; then
+  blocks_out=$("$worklog" blocks "${person_flag[@]}" --apply 2>&1) || status=1
   printf '%s\n' "$blocks_out" | tail -3
-  embed_out=$("$worklog" embed --person-name "$blocks_person" --blocks --apply \
+  embed_out=$("$worklog" embed "${person_flag[@]}" --blocks --apply \
               --limit "$embed_max" 2>&1) || status=1
   printf '%s\n' "$embed_out" | tail -3
   mkdir -p incoming
