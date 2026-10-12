@@ -47,6 +47,7 @@ def owner(config) -> FakeRequest:
 ROUTES = (
     (org_web.org_chart_route, {}),
     (org_web.refresh_route, {}),
+    (org_web.person_profile_route, {"person_id": "p_000000000000"}),
     (org_web.org_status_route, {}),
     (org_web.unmapped_route, {}),
     (org_web.digest_status_route, {}),
@@ -120,6 +121,7 @@ def test_every_reading_route_is_a_get_and_only_resolve_is_a_post() -> None:
     assert org_paths == {
         "/api/v1/admin/org/chart": ["get"],
         "/api/v1/admin/org/refresh": ["post"],
+        "/api/v1/admin/org/person/{person_id}": ["get"],
         "/api/v1/admin/org/status": ["get"],
         "/api/v1/admin/org/unmapped": ["get"],
         "/api/v1/admin/org/unmapped/resolve": ["post"],
@@ -154,3 +156,54 @@ def test_a_day_with_no_digest_says_it_was_not_built(owner: FakeRequest, monkeypa
     )
     body = org_web.person_day_route(owner, person_id="p_nobody", day="2026-09-10")
     assert body == {"person_id": "p_nobody", "day": "2026-09-10", "built": False}
+
+
+@REQUIRES_DATABASE
+def test_a_person_profile_shows_the_roster_and_never_an_email(owner: FakeRequest, monkeypatch) -> None:
+    """인사정보 from the roster, the other two sections declared but unconnected,
+    and no join key anywhere in what the panel receives."""
+    import io
+    import json as _json
+
+    import openpyxl
+
+    from rlwrld_worklog.ledger.load import apply_migrations
+    from rlwrld_worklog.org.plan import person_id
+    from rlwrld_worklog.org.sync import sync_workbook
+    from pathlib import Path
+
+    url = os.environ["WORKLOG_TEST_DATABASE_URL"]
+    monkeypatch.setenv("DATABASE_URL", url)
+    repository = Path(__file__).resolve().parents[1]
+    apply_migrations(database_url=url, migrations_dir=repository / "sql" / "migrations", dry_run=False)
+
+    def workbook(team: str) -> bytes:
+        book = openpyxl.Workbook()
+        book.remove(book.active)
+        internal = book.create_sheet("roster_seed_2")
+        internal.append(["이름", "닉네임", "조직", "고용형태", "재직구분", "email (official)"])
+        internal.append(["프로필시험", "pt", team, "인턴", "", "profile.test@rlwrld.ai"])
+        external = book.create_sheet("roaster_seed_ext")
+        external.append(["성 + 이름", "소속 학교 연구실 지도교수님"])
+        external.append(["프로필학생", "주한별 교수님"])
+        buffer = io.BytesIO()
+        book.save(buffer)
+        return buffer.getvalue()
+
+    sync_workbook(url, workbook("RLWRLD | Model Team"), reobserve=True)
+    sync_workbook(url, workbook("RLWRLD | Platform Team"), reobserve=True)
+    identifier = person_id({"email": "profile.test@rlwrld.ai"})
+
+    body = org_web.person_profile_route(owner, person_id=identifier)
+    fields = {field["key"]: field["value"] for field in body["hr"]["fields"]}
+    assert fields["department_raw"] == "RLWRLD | Platform Team"
+    assert fields["nickname"] == "pt" and fields["status"] == "재직"
+    moved = [entry for entry in body["hr"]["history"] if not entry["first"]]
+    assert moved and moved[-1]["changes"][0]["after"] == "RLWRLD | Platform Team"
+    for section in (body["hr"]["extra"], body["recent_work"], body["detail"]):
+        assert section["connected"] is False
+    assert "@" not in _json.dumps(body, ensure_ascii=False, default=str)
+
+    with pytest.raises(HTTPException) as error:
+        org_web.person_profile_route(owner, person_id="p_000000000000")
+    assert error.value.status_code == 404

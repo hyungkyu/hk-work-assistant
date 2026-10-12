@@ -365,14 +365,14 @@
         <article class="card" style="margin-top:16px">
           <div class="card-header"><h2>사람</h2><span class="badge" id="org-people-badge">-</span></div>
           <div id="org-people"></div>
-          <p class="help">이름을 누르면 그 사람의 일자별 다이제스트로 갑니다.
+          <p class="help">이름을 누르면 인사정보·최근 하고 있는 일·상세 정보가 열립니다.
              인원 수가 두 개인 것은 정의입니다 — 방문 연구원은 학생이면서 사내 접근을 가지므로 양쪽에 셉니다.</p>
         </article>
         <article class="card" style="margin-top:16px">
           <div class="card-header"><h2>퇴사 · 연구계약종료</h2><span class="badge" id="org-departed-badge">-</span></div>
           <div id="org-departed"></div>
           <p class="help">로스터에 퇴사로 표시된 사람입니다. 위 조직도와 인원 수에는 들어가지 않습니다.
-             날짜는 시트가 처음 그렇게 말한 때이고, 실제 퇴사일은 아닙니다. 이름을 누르면 그 사람의 기록으로 갑니다.</p>
+             날짜는 시트가 처음 그렇게 말한 때이고, 실제 퇴사일은 아닙니다. 이름을 누르면 그 사람의 정보가 열립니다.</p>
         </article>
       </section>
 
@@ -382,7 +382,7 @@
         <article class="card">
           <div class="collection-toolbar">
             <div class="work-filters">
-              <input id="person-id" placeholder="person_id (조직도에서 이름을 누르면 채워집니다)" style="min-width:280px">
+              <input id="person-id" placeholder="person_id (조직도에서 사람을 열고 일자별 기록 보기를 누르면 채워집니다)" style="min-width:280px">
               <input id="person-day" type="date">
               <button class="button primary" id="person-run">보기</button>
             </div>
@@ -685,6 +685,11 @@
     <p class="help">요금이 달라진 날만 남습니다. 달라진 것이 없는 날은 새 문서를 만들지 않고
       가져온 시각과 환율만 바꿉니다.</p>
     <div id="cp-history-body"></div>
+  </aside>
+  <aside class="drawer hidden" id="org-person-drawer">
+    <button class="button" id="org-person-close">닫기</button>
+    <h2 id="org-person-title"></h2>
+    <div id="org-person-body"></div>
   </aside>
   <aside class="drawer hidden" id="roadmap-drawer">
     <button class="button" id="roadmap-history-close"></button>

@@ -808,3 +808,18 @@ def test_a_date_in_an_email_column_is_read_as_empty() -> None:
     assert records[1]["email"] == "na@rlwrld.ai" and records[1]["rejected_emails"] == 0
     identities = plan(records, 1)["identity"]
     assert all("2025-05-13" not in value for _, value in identities)
+
+
+def test_a_profile_lists_where_the_record_starts_and_then_only_changes() -> None:
+    from rlwrld_worklog.org.profile import history
+
+    states = [
+        {"observed_at": "d1", "department_raw": "A", "status": "active"},
+        {"observed_at": "d2", "department_raw": "A", "status": "active"},
+        {"observed_at": "d3", "department_raw": "B", "status": "active"},
+        {"observed_at": "d4", "department_raw": "B", "status": "retired"},
+    ]
+    entries = history(states)
+    assert [entry["observed_at"] for entry in entries] == ["d1", "d3", "d4"]
+    assert entries[1]["changes"] == [{"field": "department_raw", "before": "A", "after": "B"}]
+    assert entries[2]["changes"][0]["field"] == "status"

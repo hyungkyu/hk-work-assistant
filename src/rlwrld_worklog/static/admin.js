@@ -2007,13 +2007,122 @@
         warn.textContent = '시트에 없음';
         card.appendChild(warn);
       }
-      card.addEventListener('click', () => {
-        $('person-id').value = person.person_id;
-        if (!$('person-day').value) $('person-day').value = yesterdayKST();
-        showPage('person');
-        runPersonDay();
-      });
+      card.addEventListener('click', () => openPersonPanel(person));
       return card;
+    }
+
+    function openPersonDay(personId) {
+      $('person-id').value = personId;
+      if (!$('person-day').value) $('person-day').value = yesterdayKST();
+      $('org-person-drawer').classList.add('hidden');
+      showPage('person');
+      runPersonDay();
+    }
+
+    // The panel a click on the chart opens (HK, 2026-10-12): 인사정보 from the
+    // roster, then 최근 하고 있는 일 and 상세 정보, whose sources are still to
+    // be named. Those two say so in place rather than being left off, so the
+    // panel keeps one shape when they arrive.
+    function personSection(title, note) {
+      const section = document.createElement('section');
+      section.style.cssText = 'margin-top:18px;padding-top:14px;border-top:1px solid var(--line-soft,#1e2734)';
+      const head = document.createElement('h3');
+      head.style.cssText = 'font-size:14px;margin:0 0 8px';
+      head.textContent = title;
+      section.appendChild(head);
+      if (note) {
+        const p = document.createElement('p');
+        p.className = 'help';
+        p.textContent = note;
+        section.appendChild(p);
+      }
+      return section;
+    }
+
+    function notConnected(section, block) {
+      if (block && block.connected === false) {
+        const p = document.createElement('p');
+        p.className = 'work-state';
+        p.textContent = block.reason;
+        section.appendChild(p);
+      }
+    }
+
+    const PROFILE_FIELD_LABEL = {
+      department_raw: '조직', employment_type: '고용형태', status: '재직구분',
+      title: '외부호칭', advisor: '지도교수', nickname: '닉네임',
+    };
+    const PROFILE_STATUS = { active: '재직', retired: '퇴사', absent_from_sheet: '시트에 없음' };
+
+    async function openPersonPanel(person) {
+      const drawer = $('org-person-drawer');
+      const body = $('org-person-body');
+      $('org-person-title').textContent = orgDisplayName(person);
+      body.textContent = '';
+      const loading = document.createElement('p');
+      loading.className = 'work-state';
+      loading.textContent = '불러오는 중…';
+      body.appendChild(loading);
+      drawer.classList.remove('hidden');
+      let profile;
+      try {
+        profile = await api(`/api/v1/admin/org/person/${encodeURIComponent(person.person_id)}`);
+      } catch (error) {
+        loading.textContent = `불러오지 못했습니다: ${error.message}`;
+        return;
+      }
+      body.textContent = '';
+
+      const hr = profile.hr || {};
+      const hrSection = personSection('인사정보',
+        `로스터 ${hr.tab || ''} · ${hr.observed_at ? new Date(hr.observed_at).toLocaleString() : '관측 없음'} 기준`);
+      const grid = document.createElement('dl');
+      grid.style.cssText = 'display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;margin:0;font-size:13.5px';
+      (hr.fields || []).forEach((field) => {
+        const dt = document.createElement('dt'); dt.style.color = 'var(--muted)'; dt.textContent = field.label;
+        const dd = document.createElement('dd'); dd.style.margin = '0'; dd.textContent = field.value;
+        grid.append(dt, dd);
+      });
+      hrSection.appendChild(grid);
+      const changes = (hr.history || []).filter((entry) => !entry.first);
+      const first = (hr.history || []).find((entry) => entry.first);
+      const historyHead = document.createElement('p');
+      historyHead.className = 'help';
+      historyHead.style.marginTop = '12px';
+      historyHead.textContent = changes.length
+        ? `시트가 바뀐 기록 ${changes.length}건 (날짜는 시트를 읽은 때입니다)`
+        : `처음 읽은 ${first ? new Date(first.observed_at).toLocaleDateString() : '-'} 이후 바뀐 것이 없습니다`;
+      hrSection.appendChild(historyHead);
+      changes.slice().reverse().forEach((entry) => {
+        const row = document.createElement('div');
+        row.style.cssText = 'font-size:12.5px;padding:4px 0;color:var(--muted)';
+        const said = entry.changes.map((change) => {
+          const show = (value) => (change.field === 'status' ? PROFILE_STATUS[value] || value : value) || '(빈칸)';
+          return `${PROFILE_FIELD_LABEL[change.field] || change.field}: ${show(change.before)} → ${show(change.after)}`;
+        }).join(' · ');
+        row.textContent = `${new Date(entry.observed_at).toLocaleDateString()}  ${said}`;
+        hrSection.appendChild(row);
+      });
+      const extraHead = document.createElement('p');
+      extraHead.className = 'help';
+      extraHead.style.marginTop = '12px';
+      extraHead.textContent = '추가 인사정보';
+      hrSection.appendChild(extraHead);
+      notConnected(hrSection, hr.extra);
+      body.appendChild(hrSection);
+
+      const recent = personSection('최근 하고 있는 일');
+      notConnected(recent, profile.recent_work);
+      body.appendChild(recent);
+
+      const detail = personSection('상세 정보');
+      notConnected(detail, profile.detail);
+      const dayButton = document.createElement('button');
+      dayButton.className = 'button';
+      dayButton.textContent = '일자별 기록 보기';
+      dayButton.addEventListener('click', () => openPersonDay(person.person_id));
+      detail.appendChild(dayButton);
+      body.appendChild(detail);
     }
 
     function orgGrid() {
@@ -2919,6 +3028,7 @@
     $('pairs-state').addEventListener('change', () => loadPairs({ reset: true }));
     $('pairs-person').addEventListener('change', () => loadPairs({ reset: true }));
     $('org-refresh').addEventListener('click', refreshOrg);
+    $('org-person-close').addEventListener('click', () => $('org-person-drawer').classList.add('hidden'));
     $('unmapped-reload').addEventListener('click', loadUnmapped);
     $('unmapped-state').addEventListener('change', loadUnmapped);
     $('search-q').addEventListener('keydown', (event) => { if (event.key === 'Enter') runSearch(); });

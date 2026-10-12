@@ -22,7 +22,7 @@ import os
 from datetime import date
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field
 
 from .admin_web import (
@@ -107,6 +107,26 @@ def refresh_route(request: Request) -> dict[str, Any]:
         },
     )
     return outcome
+
+
+@router.get("/person/{person_id}")
+def person_profile_route(
+    request: Request,
+    person_id: Annotated[str, Path(pattern=r"^p_[0-9a-f]{12}$")],
+) -> dict[str, Any]:
+    """The panel that opens when a person is clicked on the chart.
+
+    Behind the same page access as the chart itself: whoever may see the
+    chart may see what it says about one person, and nothing more -- the
+    profile carries no email or account id.
+    """
+    require_page_access("org")(request)
+    from .org.profile import person_profile
+
+    found = person_profile(_database_url(), person_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="no such person on the roster")
+    return found
 
 
 @router.get("/status")
