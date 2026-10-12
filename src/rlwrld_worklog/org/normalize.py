@@ -25,6 +25,15 @@ from typing import Any, Iterable
 
 HEADER_ALIASES = {
     "include_in_report": "include_in_report",
+    # HK, 2026-10-12: 제일 첫줄에 사번을 넣었어. The one column on this sheet
+    # that names a person and never changes -- which is what the key has been
+    # missing. Spelled several ways because the sheet is edited by people.
+    "사번": "employee_no",
+    "사번(id)": "employee_no",
+    "사원번호": "employee_no",
+    "employee_no": "employee_no",
+    "employee_id": "employee_no",
+    "emp_no": "employee_no",
     "이름": "name",
     "name": "name",
     "닉네임": "nickname",
@@ -72,6 +81,10 @@ HEADER_ALIASES = {
 # identity table only, and are never exported to a report, a dashboard or a
 # handover record.
 IDENTITY_FIELDS = [
+    # First, because it is the strongest: an email can be reassigned or
+    # filled in later -- which on 2026-10-08 turned 171 people into new
+    # people overnight -- and a 사번 is issued once.
+    ("employee_no", "employee_no"),
     ("email", "email_official"),
     ("email_personal", "email_personal"),
     ("email_school", "email_school"),
@@ -153,6 +166,20 @@ def _clean(value: Any) -> str:
     return "" if text.lower() in _PLACEHOLDER else text
 
 
+def _employee_no(value: str) -> str:
+    """A 사번 as the sheet means it, not as a spreadsheet stores it.
+
+    A number typed into a cell comes back as a float, so 1001 reads as
+    "1001.0" and would key a different person from the same 사번 typed as
+    text. Both spellings have to land on one string or the column makes the
+    duplication it was added to end.
+    """
+    text = value.strip()
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+    return text
+
+
 # The fields that must hold an email to be used at all.
 EMAIL_FIELDS = ("email", "email_personal", "email_school", "email_alt")
 
@@ -182,6 +209,8 @@ def normalize_rows(rows: Iterable[dict], *, source: str) -> list[dict]:
                 record[standard] = _clean(value)
         if not record.get("name"):
             continue
+        if record.get("employee_no"):
+            record["employee_no"] = _employee_no(record["employee_no"])
         rejected = [field for field in EMAIL_FIELDS if _not_an_email(record.get(field, ""))]
         for field in rejected:
             record[field] = ""

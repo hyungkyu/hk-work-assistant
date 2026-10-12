@@ -22,7 +22,12 @@ def person_id(record: dict) -> str:
     exactly the attribution loss this whole package exists to prevent.
     """
     key = (
-        record.get("email")
+        # A 사번 first (HK, 2026-10-12). It is the only column on the sheet
+        # that names a person and does not move: an email gets filled in
+        # later, a name is shared by two people -- both of which this key
+        # has already been broken by.
+        record.get("employee_no")
+        or record.get("email")
         or record.get("email_school")
         or record.get("email_personal")
         or record.get("name")
@@ -61,11 +66,24 @@ def team_rows(department: str) -> list[dict]:
     return out
 
 
-# The identities that may carry a person across a change of key: emails, and
-# only emails (HK, 2026-10-08 -- 사번은 곤란, 이메일로 하자). An email names
-# one human and the sheet already holds three of them per person; a cluster
-# login can be shared, and following it would fold two people into one.
-STICKY_KINDS = ("email_official", "email_personal", "email_school")
+# Which identities may carry a person across a change of key -- a membership
+# test, not an order. The order that decides is IDENTITY_FIELDS, where 사번
+# sits first.
+#
+# Emails only, originally (HK, 2026-10-08 -- 사번은 곤란, 이메일로 하자),
+# because the sheet had no employee number to use. It has one now (HK,
+# 2026-10-12), and it goes first: an email is filled in late or reassigned,
+# while a 사번 is issued once. A cluster login is still excluded -- it can be
+# shared, and following it would fold two people into one.
+#
+# Putting 사번 first in IDENTITY_FIELDS is also what stops the change from
+# rewriting the roster. A
+# person already on file under their email keeps that person_id and simply
+# gains the 사번 as another identity; only somebody genuinely new is keyed by
+# it. The alternative -- letting the new key win -- is exactly what happened
+# on 2026-10-08, when 171 people became new people overnight and each left a
+# copy of themselves behind as 시트에 없음.
+STICKY_KINDS = ("employee_no", "email_official", "email_personal", "email_school")
 
 
 def resolve_person_id(record: dict, known: dict[tuple[str, str], str] | None = None) -> str:
@@ -76,8 +94,8 @@ def resolve_person_id(record: dict, known: dict[tuple[str, str], str] | None = N
     and 171 people became new people overnight, each leaving a copy of
     themselves behind as 시트에 없음. An identity already on file is the
     stronger fact -- the same personal email is the same person -- so it wins,
-    in `IDENTITY_FIELDS` order -- official, then personal, then school. With
-    no email on file the hash still decides.
+    in `IDENTITY_FIELDS` order: 사번 first (HK, 2026-10-12), then the official,
+    personal and school emails. With none of them on file the hash decides.
     """
     if known:
         for field, kind in IDENTITY_FIELDS:
