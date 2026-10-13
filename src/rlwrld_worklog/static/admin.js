@@ -2121,17 +2121,77 @@
       lines.forEach((line) => host.appendChild(
         cvEl('div', 'color:var(--muted);font-size:12.5px;margin-top:2px', lines.length > 1 ? `• ${line}` : line)));
     }
+    // A name that opens who else was there and when (HK, 2026-10-13: 학교,
+    // 지도교수, 프로젝트, 논문, 회사 등등을 클릭하면, 해당 회사의 모든 구성원,
+    // 겹치는 기간). The answer opens under the name; a second click closes it.
+    const CV_KIND_LABEL = { org: '회사', school: '학교', advisor: '지도교수', project: '프로젝트', paper: '논문' };
+    function cvYear(text) {
+      const found = String(text || '').match(/(\d{4})(?:\.(\d{1,2}))?/);
+      return found ? Number(found[1]) + (found[2] ? (Number(found[2]) - 1) / 12 : 0) : null;
+    }
+    function cvOverlap(a, b) {
+      const now = new Date().getFullYear() + new Date().getMonth() / 12;
+      const as = cvYear(a.start); const bs = cvYear(b.start);
+      if (as == null || bs == null) return null;
+      const ae = a.end ? cvYear(a.end) : now; const be = b.end ? cvYear(b.end) : now;
+      const from = Math.max(as, bs); const to = Math.min(ae ?? now, be ?? now);
+      return to > from ? to - from : 0;
+    }
+    function cvRelated(kind, name, mine) {
+      const link = cvEl('a', 'cursor:pointer;text-decoration:underline dotted', name);
+      link.title = `같은 ${CV_KIND_LABEL[kind]}의 구성원 보기`;
+      let box = null;
+      link.addEventListener('click', async (event) => {
+        event.preventDefault();
+        if (box) { box.remove(); box = null; return; }
+        box = cvEl('div', 'margin:6px 0;padding:8px 10px;border:1px solid var(--line-soft,#1e2734);border-radius:8px;font-size:12.5px', '불러오는 중…');
+        link.after(box);
+        try {
+          const found = await api(`/api/v1/admin/org/cv/related?kind=${kind}&name=${encodeURIComponent(name)}`);
+          box.textContent = '';
+          box.appendChild(cvEl('div', 'font-weight:600;margin-bottom:4px',
+            `${CV_KIND_LABEL[kind]} · ${name} — ${new Set(found.members.map((m) => m.employee_no)).size}명`));
+          found.members.forEach((member) => {
+            const row = cvEl('div', 'display:grid;grid-template-columns:90px 120px 1fr;gap:8px;padding:2px 0');
+            const who = cvEl('a', 'cursor:pointer', member.person_name || member.employee_no);
+            if (member.person_id) {
+              who.addEventListener('click', () => openPersonPanel({ person_id: member.person_id, name: member.person_name }));
+            }
+            row.appendChild(who);
+            row.appendChild(cvEl('span', 'color:var(--muted)',
+              [member.start, member.end || (member.start ? '현재' : '')].filter(Boolean).join(' – ')));
+            const years = mine ? cvOverlap(mine, member) : null;
+            row.appendChild(cvEl('span', '', [member.role, member.name !== name ? member.name : null,
+              years ? `겹친 기간 약 ${years >= 1 ? `${years.toFixed(1)}년` : `${Math.round(years * 12)}개월`}` : null]
+              .filter(Boolean).join(' · ')));
+            box.appendChild(row);
+          });
+        } catch (error) {
+          box.textContent = `불러오지 못했습니다: ${error.message}`;
+        }
+      });
+      return link;
+    }
+    function cvLine(parts) {
+      const line = cvEl('div', 'font-weight:500');
+      parts.filter((part) => part && (part.text || typeof part === 'string')).forEach((part, index) => {
+        if (index) line.append(' · ');
+        line.append(typeof part === 'string' ? part : cvRelated(part.kind, part.text, part.mine));
+      });
+      return line;
+    }
     function cvTimeline(section, items, line) {
       items.forEach((item) => {
         const row = cvEl('div', 'display:grid;grid-template-columns:110px 1fr;gap:10px;padding:6px 0;font-size:13px');
         row.appendChild(cvEl('span', 'color:var(--muted)', [item.start, item.end || (item.start ? '현재' : '')].filter(Boolean).join(' – ')));
         const right = cvEl('div');
-        right.appendChild(cvEl('div', 'font-weight:500', line(item)));
+        right.appendChild(cvLine(line(item)));
         cvNotes(right, item.note);
         (item.projects || []).forEach((project) => {
           const box = cvEl('div', 'margin:6px 0 0 10px;padding-left:8px;border-left:2px solid var(--line-soft,#1e2734)');
-          box.appendChild(cvEl('div', 'font-size:12.5px;font-weight:500',
-            ['프로젝트', project.name, project.role].filter(Boolean).join(' · ')));
+          const head = cvLine(['프로젝트', { kind: 'project', text: project.name, mine: item }, project.role]);
+          head.style.fontSize = '12.5px';
+          box.appendChild(head);
           cvNotes(box, project.note);
           right.appendChild(box);
         });
@@ -2179,11 +2239,13 @@
       }
       cvHeading(section, '학력');
       if ((cv.education || []).length) {
-        cvTimeline(section, cv.education, (item) => [item.school, item.degree].filter(Boolean).join(' · '));
+        cvTimeline(section, cv.education, (item) => [
+          { kind: 'school', text: item.school, mine: item }, item.degree,
+          item.advisor ? '지도교수' : null, { kind: 'advisor', text: item.advisor, mine: item }]);
       } else cvEmpty(section);
       cvHeading(section, '경력 (&프로젝트)');
       if ((cv.experience || []).length) {
-        cvTimeline(section, cv.experience, (item) => [item.title, item.org].filter(Boolean).join(' · '));
+        cvTimeline(section, cv.experience, (item) => [item.title, { kind: 'org', text: item.org, mine: item }]);
       } else cvEmpty(section);
       const papers = cv.publications || [];
       cvHeading(section, '논문', papers.length);
@@ -2194,7 +2256,8 @@
         const badge = cvEl('span', '', paper.position || '');
         badge.className = `badge ${CV_POSITION_TONE[paper.position] || ''}`;
         if (paper.position) head.appendChild(badge);
-        head.appendChild(paper.url ? cvLink(paper.title, paper.url) : cvEl('span', 'font-weight:500', paper.title));
+        head.appendChild(cvRelated('paper', paper.title, null));
+        if (paper.url) head.appendChild(cvLink('원문', paper.url));
         card.appendChild(head);
         card.appendChild(cvEl('div', 'color:var(--muted);font-size:12.5px;margin-top:2px',
           [paper.venue, paper.year, paper.citations != null ? `인용 ${paper.citations}` : null, paper.award]
@@ -3479,6 +3542,13 @@
     $('pairs-person').addEventListener('change', () => loadPairs({ reset: true }));
     $('org-refresh').addEventListener('click', refreshOrg);
     $('org-person-close').addEventListener('click', () => $('org-person-drawer').classList.add('hidden'));
+    // A click on the dimmed backdrop, or Escape, closes the pop-up too.
+    $('org-person-drawer').addEventListener('click', (event) => {
+      if (event.target === $('org-person-drawer')) $('org-person-drawer').classList.add('hidden');
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') $('org-person-drawer').classList.add('hidden');
+    });
     $('unmapped-reload').addEventListener('click', loadUnmapped);
     $('unmapped-state').addEventListener('change', loadUnmapped);
     $('search-q').addEventListener('keydown', (event) => { if (event.key === 'Enter') runSearch(); });

@@ -134,6 +134,8 @@ def test_every_reading_route_is_a_get_and_only_resolve_is_a_post() -> None:
         "/api/v1/admin/org/digest/{person_id}": ["get"],
         "/api/v1/admin/org/digest/{person_id}/range": ["get"],
         "/api/v1/admin/org/digest/build": ["post"],
+        # 인사정보 상세: who else was at a company, school, lab, project or paper.
+        "/api/v1/admin/org/cv/related": ["get"],
     }
 
 

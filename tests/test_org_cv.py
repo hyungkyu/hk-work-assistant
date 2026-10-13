@@ -26,3 +26,18 @@ def test_a_broken_file_is_skipped_not_raised(tmp_path) -> None:
 
     (tmp_path / "100001.json").write_text("{not json")
     assert read_cv(["100001"], root=tmp_path) is None
+
+
+def test_related_finds_people_by_any_part_of_a_name(tmp_path) -> None:
+    from rlwrld_worklog.org.cv import related
+
+    (tmp_path / "1.json").write_text(json.dumps({"employee_no": "1", "experience": [
+        {"org": "다음 / 카카오", "start": "2009", "end": "2015", "title": "팀장"}]}))
+    (tmp_path / "2.json").write_text(json.dumps({"employee_no": "2", "experience": [
+        {"org": "카카오 / 카카오엔터프라이즈", "start": "2017", "end": "2020"}],
+        "education": [{"school": "KAIST", "advisor": "신진우 교수님"}]}))
+    (tmp_path / "3.json").write_text(json.dumps({"employee_no": "3", "education": [
+        {"school": "KAIST", "advisor": "신진우"}]}))
+    assert {item["employee_no"] for item in related("org", "카카오", root=tmp_path)} == {"1", "2"}
+    assert {item["employee_no"] for item in related("advisor", "신진우 교수님", root=tmp_path)} == {"2", "3"}
+    assert related("school", "Yonsei", root=tmp_path) == []

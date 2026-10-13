@@ -701,11 +701,15 @@
       가져온 시각과 환율만 바꿉니다.</p>
     <div id="cp-history-body"></div>
   </aside>
-  <aside class="drawer hidden" id="org-person-drawer">
-    <button class="button" id="org-person-close">닫기</button>
-    <h2 id="org-person-title"></h2>
-    <div id="org-person-body"></div>
-  </aside>
+  <!-- A pop-up, not a side drawer (HK, 2026-10-13: 사이드 메뉴로 가는게
+       불편해. 팝업으로 띄워서 많은 정보를 볼 수 있게). -->
+  <div class="overlay hidden" id="org-person-drawer" role="dialog" aria-modal="true" aria-labelledby="org-person-title">
+    <div class="work-dialog" style="width:min(1080px,94vw);max-width:none;max-height:90vh;overflow:auto;position:relative">
+      <button class="button" id="org-person-close" style="position:sticky;top:0;float:right;z-index:1">닫기</button>
+      <h2 id="org-person-title"></h2>
+      <div id="org-person-body"></div>
+    </div>
+  </div>
   <aside class="drawer hidden" id="roadmap-drawer">
     <button class="button" id="roadmap-history-close"></button>
     <h2 id="roadmap-history-title"></h2>

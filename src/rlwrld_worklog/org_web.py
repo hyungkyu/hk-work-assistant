@@ -151,6 +151,43 @@ def person_profile_route(
     return found
 
 
+@router.get("/cv/related")
+def cv_related_route(
+    request: Request,
+    kind: Annotated[str, Query(pattern="^(org|school|advisor|project|paper)$")],
+    name: Annotated[str, Query(min_length=1, max_length=400)],
+) -> dict[str, Any]:
+    """Who else was at this company, school, lab, project or paper, and when.
+
+    Owner only, like the analysis it reads (HK, 2026-10-13).
+    """
+    require_super_admin_session(request)
+    import psycopg
+
+    from .org.cv import related
+
+    found = related(kind, name)
+    numbers = sorted({item["employee_no"] for item in found})
+    people: dict[str, tuple[str, str]] = {}
+    if numbers:
+        with psycopg.connect(_database_url()) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT identity.value, person.person_id, person.name
+                  FROM org_identity identity
+                  JOIN org_person person ON person.person_id = identity.person_id
+                 WHERE identity.kind = 'employee_no' AND identity.value = ANY(%s)
+                """,
+                (numbers,),
+            )
+            people = {number: (pid, pname) for number, pid, pname in cursor.fetchall()}
+    for item in found:
+        pid, pname = people.get(item["employee_no"], (None, None))
+        item["person_id"] = pid
+        item["person_name"] = pname
+    return {"kind": kind, "name": name, "members": found}
+
+
 @router.get("/status")
 def org_status_route(request: Request) -> dict[str, Any]:
     require_page_access("org")(request)

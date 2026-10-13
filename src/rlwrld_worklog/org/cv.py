@@ -45,3 +45,70 @@ def read_cv(employee_numbers: list[str], root: Path | None = None) -> dict[str, 
     if not found:
         return None
     return max(found, key=lambda item: str(item.get("built_at") or ""))
+
+
+# -- 같은 곳에 있었던 사람들 ---------------------------------------------------
+# HK, 2026-10-13: 학교, 지도교수, 프로젝트, 논문, 회사 등등을 클릭하면, 해당
+# 회사의 모든 구성원, 겹치는 기간 등등이 보여지게. Read across every analysis
+# file; a name is matched by its parts, so "다음 / 카카오" and "카카오" meet.
+
+RELATED_KINDS = ("org", "school", "advisor", "project", "paper")
+
+
+def name_keys(name: str) -> set[str]:
+    """The comparable parts of a name: split on '/', parentheses and dashes dropped."""
+    text = re.sub(r"\([^)]*\)", " ", str(name or ""))
+    text = re.split(r"\s[—–-]\s", text)[0]
+    keys = set()
+    for part in text.split("/"):
+        key = re.sub(r"[\s.,:;'\"`·]+", "", part).lower()
+        key = re.sub(r"(교수님|교수)$", "", key)
+        if len(key) >= 2:
+            keys.add(key)
+    return keys
+
+
+def _entries(data: dict[str, Any]):
+    for item in data.get("education") or []:
+        yield "school", item.get("school"), item
+        if item.get("advisor"):
+            yield "advisor", item.get("advisor"), item
+    for item in data.get("experience") or []:
+        yield "org", item.get("org"), item
+        for project in item.get("projects") or []:
+            yield "project", project.get("name"), {**project, "start": item.get("start"), "end": item.get("end")}
+    for paper in data.get("publications") or []:
+        yield "paper", paper.get("title"), {
+            "start": str(paper.get("year") or ""), "end": str(paper.get("year") or ""),
+            "role": paper.get("position"), "venue": paper.get("venue"),
+        }
+
+
+def related(kind: str, name: str, root: Path | None = None) -> list[dict[str, Any]]:
+    """Everyone whose analysis has `name` as a `kind`, with when and in what role."""
+    if kind not in RELATED_KINDS:
+        raise ValueError(f"unknown kind: {kind}")
+    wanted = name_keys(name)
+    if not wanted:
+        return []
+    root = root or profiles_root()
+    out: list[dict[str, Any]] = []
+    for path in sorted(root.glob("*.json")) if root.is_dir() else []:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        for entry_kind, entry_name, item in _entries(data):
+            if entry_kind != kind or not (name_keys(entry_name) & wanted):
+                continue
+            out.append({
+                "employee_no": str(data.get("employee_no") or path.stem),
+                "name": entry_name,
+                "start": item.get("start") or "",
+                "end": item.get("end") or "",
+                "role": item.get("title") or item.get("degree") or item.get("role") or "",
+                "venue": item.get("venue"),
+            })
+    return out
