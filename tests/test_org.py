@@ -861,3 +861,27 @@ def test_the_departed_are_drawn_as_a_tree_per_band() -> None:
     lab = block["trees"]["연구계약종료"]
     assert lab[0]["children"][0]["name"] == "주한별 교수님"
     assert lab[0]["children"][0]["members"][0]["name"] == "다"
+
+
+def test_the_catch_all_node_goes_after_every_real_lab() -> None:
+    """HK, 2026-10-13: 기타는 김용재 교수님 뒤로.
+
+    Headcount ordering put 기타 above a one-professor lab because more
+    people are unfiled than are in that lab -- which reads as if 기타 were the
+    bigger lab. It is not a lab.
+    """
+    people = [
+        _person(name, [LAB_ROOT, "기타"], affiliation="student") for name in ("가", "나", "다")
+    ] + [_person("김용재", [LAB_ROOT, "김용재 교수님"], affiliation="professor")]
+    tree = build_tree(people)
+    labs = [child["name"] for child in tree[0]["children"]]
+    assert labs == ["김용재 교수님", "기타"]
+
+
+def test_no_tile_calls_a_professor_unplaced() -> None:
+    """HK, 2026-10-13: 연구실이 안 붙은 교수님 이라고 할 필요는 없어."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "src" / "rlwrld_worklog"
+    assert "연구실이 안 붙은 교수님" not in (root / "static" / "admin.js").read_text(encoding="utf-8")
+    assert "연구실이 안 붙은 교수님" not in (root / "render.py").read_text(encoding="utf-8")

@@ -40,6 +40,9 @@ LAB_ROOT = "RLWRLD Virtual Lab"
 # an unassigned person is a question for whoever maintains the sheet, and a
 # person who silently vanishes from the chart is not.
 UNASSIGNED = "미배정"
+# Nodes that mean "not filed anywhere", sorted after every real team or lab.
+# 기타 is what the lab tab's advisor column says for students with no lab.
+CATCH_ALL_NODES = frozenset({UNASSIGNED, "기타"})
 
 
 def rooted_path(
@@ -292,9 +295,15 @@ def build_tree(people: list[dict]) -> dict[str, Any]:
                 )
             ]
             out.append(node)
-        # Named roots first in a fixed order, then by headcount: a chart whose
-        # rows move around between days is one nobody trusts.
-        return sorted(out, key=lambda node: (-node["people"], node["name"]))
+        # By headcount, so a chart's rows do not move around between days --
+        # except the catch-all nodes, which go last whatever their size (HK,
+        # 2026-10-13: 기타는 김용재 교수님 뒤로). A bucket for "not filed
+        # anywhere" is not a team, and putting it above a real lab because
+        # more people are unfiled reads as if it were the bigger lab.
+        return sorted(
+            out,
+            key=lambda node: (node["name"] in CATCH_ALL_NODES, -node["people"], node["name"]),
+        )
 
     tree = finish(roots)
     order = {COMPANY_ROOT: 0, LAB_ROOT: 1}

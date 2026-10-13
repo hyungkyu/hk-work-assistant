@@ -2262,11 +2262,6 @@
           Object.values(access).reduce((a, b) => a + b, 0), describe(access), 'var(--accent-2)'));
         tiles.appendChild(countTile('소속 구분', Object.keys(counts.by_affiliation || {}).length,
           describe(counts.by_affiliation || {})));
-        const unplaced = chart.professors_without_a_lab || [];
-        if (unplaced.length) {
-          tiles.appendChild(countTile('연구실이 안 붙은 교수님', unplaced.length,
-            `${unplaced.join(' · ')} — 학생이 아직 없거나 표기가 다릅니다`, 'var(--warning)'));
-        }
         const unmapped = chart.unmapped_accounts || [];
         if (unmapped.length) {
           tiles.appendChild(countTile('주인 없는 계정', unmapped.length,
@@ -2565,16 +2560,43 @@
         const totals = payload.totals || {};
         $('unmapped-badge').textContent = Object.entries(totals)
           .map(([k, v]) => `${k} ${v.accounts}`).join(' · ') || '없음';
+        // What the sources say about each account (HK, 2026-10-13: 이메일,
+        // 이름, 닉네임, 슬랙 아이디, 노션 아이디, 슬럼 아이디, 깃헙 아이디 등을
+        // 구체적으로). A bare handle and a count is a question nobody can
+        // answer; a name, an email and the channel they talk in usually is.
+        const KIND_LABEL = {
+          slack: '슬랙', notion: '노션', github: '깃헙', slurm: '슬럼',
+          email_official: '이메일', email_personal: '이메일(개인)', email_school: '이메일(학교)',
+        };
         (payload.accounts || []).forEach((account) => {
           const row = document.createElement('tr');
-          [account.kind, account.value, `${account.events}건`,
-           account.last_seen_at ? new Date(account.last_seen_at).toLocaleDateString() : '',
-           account.state === 'open' ? '' : (account.note || account.state)]
+          const d = account.details || {};
+          const handle = [account.value, d.username && d.username !== account.value ? `@${d.username}` : null]
+            .filter(Boolean).join(' · ');
+          const who = [d.name, d.nickname && d.nickname !== d.name ? `(${d.nickname})` : null, d.title]
+            .filter(Boolean).join(' ');
+          const flags = [d.bot ? '봇' : null, d.deactivated ? '비활성' : null].filter(Boolean);
+          const places = (d.places || []).map((place) => `${place.where} ${place.events}`).join(', ');
+          const when = account.last_seen_at ? new Date(account.last_seen_at).toLocaleDateString() : '';
+          [KIND_LABEL[account.kind] || account.kind,
+           handle,
+           [who, flags.length ? `[${flags.join('·')}]` : ''].filter(Boolean).join(' ') || '—',
+           d.email || '—',
+           places || '—',
+           `${account.events}건${when ? ` · ${when}` : ''}`]
             .forEach((value) => {
               const cell = document.createElement('td');
               cell.textContent = value;
+              if (value === '—') cell.style.color = 'var(--muted)';
               row.appendChild(cell);
             });
+          if (account.state !== 'open') {
+            const cell = document.createElement('td');
+            cell.textContent = account.note || account.state;
+            row.appendChild(cell);
+            body.appendChild(row);
+            return;
+          }
           const actions = document.createElement('td');
           if (account.state === 'open') {
             const input = document.createElement('input');
