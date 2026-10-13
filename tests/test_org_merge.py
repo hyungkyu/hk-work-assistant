@@ -101,6 +101,25 @@ def world():
             identities=[("email_school", f"b{tag}@snu.ac.kr")],
         ),
     }
+    # The production shape: the sync writes a row for every known person in
+    # every observation, marking whom a tab does not list as absent. The
+    # first version of this fixture left those rows out, the tests passed,
+    # and the first real run failed on org_person_state_pkey.
+    home = {
+        "same_in": "roster_seed_2",
+        "same_ext": "roster_seed_ext",
+        "twin_in": "roster_seed_2",
+        "twin_ext": "roster_seed_ext",
+    }
+    for key, person_id in people.items():
+        for source, observation in obs.items():
+            if source == home[key]:
+                continue
+            cursor.execute(
+                "INSERT INTO org_person_state (observation_id, person_id, affiliation, "
+                "access_level, status) VALUES (%s,%s,'unknown','unknown','absent_from_sheet')",
+                (observation, person_id),
+            )
     cursor.execute(
         "INSERT INTO person_day_digest (person_id, day, generated_at, generator, "
         "events_total, counts, events) VALUES (%s,%s,now(),'digest/1',2,'{}','[]')",
@@ -123,11 +142,14 @@ def test_a_person_on_both_tabs_becomes_one_with_both_affiliations(world) -> None
     cursor.execute("SELECT 1 FROM org_person WHERE person_id = %s", (people["same_ext"],))
     assert cursor.fetchone() is None
     cursor.execute(
-        "SELECT affiliation FROM org_person_state WHERE person_id = %s ORDER BY affiliation",
-        (people["same_in"],),
+        "SELECT observation_id, affiliation, status FROM org_person_state "
+        "WHERE person_id = %s AND observation_id = ANY(%s) ORDER BY observation_id",
+        (people["same_in"], [obs["roster_seed_2"], obs["roster_seed_ext"]]),
     )
-    assert [row[0] for row in cursor.fetchall()] == ["internal", "student"], (
-        "겸직 keeps both: the company row and the lab row, one person"
+    rows = {observation: (affiliation, status) for observation, affiliation, status in cursor.fetchall()}
+    assert rows[obs["roster_seed_2"]] == ("internal", "active"), "the company tab keeps the company row"
+    assert rows[obs["roster_seed_ext"]] == ("student", "active"), (
+        "the lab tab's absence is replaced by the lab row: 겸직 keeps both"
     )
 
 

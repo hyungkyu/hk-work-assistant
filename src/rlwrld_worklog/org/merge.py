@@ -8,9 +8,10 @@ email on the external one -- so a person on both became two people, and
 their Slurm work (external identities) and their Slack work (internal ones)
 were attributed to two different rows.
 
-Joining them keeps both affiliations. Nothing about the person's place on
-either tab is rewritten: each tab's state rows stay as they were, under one
-person_id, and the chart already reads one state row per tab -- so a joined
+Joining them keeps both affiliations. Each tab keeps the row that says
+where the person is on that tab -- see `join_person` for why both people
+usually have a row in every observation -- and the chart reads one state
+row per tab -- so a joined
 person appears under the company and under their lab, which is what 겸직
 means. The next sync keeps them joined without any special case, because
 the external row's school email is now one of this person's identities and
@@ -99,9 +100,43 @@ def join_person(cursor, *, keep: str, drop: str) -> list[str]:
     )
     days = [row[0].isoformat() for row in cursor.fetchall()]
 
-    # Facts about the person: moved, never dropped. Each tab's state rows
-    # live in that tab's own observations, so moving them cannot collide.
+    # Facts about the person: moved, never dropped.
     cursor.execute("UPDATE org_identity SET person_id = %s WHERE person_id = %s", (keep, drop))
+
+    # State rows collide. The first version said they could not -- "each tab's
+    # rows live in that tab's own observations" -- and the first real run
+    # failed on org_person_state_pkey. The sync writes a row for *everybody*
+    # it knows in every observation, marking the ones a tab does not list as
+    # absent_from_sheet, so both people have a row in nearly every
+    # observation. (That same row is what made three hand-written queries
+    # count leftovers as present.)
+    #
+    # Where both have one, the row that says something wins: a tab that
+    # lists the lab row says it through the dropped person, so their row
+    # replaces the kept person's absence. Where neither or both are absent,
+    # the kept person's row stays.
+    cursor.execute(
+        """
+        DELETE FROM org_person_state keep_row
+         USING org_person_state drop_row
+         WHERE keep_row.person_id = %(keep)s
+           AND drop_row.person_id = %(drop)s
+           AND keep_row.observation_id = drop_row.observation_id
+           AND keep_row.status = 'absent_from_sheet'
+           AND drop_row.status <> 'absent_from_sheet'
+        """,
+        {"keep": keep, "drop": drop},
+    )
+    cursor.execute(
+        """
+        DELETE FROM org_person_state drop_row
+         USING org_person_state keep_row
+         WHERE drop_row.person_id = %(drop)s
+           AND keep_row.person_id = %(keep)s
+           AND keep_row.observation_id = drop_row.observation_id
+        """,
+        {"keep": keep, "drop": drop},
+    )
     cursor.execute(
         "UPDATE org_person_state SET person_id = %s WHERE person_id = %s", (keep, drop)
     )
