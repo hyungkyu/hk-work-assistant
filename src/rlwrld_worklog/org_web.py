@@ -137,6 +137,17 @@ def person_profile_route(
         from .org.profile import person_accounts
 
         found["accounts"] = person_accounts(database_url, person_id)
+        # 인사정보 상세 (HK, 2026-10-13): career, projects, papers -- owner only,
+        # read from the archive, keyed by 사번.
+        from .org.cv import read_cv
+
+        numbers = [
+            item["value"]
+            for group in found["accounts"]
+            if group["kind"] == "employee_no"
+            for item in group["values"]
+        ]
+        found["cv"] = read_cv(numbers)
     return found
 
 

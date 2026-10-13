@@ -2092,6 +2092,104 @@
     };
     const PROFILE_STATUS = { active: '재직', retired: '퇴사', absent_from_sheet: '시트에 없음' };
 
+    // 인사정보 상세 (HK, 2026-10-13): links first, then the career the way
+    // LinkedIn lays it out -- 경력, 학력, 프로젝트, 논문 with 저자 순서. Owner
+    // only; the server sends `cv` to nobody else.
+    const CV_LINKS = [
+      ['homepage', '홈페이지'], ['linkedin', 'LinkedIn'], ['scholar', 'Google Scholar'],
+      ['x', 'X'], ['github', 'GitHub'],
+    ];
+    function cvEl(tag, css, text) {
+      const el = document.createElement(tag);
+      if (css) el.style.cssText = css;
+      if (text != null) el.textContent = text;
+      return el;
+    }
+    function cvLink(text, url) {
+      const a = cvEl('a', '', text);
+      a.href = url; a.target = '_blank'; a.rel = 'noopener';
+      return a;
+    }
+    function cvTimeline(section, title, items, line) {
+      if (!(items || []).length) return;
+      section.appendChild(cvEl('p', 'margin:14px 0 6px;font-weight:600;font-size:13px', title));
+      items.forEach((item) => {
+        const row = cvEl('div', 'display:grid;grid-template-columns:110px 1fr;gap:10px;padding:5px 0;font-size:13px');
+        row.appendChild(cvEl('span', 'color:var(--muted)', [item.start, item.end].filter(Boolean).join(' – ')));
+        const right = cvEl('div');
+        right.appendChild(cvEl('div', 'font-weight:500', line(item)));
+        if (item.note) right.appendChild(cvEl('div', 'color:var(--muted);font-size:12.5px;margin-top:2px', item.note));
+        row.appendChild(right);
+        section.appendChild(row);
+      });
+    }
+    const CV_POSITION_TONE = { '1저자': 'primary', '공동1저자': 'primary', '교신': 'accent' };
+    function personCvSection(cv) {
+      const section = personSection('인사정보 상세 (관리자에게만 보입니다)',
+        cv.built_at ? `${new Date(cv.built_at).toLocaleString()} 분석` : null);
+      const links = cvEl('div', 'display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 8px');
+      const sources = cv.sources || {};
+      CV_LINKS.forEach(([key, label]) => {
+        if (!sources[key]) return;
+        const a = cvLink(label, sources[key]);
+        a.className = 'button';
+        links.appendChild(a);
+      });
+      if (sources.cv && sources.cv.url) {
+        const a = cvLink(`CV · ${sources.cv.label || '열기'}`, sources.cv.url);
+        a.className = 'button primary';
+        links.appendChild(a);
+      }
+      section.appendChild(links);
+      const fetched = Object.entries(cv.fetched || {});
+      if (fetched.length) {
+        section.appendChild(cvEl('p', 'font-size:12px;color:var(--muted);margin:0 0 8px',
+          `가져온 곳: ${fetched.map(([k, v]) => `${k} ${v.ok ? '✓' : '✗'}${v.note ? ` (${v.note})` : ''}`).join(' · ')}`));
+      }
+      if (cv.headline) section.appendChild(cvEl('p', 'font-size:14px;font-weight:600;margin:6px 0 4px', cv.headline));
+      if (cv.summary) section.appendChild(cvEl('p', 'font-size:13px;line-height:1.55;margin:0 0 6px', cv.summary));
+      const metrics = cv.metrics || {};
+      const said = [
+        metrics.citations != null ? `인용 ${metrics.citations}` : null,
+        metrics.h_index != null ? `h-index ${metrics.h_index}` : null,
+        metrics.papers != null ? `논문 ${metrics.papers}편` : null,
+        metrics.first_author != null ? `1저자(공동 포함) ${metrics.first_author}편` : null,
+      ].filter(Boolean);
+      if (said.length) {
+        const row = cvEl('div', 'display:flex;flex-wrap:wrap;gap:6px;margin:6px 0');
+        said.forEach((text) => row.appendChild(cvEl('span', '', text)));
+        row.childNodes.forEach((el) => { el.className = 'badge'; });
+        section.appendChild(row);
+      }
+      cvTimeline(section, '경력', cv.experience, (item) => [item.title, item.org].filter(Boolean).join(' · '));
+      cvTimeline(section, '학력', cv.education, (item) => [item.school, item.degree].filter(Boolean).join(' · '));
+      cvTimeline(section, '프로젝트', cv.projects, (item) => [item.name, item.role].filter(Boolean).join(' · '));
+      const papers = cv.publications || [];
+      if (papers.length) {
+        section.appendChild(cvEl('p', 'margin:14px 0 6px;font-weight:600;font-size:13px', `논문 (${papers.length})`));
+        papers.forEach((paper) => {
+          const card = cvEl('div', 'padding:8px 0;border-bottom:1px solid var(--line-soft,#1e2734);font-size:13px');
+          const head = cvEl('div', 'display:flex;gap:6px;align-items:baseline;flex-wrap:wrap');
+          const badge = cvEl('span', '', paper.position || '');
+          badge.className = `badge ${CV_POSITION_TONE[paper.position] || ''}`;
+          if (paper.position) head.appendChild(badge);
+          head.appendChild(paper.url ? cvLink(paper.title, paper.url) : cvEl('span', 'font-weight:500', paper.title));
+          card.appendChild(head);
+          card.appendChild(cvEl('div', 'color:var(--muted);font-size:12.5px;margin-top:2px',
+            [paper.venue, paper.year, paper.citations != null ? `인용 ${paper.citations}` : null, paper.award]
+              .filter(Boolean).join(' · ')));
+          if (paper.authors) card.appendChild(cvEl('div', 'font-size:12px;color:var(--muted);margin-top:2px', paper.authors));
+          if (paper.summary) card.appendChild(cvEl('div', 'margin-top:4px', paper.summary));
+          section.appendChild(card);
+        });
+      }
+      if ((cv.flags || []).length) {
+        section.appendChild(cvEl('p', 'margin:14px 0 6px;font-weight:600;font-size:13px', '확인 필요'));
+        cv.flags.forEach((flag) => section.appendChild(cvEl('div', 'font-size:12.5px;padding:2px 0', `• ${flag}`)));
+      }
+      return section;
+    }
+
     async function openPersonPanel(person) {
       const drawer = $('org-person-drawer');
       const body = $('org-person-body');
@@ -2171,6 +2269,7 @@
       hrSection.appendChild(extraHead);
       notConnected(hrSection, hr.extra);
       body.appendChild(hrSection);
+      if (profile.cv) body.appendChild(personCvSection(profile.cv));
 
       const recent = personSection('최근 하고 있는 일');
       notConnected(recent, profile.recent_work);
