@@ -41,12 +41,44 @@ def authorize_installed_app(client_secrets: Path, token_path: Path, scopes: Sequ
 
 
 def load_credentials(token_path: Path, scopes: Sequence[str]):
+    """Credentials for these scopes, from a token every caller shares.
+
+    One token serves the calendar collector and the roster sync. Refreshing
+    it with only the caller's scopes narrowed the access token to them and
+    wrote the narrowed list back, so whichever refreshed last decided what
+    the other could do: on 2026-10-13 the backoffice's 새로고침 failed with
+    403 insufficient scopes on the roster sheet while the terminal sync read
+    the same sheet fine -- the calendar collector had refreshed the token
+    last, and the file said calendar.readonly and nothing else.
+
+    So a refresh asks for everything the token already carries plus what
+    this caller needs, and a token that lacks this caller's scope is
+    refreshed even before it expires. The refresh token was granted both,
+    so this needs no new consent; if it was not, Google says invalid_scope
+    and the message below says to authorise again.
+    """
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
 
-    credentials = Credentials.from_authorized_user_file(str(token_path), scopes=list(scopes))
-    if credentials.expired and credentials.refresh_token:
-        credentials.refresh(Request())
+    try:
+        saved = json.loads(token_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = {}
+    held = saved.get("scopes") or []
+    if isinstance(held, str):
+        held = held.split()
+    wanted = sorted(set(held) | set(scopes))
+    missing = not set(scopes) <= set(held)
+
+    credentials = Credentials.from_authorized_user_file(str(token_path), scopes=wanted)
+    if (credentials.expired or missing) and credentials.refresh_token:
+        try:
+            credentials.refresh(Request())
+        except Exception as error:  # noqa: BLE001 -- google-auth raises several kinds
+            raise RuntimeError(
+                f"Google token could not be refreshed for {', '.join(scopes)}: {error}. "
+                "Authorise Google data again on the 연결 screen"
+            ) from error
         _atomic_private_write(token_path, credentials.to_json())
     if not credentials.valid:
         raise RuntimeError("Google token is invalid; run `worklog google-auth` again")
