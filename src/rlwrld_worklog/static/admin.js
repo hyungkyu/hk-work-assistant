@@ -2006,13 +2006,8 @@
         more.textContent = line;
         card.appendChild(more);
       });
-      // 회사원이면서 학생: the engagement, written on the student's card.
-      if (person.company_mark && person.member_group === '학생') {
-        const mark = document.createElement('span');
-        mark.className = 'badge ok';
-        mark.textContent = person.company_mark;
-        card.appendChild(mark);
-      }
+      // The green 방문연구원 / 인턴 mark on a student's card is gone (HK,
+      // 2026-10-13: 초록색 라운딩한것은 생략하자). The sub-line already says it.
       // 원소속 / 겸소속 (HK, 2026-10-13). A 겸직 person sits on two nodes;
       // each card says which this is and where the other one is, so seeing
       // the same name twice reads as one person in two places.
