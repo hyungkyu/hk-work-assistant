@@ -2105,15 +2105,36 @@
       a.href = url; a.target = '_blank'; a.rel = 'noopener';
       return a;
     }
-    function cvTimeline(section, title, items, line) {
-      if (!(items || []).length) return;
-      section.appendChild(cvEl('p', 'margin:14px 0 6px;font-weight:600;font-size:13px', title));
+    // One template for everyone (HK, 2026-10-13: 학력|경력 (&프로젝트)|논문|
+    // 기타 ... 모든 구성원의 템플릿은 동일하게). A section with nothing in it
+    // still shows, saying so, so two people's panels line up.
+    function cvHeading(section, title, count) {
+      section.appendChild(cvEl('p', 'margin:16px 0 6px;font-weight:600;font-size:13.5px;'
+        + 'padding-bottom:4px;border-bottom:1px solid var(--line-soft,#1e2734)',
+        count != null ? `${title} (${count})` : title));
+    }
+    function cvEmpty(section, text) {
+      section.appendChild(cvEl('p', 'font-size:12.5px;color:var(--muted);margin:2px 0', text || '자료 없음'));
+    }
+    function cvNotes(host, note) {
+      const lines = Array.isArray(note) ? note : (note ? [note] : []);
+      lines.forEach((line) => host.appendChild(
+        cvEl('div', 'color:var(--muted);font-size:12.5px;margin-top:2px', lines.length > 1 ? `• ${line}` : line)));
+    }
+    function cvTimeline(section, items, line) {
       items.forEach((item) => {
-        const row = cvEl('div', 'display:grid;grid-template-columns:110px 1fr;gap:10px;padding:5px 0;font-size:13px');
-        row.appendChild(cvEl('span', 'color:var(--muted)', [item.start, item.end].filter(Boolean).join(' – ')));
+        const row = cvEl('div', 'display:grid;grid-template-columns:110px 1fr;gap:10px;padding:6px 0;font-size:13px');
+        row.appendChild(cvEl('span', 'color:var(--muted)', [item.start, item.end || (item.start ? '현재' : '')].filter(Boolean).join(' – ')));
         const right = cvEl('div');
         right.appendChild(cvEl('div', 'font-weight:500', line(item)));
-        if (item.note) right.appendChild(cvEl('div', 'color:var(--muted);font-size:12.5px;margin-top:2px', item.note));
+        cvNotes(right, item.note);
+        (item.projects || []).forEach((project) => {
+          const box = cvEl('div', 'margin:6px 0 0 10px;padding-left:8px;border-left:2px solid var(--line-soft,#1e2734)');
+          box.appendChild(cvEl('div', 'font-size:12.5px;font-weight:500',
+            ['프로젝트', project.name, project.role].filter(Boolean).join(' · ')));
+          cvNotes(box, project.note);
+          right.appendChild(box);
+        });
         row.appendChild(right);
         section.appendChild(row);
       });
@@ -2156,28 +2177,49 @@
         row.childNodes.forEach((el) => { el.className = 'badge'; });
         section.appendChild(row);
       }
-      cvTimeline(section, '경력', cv.experience, (item) => [item.title, item.org].filter(Boolean).join(' · '));
-      cvTimeline(section, '학력', cv.education, (item) => [item.school, item.degree].filter(Boolean).join(' · '));
-      cvTimeline(section, '프로젝트', cv.projects, (item) => [item.name, item.role].filter(Boolean).join(' · '));
+      cvHeading(section, '학력');
+      if ((cv.education || []).length) {
+        cvTimeline(section, cv.education, (item) => [item.school, item.degree].filter(Boolean).join(' · '));
+      } else cvEmpty(section);
+      cvHeading(section, '경력 (&프로젝트)');
+      if ((cv.experience || []).length) {
+        cvTimeline(section, cv.experience, (item) => [item.title, item.org].filter(Boolean).join(' · '));
+      } else cvEmpty(section);
       const papers = cv.publications || [];
-      if (papers.length) {
-        section.appendChild(cvEl('p', 'margin:14px 0 6px;font-weight:600;font-size:13px', `논문 (${papers.length})`));
-        papers.forEach((paper) => {
-          const card = cvEl('div', 'padding:8px 0;border-bottom:1px solid var(--line-soft,#1e2734);font-size:13px');
-          const head = cvEl('div', 'display:flex;gap:6px;align-items:baseline;flex-wrap:wrap');
-          const badge = cvEl('span', '', paper.position || '');
-          badge.className = `badge ${CV_POSITION_TONE[paper.position] || ''}`;
-          if (paper.position) head.appendChild(badge);
-          head.appendChild(paper.url ? cvLink(paper.title, paper.url) : cvEl('span', 'font-weight:500', paper.title));
-          card.appendChild(head);
-          card.appendChild(cvEl('div', 'color:var(--muted);font-size:12.5px;margin-top:2px',
-            [paper.venue, paper.year, paper.citations != null ? `인용 ${paper.citations}` : null, paper.award]
-              .filter(Boolean).join(' · ')));
-          if (paper.authors) card.appendChild(cvEl('div', 'font-size:12px;color:var(--muted);margin-top:2px', paper.authors));
-          if (paper.summary) card.appendChild(cvEl('div', 'margin-top:4px', paper.summary));
-          section.appendChild(card);
+      cvHeading(section, '논문', papers.length);
+      if (!papers.length) cvEmpty(section, '논문 없음');
+      papers.forEach((paper) => {
+        const card = cvEl('div', 'padding:8px 0;border-bottom:1px solid var(--line-soft,#1e2734);font-size:13px');
+        const head = cvEl('div', 'display:flex;gap:6px;align-items:baseline;flex-wrap:wrap');
+        const badge = cvEl('span', '', paper.position || '');
+        badge.className = `badge ${CV_POSITION_TONE[paper.position] || ''}`;
+        if (paper.position) head.appendChild(badge);
+        head.appendChild(paper.url ? cvLink(paper.title, paper.url) : cvEl('span', 'font-weight:500', paper.title));
+        card.appendChild(head);
+        card.appendChild(cvEl('div', 'color:var(--muted);font-size:12.5px;margin-top:2px',
+          [paper.venue, paper.year, paper.citations != null ? `인용 ${paper.citations}` : null, paper.award]
+            .filter(Boolean).join(' · ')));
+        if (paper.authors) card.appendChild(cvEl('div', 'font-size:12px;color:var(--muted);margin-top:2px', paper.authors));
+        if (paper.summary) card.appendChild(cvEl('div', 'margin-top:4px', paper.summary));
+        section.appendChild(card);
+      });
+      cvHeading(section, '기타 (어학·수상·활동 등)');
+      const etc = (cv.etc || []).filter((group) => (group.items || []).length);
+      if (!etc.length) cvEmpty(section);
+      etc.forEach((group) => {
+        const row = cvEl('div', 'display:grid;grid-template-columns:110px 1fr;gap:10px;padding:5px 0;font-size:13px');
+        row.appendChild(cvEl('span', 'color:var(--muted)', group.label));
+        const right = cvEl('div');
+        group.items.forEach((item) => {
+          if (item && typeof item === 'object' && item.url) {
+            const line = cvEl('div');
+            line.appendChild(cvLink(item.text || item.url, item.url));
+            right.appendChild(line);
+          } else right.appendChild(cvEl('div', '', typeof item === 'object' ? item.text : item));
         });
-      }
+        row.appendChild(right);
+        section.appendChild(row);
+      });
       if ((cv.flags || []).length) {
         section.appendChild(cvEl('p', 'margin:14px 0 6px;font-weight:600;font-size:13px', '확인 필요'));
         cv.flags.forEach((flag) => section.appendChild(cvEl('div', 'font-size:12.5px;padding:2px 0', `• ${flag}`)));
