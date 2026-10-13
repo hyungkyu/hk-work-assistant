@@ -217,7 +217,7 @@ def test_a_person_on_both_tabs_is_marked_primary_and_concurrent() -> None:
                         (
                             observation, someone, affiliation, dept,
                             "주한별" if affiliation == "student" else None,
-                            engaged if affiliation == "internal" else None,
+                            engaged if affiliation == "internal" else "인턴",
                         ),
                     )
             connection.commit()
@@ -256,6 +256,15 @@ def test_a_person_on_both_tabs_is_marked_primary_and_concurrent() -> None:
             if card["person_id"] == person and card["source"] == "roster_seed_ext"
         )
         assert "Model Team" in lab["also_at"], "the lab card names the company place"
+        # The lab card says what the company tab says (HK, 2026-10-13: 장수혁
+        # ... 리얼월드 방문연구원이니까 신진우 교수님 연구실에도 그렇게 표시).
+        assert lab["employment_type"] == "방문 연구원"
+        assert lab["company_mark"] == "방문 연구원"
+        employed_lab = next(
+            card for card in everyone
+            if card["person_id"] == employed and card["source"] == "roster_seed_ext"
+        )
+        assert employed_lab["employment_type"] == "정규직", "구명규: 정규직, not 인턴"
     finally:
         with psycopg.connect(url) as connection, connection.cursor() as cursor:
             cursor.execute(

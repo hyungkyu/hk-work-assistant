@@ -568,6 +568,14 @@ def org_chart(database_url: str, *, include_retired: bool = False) -> dict[str, 
         # 2026-10-13: 인턴/방문연구원은 학교가 원소속 ... 명규는 회사가 원소속,
         # 회사 정규직이거든). An intern or a visiting researcher is a student
         # first; somebody the company employs outright is the company's.
+        # How the company engages them is the company tab's to say. The lab
+        # tab is a form whose "리얼월드 인턴" box was ticked once and never
+        # revisited, so its card said 인턴 for a 정규직 (구명규) and for four
+        # 방문 연구원 (HK, 2026-10-13). The lab card shows the company's word;
+        # the form's answer is kept beside it, not thrown away.
+        if company.get("employment_type"):
+            lab["employment_type_on_lab_tab"] = lab.get("employment_type")
+            lab["employment_type"] = company["employment_type"]
         company_is_home = _folded(company.get("employment_type")) == _folded(EMPLOYED_OUTRIGHT)
         home, away = (company, lab) if company_is_home else (lab, company)
         home["affiliation_role"] = "원소속"
