@@ -2114,6 +2114,29 @@
         grid.append(dt, dd);
       });
       hrSection.appendChild(grid);
+      // Every account the roster ties to this person -- owner only; the
+      // server leaves `accounts` out for anybody else (HK, 2026-10-13).
+      if ((profile.accounts || []).length) {
+        const accountsHead = document.createElement('p');
+        accountsHead.className = 'help';
+        accountsHead.style.marginTop = '12px';
+        accountsHead.textContent = '로스터 계정 (관리자에게만 보입니다)';
+        hrSection.appendChild(accountsHead);
+        const accounts = document.createElement('dl');
+        accounts.style.cssText = 'display:grid;grid-template-columns:110px 1fr;gap:6px 12px;margin:0';
+        profile.accounts.forEach((group) => {
+          const dt = document.createElement('dt');
+          dt.style.color = 'var(--muted)';
+          dt.textContent = group.label;
+          const dd = document.createElement('dd');
+          dd.style.cssText = 'margin:0;word-break:break-all';
+          dd.textContent = group.values
+            .map((item) => item.value + (item.linked_by_hand ? ' (직접 연결)' : ''))
+            .join(' · ');
+          accounts.append(dt, dd);
+        });
+        hrSection.appendChild(accounts);
+      }
       const changes = (hr.history || []).filter((entry) => !entry.first);
       const first = (hr.history || []).find((entry) => entry.first);
       const historyHead = document.createElement('p');

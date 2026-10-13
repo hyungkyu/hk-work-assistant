@@ -117,15 +117,26 @@ def person_profile_route(
     """The panel that opens when a person is clicked on the chart.
 
     Behind the same page access as the chart itself: whoever may see the
-    chart may see what it says about one person, and nothing more -- the
-    profile carries no email or account id.
+    chart may see what it says about one person.
+
+    The roster's accounts -- 사번, emails, Slack, GitHub, Notion, Slurm --
+    are added for the owner and for nobody else (HK, 2026-10-13: 인사 정보에
+    슬랙, 깃헙, 노션, 슬럼, 회사 이메일 등 모든 로스터 정보를 보여줘 ... 나만).
+    The chart can be opened to every colleague from the menu editor; these
+    must not open with it, so the check is the session's role, not the
+    page's setting.
     """
-    require_page_access("org")(request)
+    current = require_page_access("org")(request)
     from .org.profile import person_profile
 
-    found = person_profile(_database_url(), person_id)
+    database_url = _database_url()
+    found = person_profile(database_url, person_id)
     if found is None:
         raise HTTPException(status_code=404, detail="no such person on the roster")
+    if current.get("role") == "super_admin":
+        from .org.profile import person_accounts
+
+        found["accounts"] = person_accounts(database_url, person_id)
     return found
 
 

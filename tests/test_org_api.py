@@ -166,9 +166,17 @@ def test_a_day_with_no_digest_says_it_was_not_built(owner: FakeRequest, monkeypa
 
 
 @REQUIRES_DATABASE
-def test_a_person_profile_shows_the_roster_and_never_an_email(owner: FakeRequest, monkeypatch) -> None:
-    """인사정보 from the roster, the other two sections declared but unconnected,
-    and no join key anywhere in what the panel receives."""
+def test_a_person_profile_shows_the_roster_and_its_accounts_only_to_the_owner(
+    owner: FakeRequest, monkeypatch
+) -> None:
+    """인사정보 from the roster, the other two sections declared but unconnected.
+
+    The accounts -- emails, 사번, Slack, GitHub -- used to be withheld from
+    everybody. HK, 2026-10-13: 인사 정보에 슬랙, 깃헙, 노션, 슬럼, 회사 이메일
+    등 모든 로스터 정보를 보여줘, and who may see them: 나만. So the owner
+    gets them and a colleague, even with the chart opened to them, still
+    receives no join key at all.
+    """
     import io
     import json as _json
 
@@ -209,7 +217,20 @@ def test_a_person_profile_shows_the_roster_and_never_an_email(owner: FakeRequest
     assert moved and moved[-1]["changes"][0]["after"] == "RLWRLD | Platform Team"
     for section in (body["hr"]["extra"], body["recent_work"], body["detail"]):
         assert section["connected"] is False
-    assert "@" not in _json.dumps(body, ensure_ascii=False, default=str)
+
+    accounts = {group["kind"]: group for group in body["accounts"]}
+    assert accounts["email_official"]["label"] == "회사 이메일"
+    assert [item["value"] for item in accounts["email_official"]["values"]] == [
+        "profile.test@rlwrld.ai"
+    ]
+
+    # A colleague who may open the chart: same panel, no accounts, no '@'.
+    monkeypatch.setattr(
+        org_web, "require_page_access", lambda page, **_: (lambda request: {"role": "company_user"})
+    )
+    seen = org_web.person_profile_route(owner, person_id=identifier)
+    assert "accounts" not in seen
+    assert "@" not in _json.dumps(seen, ensure_ascii=False, default=str)
 
     with pytest.raises(HTTPException) as error:
         org_web.person_profile_route(owner, person_id="p_000000000000")

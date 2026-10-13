@@ -135,3 +135,46 @@ def person_profile(database_url: str, person_id: str) -> dict[str, Any] | None:
         "recent_work": not_connected("recent_work"),
         "detail": not_connected("detail"),
     }
+
+
+# How each identity kind is named on the 인사정보 panel, in the order shown.
+ACCOUNT_LABELS: tuple[tuple[str, str], ...] = (
+    ("employee_no", "사번"),
+    ("email_official", "회사 이메일"),
+    ("email_personal", "개인 이메일"),
+    ("email_school", "학교 이메일"),
+    ("slack", "슬랙"),
+    ("github", "깃헙"),
+    ("notion", "노션"),
+    ("slurm", "슬럼"),
+)
+
+
+def person_accounts(database_url: str, person_id: str) -> list[dict[str, Any]]:
+    """Every account the roster ties to this person, for the owner's eyes.
+
+    Grouped by kind in a fixed order, several values per kind where the
+    person has several (two 사번 after a rehire, two GitHub logins). An
+    account linked by answering the 미확인 계정 queue says so, because it
+    came from a person's judgement rather than the sheet.
+    """
+    import psycopg
+
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT kind, value, origin FROM org_identity WHERE person_id = %s ORDER BY kind, value",
+                (person_id,),
+            )
+            rows = cursor.fetchall()
+    by_kind: dict[str, list[dict[str, Any]]] = {}
+    for kind, value, origin in rows:
+        by_kind.setdefault(kind, []).append({"value": value, "linked_by_hand": origin == "resolved"})
+    out = [
+        {"kind": kind, "label": label, "values": by_kind.pop(kind)}
+        for kind, label in ACCOUNT_LABELS
+        if kind in by_kind
+    ]
+    # A kind added to the allowlist later still shows, under its own name.
+    out.extend({"kind": kind, "label": kind, "values": values} for kind, values in sorted(by_kind.items()))
+    return out
