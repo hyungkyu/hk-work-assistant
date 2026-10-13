@@ -2001,6 +2001,24 @@
         mark.textContent = person.company_mark;
         card.appendChild(mark);
       }
+      // 원소속 / 겸소속 (HK, 2026-10-13). A 겸직 person sits on two nodes;
+      // each card says which this is and where the other one is, so seeing
+      // the same name twice reads as one person in two places.
+      if (person.affiliation_role) {
+        const role = document.createElement('span');
+        role.className = person.affiliation_role === '원소속' ? 'badge ok' : 'badge';
+        role.textContent = person.affiliation_role;
+        if (person.also_at) {
+          role.title = `${person.affiliation_role === '원소속' ? '겸소속' : '원소속'}: ${person.also_at}`;
+        }
+        card.appendChild(role);
+        if (person.also_at) {
+          const where = document.createElement('small');
+          where.style.color = 'var(--muted)';
+          where.textContent = `${person.affiliation_role === '원소속' ? '겸' : '원'} · ${person.also_at}`;
+          card.appendChild(where);
+        }
+      }
       if (person.status === 'absent_from_sheet') {
         const warn = document.createElement('span');
         warn.className = 'badge wait';

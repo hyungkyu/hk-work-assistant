@@ -416,6 +416,11 @@ def departed_block(people: list[dict], since: dict[str, tuple]) -> dict[str, Any
     return {"people": len(members), "bands": bands, "members": members}
 
 
+# The two tabs, as the chart names them for 원소속 / 겸소속.
+COMPANY_SOURCE = "roster_seed_2"
+LAB_SOURCE = "roster_seed_ext"
+
+
 def latest_observations(cursor) -> dict[str, int]:
     """The newest observation of each roster tab.
 
@@ -518,6 +523,27 @@ def org_chart(database_url: str, *, include_retired: bool = False) -> dict[str, 
             if not include_retired:
                 continue
         people.append(person)
+
+    # 원소속 / 겸소속. HK, 2026-10-13: 양쪽에 소속일 경우 원소속 겸소속으로
+    # 표현해야할텐데 (버추얼랩). Since 2026-10-12 a person listed on both tabs
+    # is one person with a row on each, and the chart already places each row
+    # on its own node -- so a 겸직 person appears twice, which is right, but
+    # neither card said why. The company row is 원소속 and the Virtual Lab
+    # row is 겸소속, as HK put it, and each card names the other place.
+    by_person: dict[str, dict[str, dict]] = {}
+    for person in people:
+        if person["status"] == "absent_from_sheet":
+            continue
+        by_person.setdefault(person["person_id"], {})[person["source"]] = person
+    for rows_of_one in by_person.values():
+        company = rows_of_one.get(COMPANY_SOURCE)
+        lab = rows_of_one.get(LAB_SOURCE)
+        if not (company and lab):
+            continue
+        company["affiliation_role"] = "원소속"
+        company["also_at"] = " | ".join(lab["chart_path"][1:]) or lab["chart_path"][0]
+        lab["affiliation_role"] = "겸소속"
+        lab["also_at"] = " | ".join(company["chart_path"][1:]) or company["chart_path"][0]
 
     unmatched = place_professors(people)
     annotate(people)

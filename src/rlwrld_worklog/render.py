@@ -166,6 +166,13 @@ def _person_card(person: dict, *, link: str | None = None) -> str:
     mark = person.get("company_mark")
     if mark and person.get("member_group") == "학생":
         tags.append(f'<span class="pill ok">{_e(mark)}</span>')
+    # 원소속 / 겸소속 (HK, 2026-10-13): the same person on two nodes, each
+    # card saying which this is and where the other is.
+    role = person.get("affiliation_role")
+    if role:
+        other = "겸소속" if role == "원소속" else "원소속"
+        title = f' title="{_e(other)}: {_e(person.get("also_at"))}"' if person.get("also_at") else ""
+        tags.append(f'<span class="pill{" ok" if role == "원소속" else ""}"{title}>{_e(role)}</span>')
     subtitle = " · ".join(
         part for part in (person.get("nickname"), person.get("employment_type") or person.get("title")) if part
     )

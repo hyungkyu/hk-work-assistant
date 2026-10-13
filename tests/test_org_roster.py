@@ -1,3 +1,4 @@
+import pytest
 
 
 # ----------------------------------------------------------------- 사번
@@ -132,3 +133,136 @@ def test_an_employee_number_is_a_declared_identity_kind() -> None:
         "notion",
         "slurm",
     }, "a kind the database would refuse"
+
+
+@pytest.mark.skipif(
+    not __import__("os").environ.get("WORKLOG_TEST_DATABASE_URL"),
+    reason="set WORKLOG_TEST_DATABASE_URL to a throwaway database",
+)
+def test_a_person_on_both_tabs_is_marked_primary_and_concurrent() -> None:
+    """HK, 2026-10-13: 양쪽에 소속일 경우 원소속 겸소속으로 표현해야할텐데.
+
+    The company row is 원소속, the Virtual Lab row 겸소속, and each names the
+    other place -- otherwise the same name on two nodes reads as a duplicate,
+    which is exactly what the merge was done to stop it looking like. Built
+    from a real chart, because the logic sits in the middle of `org_chart`.
+    """
+    import os
+    import uuid
+    from pathlib import Path
+
+    import psycopg
+
+    from rlwrld_worklog.ledger.load import apply_migrations
+    from rlwrld_worklog.org.chart import org_chart
+
+    url = os.environ["WORKLOG_TEST_DATABASE_URL"]
+    apply_migrations(
+        database_url=url,
+        migrations_dir=Path(__file__).resolve().parents[1] / "sql" / "migrations",
+        dry_run=False,
+    )
+    person = f"p_cc_{uuid.uuid4().hex[:8]}"
+    alone = f"p_cc_{uuid.uuid4().hex[:8]}"
+    # Left the lab, now on staff: a lab row marked absent. Not 겸직, and the
+    # case that matters -- without the absent filter they would be called it.
+    graduated = f"p_cc_{uuid.uuid4().hex[:8]}"
+    observations = []
+    try:
+        with psycopg.connect(url) as connection, connection.cursor() as cursor:
+            for source, dept, affiliation in (
+                ("roster_seed_2", "RLWRLD | Model Team", "internal"),
+                ("roster_seed_ext", "KAIST", "student"),
+            ):
+                cursor.execute(
+                    "INSERT INTO roster_observation (observed_at, source, row_count) "
+                    "VALUES (now() + interval '3 days', %s, 1) RETURNING observation_id",
+                    (source,),
+                )
+                observation = cursor.fetchone()[0]
+                observations.append(observation)
+                if source == "roster_seed_2":
+                    cursor.execute(
+                        "INSERT INTO org_person (person_id, name, first_seen, last_seen) "
+                        "VALUES (%s,'겸직자',%s,%s), (%s,'한쪽만',%s,%s), (%s,'졸업생',%s,%s)",
+                        (
+                            person, observation, observation,
+                            alone, observation, observation,
+                            graduated, observation, observation,
+                        ),
+                    )
+                    for someone in (alone, graduated):
+                        cursor.execute(
+                            "INSERT INTO org_person_state (observation_id, person_id, affiliation, "
+                            "access_level, status, department_raw) VALUES "
+                            "(%s,%s,'internal','staff_equivalent','active',%s)",
+                            (observation, someone, dept),
+                        )
+                else:
+                    cursor.execute(
+                        "INSERT INTO org_person_state (observation_id, person_id, affiliation, "
+                        "access_level, status, department_raw) VALUES "
+                        "(%s,%s,'student','limited','absent_from_sheet',%s)",
+                        (observation, graduated, dept),
+                    )
+                cursor.execute(
+                    "INSERT INTO org_person_state (observation_id, person_id, affiliation, "
+                    "access_level, status, department_raw, advisor) VALUES "
+                    "(%s,%s,%s,'staff_equivalent','active',%s,%s)",
+                    (observation, person, affiliation, dept, "주한별" if affiliation == "student" else None),
+                )
+            connection.commit()
+
+        chart = org_chart(url)
+
+        def cards(tree):
+            for node in tree:
+                yield from node.get("members", [])
+                yield from cards(node.get("children", []))
+
+        everyone = [
+            card for card in cards(chart["tree"]) if card["person_id"] in (person, alone, graduated)
+        ]
+        roles = sorted(
+            (card["source"], card.get("affiliation_role")) for card in everyone if card["person_id"] == person
+        )
+        assert roles == [("roster_seed_2", "원소속"), ("roster_seed_ext", "겸소속")]
+        assert all(
+            card.get("affiliation_role") is None
+            for card in everyone
+            if card["person_id"] in (alone, graduated)
+        ), "on one tab only -- including somebody who left the other -- is marked nothing"
+        lab = next(card for card in everyone if card.get("affiliation_role") == "겸소속")
+        assert "Model Team" in lab["also_at"], "the lab card names the company place"
+    finally:
+        with psycopg.connect(url) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM org_person_state WHERE person_id = ANY(%s)", ([person, alone, graduated],)
+            )
+            cursor.execute(
+                "DELETE FROM org_person WHERE person_id = ANY(%s)", ([person, alone, graduated],)
+            )
+            cursor.execute(
+                "DELETE FROM roster_observation WHERE observation_id = ANY(%s)", (observations,)
+            )
+            connection.commit()
+
+
+def test_the_concurrent_mark_is_drawn_on_both_renderers() -> None:
+    from rlwrld_worklog.render import _person_card
+
+    primary = _person_card(
+        {"name": "가", "affiliation": "internal", "affiliation_role": "원소속", "also_at": "KAIST | A Lab"}
+    )
+    concurrent = _person_card(
+        {"name": "가", "affiliation": "student", "affiliation_role": "겸소속", "also_at": "Model Team"}
+    )
+    assert "원소속" in primary and "겸소속: KAIST | A Lab" in primary
+    assert "겸소속" in concurrent and "원소속: Model Team" in concurrent
+
+    from pathlib import Path
+
+    script = (
+        Path(__file__).resolve().parents[1] / "src" / "rlwrld_worklog" / "static" / "admin.js"
+    ).read_text(encoding="utf-8")
+    assert "person.affiliation_role" in script
