@@ -192,6 +192,20 @@ def resolve_route(request: Request, payload: ResolveRequest) -> dict[str, Any]:
     return outcome
 
 
+class BulkResolve(BaseModel):
+    what: str = Field(pattern="^(email|bots)$")
+
+
+@router.post("/unmapped/resolve-bulk")
+def resolve_bulk_route(request: Request, payload: BulkResolve) -> dict[str, Any]:
+    """「이메일 일치 전부 연결」 / 「봇 전부 봇으로」 -- the unambiguous ones only."""
+    current = require_super_admin_session(request)
+    _require_csrf(request, current)
+    from .org.unmapped import resolve_in_bulk
+
+    return resolve_in_bulk(_database_url(), what=payload.what)
+
+
 @router.get("/digest/status")
 def digest_status_route(request: Request) -> dict[str, Any]:
     require_page_access("org")(request)

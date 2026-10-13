@@ -517,3 +517,64 @@ def list_unmapped(
                 for row in cursor.fetchall()
             }
     return {"state": state, "accounts": rows, "totals": totals}
+
+
+# How a bot judged by `resolve_in_bulk` is recorded, so the chart can list
+# them apart from other accounts judged "not a person" by hand.
+BOT_NOTE = "봇"
+EMAIL_NOTE = "이메일 일치로 연결"
+
+
+def resolve_in_bulk(database_url: str, *, what: str) -> dict[str, Any]:
+    """Answer the obvious ones in one go, and leave every judgement call alone.
+
+    HK, 2026-10-13: 미확인 계정에서 퇴사자 정보랑 링크가 되는게 제법 있고,
+    봇이 제법 있는데, 퇴사자는 조직도에서 매핑되고, 봇은 조직도 하단에
+    봇계정으로 둘 수 있지 않아?
+
+    Two kinds only, both decided by what the source itself says:
+
+    * `email` -- the account's own profile email is an identity the roster
+      holds for exactly one person. That person may have left; that is the
+      point -- the activity of somebody who has left lands on them.
+    * `bots` -- the source marks the account as a bot (Slack `is_bot`,
+      Notion `type: bot`).
+
+    A name match is never applied here. Two people can share a name, and
+    that is a click a person makes. Each account goes through `resolve`,
+    the same path a single click takes, so a bulk answer is stored exactly
+    like a hand-made one and is undone the same way.
+    """
+    if what not in {"email", "bots"}:
+        raise ValueError("what must be 'email' or 'bots'")
+    listing = list_unmapped(database_url, state="open", limit=10_000)
+    applied = []
+    for account in listing["accounts"]:
+        details = account.get("details") or {}
+        if what == "bots":
+            if not details.get("bot"):
+                continue
+            outcome = resolve(
+                database_url, kind=account["kind"], value=account["value"], ignore=True, note=BOT_NOTE
+            )
+        else:
+            strong = [item for item in account.get("candidates") or [] if item.get("strength", 0) >= 2]
+            if len(strong) != 1:
+                continue
+            outcome = resolve(
+                database_url,
+                kind=account["kind"],
+                value=account["value"],
+                person_id=strong[0]["person_id"],
+                note=EMAIL_NOTE,
+            )
+        if outcome.get("ok"):
+            applied.append(
+                {
+                    "kind": account["kind"],
+                    "value": account["value"],
+                    "name": details.get("name") or details.get("nickname"),
+                    "to": None if what == "bots" else strong[0]["name"],
+                }
+            )
+    return {"what": what, "applied": len(applied), "accounts": applied}

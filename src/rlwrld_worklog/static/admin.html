@@ -374,6 +374,13 @@
           <p class="help">로스터에 퇴사로 표시된 사람입니다. 위 조직도와 인원 수에는 들어가지 않습니다.
              날짜는 시트가 처음 그렇게 말한 때이고, 실제 퇴사일은 아닙니다. 이름을 누르면 그 사람의 정보가 열립니다.</p>
         </article>
+        <!-- 봇 계정 (HK, 2026-10-13: 봇은 조직도 하단에 봇계정으로). Account ids,
+             so drawn for the owner only. -->
+        <article class="card hidden" style="margin-top:16px" id="org-bots-card">
+          <div class="card-header"><h2>봇 계정</h2><span class="badge" id="org-bots-badge">-</span></div>
+          <div id="org-bots"></div>
+          <p class="help">Slack·Notion 이 봇이라고 표시해서 사람이 아닌 것으로 분류한 계정입니다. 인원 수에는 들어가지 않습니다.</p>
+        </article>
       </section>
 
       <section class="page" id="page-person">
@@ -413,6 +420,8 @@
                 <option value="all">전부</option>
               </select>
               <button class="button" id="unmapped-reload">새로고침</button>
+              <button class="button primary" id="unmapped-bulk-email" title="프로필 이메일이 로스터의 한 사람과 정확히 맞는 계정만. 퇴사자 포함">이메일 일치 전부 연결</button>
+              <button class="button" id="unmapped-bulk-bots" title="Slack·Notion 이 봇이라고 표시한 계정만">봇 전부 봇으로</button>
             </div>
             <span class="badge" id="unmapped-badge">-</span>
           </div>

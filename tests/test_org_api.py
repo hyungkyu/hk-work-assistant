@@ -127,6 +127,9 @@ def test_every_reading_route_is_a_get_and_only_resolve_is_a_post() -> None:
         "/api/v1/admin/org/status": ["get"],
         "/api/v1/admin/org/unmapped": ["get"],
         "/api/v1/admin/org/unmapped/resolve": ["post"],
+        # The same answer as above, for the unambiguous ones at once (HK,
+        # 2026-10-13): one email match to one person, or a source's own bot flag.
+        "/api/v1/admin/org/unmapped/resolve-bulk": ["post"],
         "/api/v1/admin/org/digest/status": ["get"],
         "/api/v1/admin/org/digest/{person_id}": ["get"],
         "/api/v1/admin/org/digest/{person_id}/range": ["get"],

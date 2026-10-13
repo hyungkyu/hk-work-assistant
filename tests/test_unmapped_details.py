@@ -229,3 +229,76 @@ def test_an_account_with_no_profile_offers_nobody(cursor) -> None:
     from rlwrld_worklog.org.unmapped import owner_candidates
 
     assert owner_candidates(cursor, {"handle": "ghost"}) == []
+
+
+@REQUIRES_DATABASE
+def test_bulk_answers_only_the_unambiguous_ones() -> None:
+    """HK, 2026-10-13: 퇴사자는 조직도에서 매핑되고, 봇은 조직도 하단에 봇계정으로.
+
+    One email match to one person -- including somebody who has left -- is
+    linked; an account its source calls a bot is filed as a bot; a name
+    match is left for a person to click, because it can be 동명이인.
+    """
+    import psycopg
+
+    from rlwrld_worklog.org.unmapped import BOT_NOTE, resolve_in_bulk
+
+    url = os.environ["WORKLOG_TEST_DATABASE_URL"]
+    tag = uuid.uuid4().hex[:6].upper()
+    leaver_email = f"left{tag}@rlwrld.ai".lower()
+    accounts = {
+        "email": f"UE{tag}",
+        "bot": f"UB{tag}",
+        "name": f"UN{tag}",
+    }
+    with psycopg.connect(url) as connection, connection.cursor() as cursor:
+        leaver = _roster_person(
+            cursor, f"퇴사자{tag}", status="retired", identities=[("email_official", leaver_email)]
+        )
+        _roster_person(cursor, f"동명{tag}")
+        for key, handle in accounts.items():
+            profile = {
+                "email": {"real_name": "아무개", "email": leaver_email.upper()},
+                "bot": {"real_name": "deploy-bot"},
+                "name": {"real_name": f"동명{tag}"},
+            }[key]
+            _ledger(
+                cursor,
+                source="slack",
+                entity_type="user",
+                entity_id=f"T:{handle}",
+                payload={"name": handle.lower(), "is_bot": key == "bot", "profile": profile},
+            )
+            cursor.execute(
+                "INSERT INTO org_unmapped_account (kind, value, first_seen_at, last_seen_at, events) "
+                "VALUES ('slack', %s, now(), now(), 5)",
+                (handle,),
+            )
+        connection.commit()
+    try:
+        linked = resolve_in_bulk(url, what="email")
+        bots = resolve_in_bulk(url, what="bots")
+        with psycopg.connect(url) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT value, state, resolved_person_id, note FROM org_unmapped_account "
+                "WHERE value = ANY(%s)",
+                (list(accounts.values()),),
+            )
+            state = {row[0]: row[1:] for row in cursor.fetchall()}
+        assert state[accounts["email"]][0] == "resolved"
+        assert state[accounts["email"]][1] == leaver, "a leaver's old account lands on them"
+        assert state[accounts["bot"]][0] == "ignored" and state[accounts["bot"]][2] == BOT_NOTE
+        assert state[accounts["name"]][0] == "open", "a name match waits for a click"
+        assert any(item["value"] == accounts["email"] for item in linked["accounts"])
+        assert any(item["value"] == accounts["bot"] for item in bots["accounts"])
+    finally:
+        with psycopg.connect(url) as connection, connection.cursor() as cursor:
+            cursor.execute("DELETE FROM org_identity WHERE value = ANY(%s)", (list(accounts.values()),))
+            cursor.execute(
+                "DELETE FROM org_unmapped_account WHERE value = ANY(%s)", (list(accounts.values()),)
+            )
+            cursor.execute(
+                "DELETE FROM ledger_records WHERE source_entity_id = ANY(%s)",
+                ([f"T:{handle}" for handle in accounts.values()],),
+            )
+            connection.commit()

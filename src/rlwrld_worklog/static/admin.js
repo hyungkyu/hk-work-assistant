@@ -2315,6 +2315,7 @@
         orgGroups(chart.tree || [], people);
         const departed = chart.departed || { people: 0, bands: [], members: [] };
         orgDeparted(departed, $('org-departed'));
+        orgBots();
         $('org-departed-badge').textContent = `${departed.people || 0}명`;
 
         $('org-badge').textContent = `${(chart.tree || []).length} 루트`;
@@ -2590,6 +2591,36 @@
       }
     }
 
+    async function orgBots() {
+      const card = $('org-bots-card');
+      if (!isOwner()) { card.classList.add('hidden'); return; }
+      try {
+        const payload = await api('/api/v1/admin/org/unmapped?state=ignored&limit=500');
+        const bots = (payload.accounts || []).filter((account) => account.note === '봇');
+        card.classList.toggle('hidden', !bots.length);
+        $('org-bots-badge').textContent = `${bots.length}개`;
+        const grid = orgGrid();
+        bots.forEach((account) => {
+          const d = account.details || {};
+          const item = document.createElement('div');
+          item.className = 'card';
+          item.style.cssText = 'padding:10px 12px';
+          const name = document.createElement('strong');
+          name.textContent = d.name || d.nickname || d.username || account.value;
+          const sub = document.createElement('small');
+          sub.style.cssText = 'display:block;color:var(--muted)';
+          sub.textContent = `${account.kind} · ${account.value} · ${account.events}건`;
+          item.append(name, sub);
+          grid.appendChild(item);
+        });
+        const host = $('org-bots');
+        host.textContent = '';
+        host.appendChild(grid);
+      } catch (error) {
+        card.classList.add('hidden');
+      }
+    }
+
     async function orgUnmappedGuesses(note) {
       try {
         const payload = await api('/api/v1/admin/org/unmapped?state=open&limit=200');
@@ -2695,6 +2726,23 @@
       } catch (error) {
         line.textContent = `불러오지 못했습니다: ${error.message}`;
         $('unmapped-badge').textContent = '조회 실패';
+      }
+    }
+
+    async function resolveUnmappedInBulk(what) {
+      const line = $('unmapped-state-line');
+      line.textContent = '처리하는 중…';
+      try {
+        const result = await api('/api/v1/admin/org/unmapped/resolve-bulk', {
+          method: 'POST',
+          body: JSON.stringify({ what }),
+        });
+        toast(what === 'bots'
+          ? `봇 ${result.applied}개를 봇으로 분류했습니다`
+          : `이메일 일치 ${result.applied}개를 연결했습니다`);
+        loadUnmapped();
+      } catch (error) {
+        line.textContent = `처리하지 못했습니다: ${error.message}`;
       }
     }
 
@@ -3250,6 +3298,8 @@
 
     $('search-run').addEventListener('click', runSearch);
     $('person-run').addEventListener('click', runPersonDay);
+    $('unmapped-bulk-email').addEventListener('click', () => resolveUnmappedInBulk('email'));
+    $('unmapped-bulk-bots').addEventListener('click', () => resolveUnmappedInBulk('bots'));
     $('person-day').addEventListener('change', () => { if ($('person-id').value.trim()) runPersonDay(); });
     $('menu-save').addEventListener('click', saveMenu);
     $('menu-reload').addEventListener('click', loadMenu);
