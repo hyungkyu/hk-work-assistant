@@ -152,3 +152,80 @@ def test_the_queue_shows_the_details_in_columns() -> None:
     assert "account.details" in script
     for heading in ("이름 · 닉네임", "이메일", "주로 활동한 곳"):
         assert heading in html
+
+
+def _roster_person(cursor, name, *, nickname=None, status="active", identities=()):
+    cursor.execute(
+        "INSERT INTO roster_observation (observed_at, source, row_count) "
+        "VALUES (now(), 'roster_seed_2', 1) RETURNING observation_id"
+    )
+    observation = cursor.fetchone()[0]
+    person_id = f"p_c_{uuid.uuid4().hex[:10]}"
+    cursor.execute(
+        "INSERT INTO org_person (person_id, name, first_seen, last_seen) VALUES (%s,%s,%s,%s)",
+        (person_id, name, observation, observation),
+    )
+    cursor.execute(
+        "INSERT INTO org_person_state (observation_id, person_id, affiliation, access_level, "
+        "status, nickname, department_raw) VALUES (%s,%s,'internal','staff_equivalent',%s,%s,'RLWRLD')",
+        (observation, person_id, status, nickname),
+    )
+    for kind, value in identities:
+        cursor.execute(
+            "INSERT INTO org_identity (person_id, kind, value, first_seen, last_seen) "
+            "VALUES (%s,%s,%s,%s,%s)",
+            (person_id, kind, value, observation, observation),
+        )
+    return person_id
+
+
+@REQUIRES_DATABASE
+def test_a_second_account_is_offered_to_the_person_its_email_names(cursor) -> None:
+    """HK, 2026-10-13: 학생/교수님들은 슬랙/노션 계정이 2개 일 수 있어.
+
+    A lab Slack whose profile email is one the roster already holds for a
+    person is that person's second account -- offered, strongest first.
+    """
+    from rlwrld_worklog.org.unmapped import owner_candidates
+
+    tag = uuid.uuid4().hex[:6]
+    owner = _roster_person(
+        cursor, f"학생{tag}", identities=[("email_school", f"s{tag}@kaist.ac.kr")]
+    )
+    found = owner_candidates(cursor, {"email": f"S{tag}@KAIST.ac.kr", "name": "다른이름"})
+    assert [item["person_id"] for item in found] == [owner], "the email decides, case aside"
+    assert found[0]["why"].startswith("이메일 일치")
+
+
+@REQUIRES_DATABASE
+def test_a_name_match_lists_every_namesake_and_says_who_left(cursor) -> None:
+    """동명이인 is listed, not resolved, and a departed person still counts --
+    "리얼월드 퇴사자 계정" is one of the cases HK named."""
+    from rlwrld_worklog.org.unmapped import owner_candidates
+
+    tag = uuid.uuid4().hex[:6]
+    name = f"동명{tag}"
+    here = _roster_person(cursor, name)
+    left = _roster_person(cursor, name, status="retired")
+    found = owner_candidates(cursor, {"name": name})
+    assert {item["person_id"] for item in found} == {here, left}
+    assert {item["person_id"]: item["status"] for item in found}[left] == "retired"
+    assert all(item["why"] == "이름 일치" for item in found)
+
+
+@REQUIRES_DATABASE
+def test_a_nickname_finds_the_person_too(cursor) -> None:
+    """Slack display names are usually the nickname the roster also keeps."""
+    from rlwrld_worklog.org.unmapped import owner_candidates
+
+    tag = uuid.uuid4().hex[:6]
+    person = _roster_person(cursor, f"정식이름{tag}", nickname=f"nick{tag}")
+    found = owner_candidates(cursor, {"nickname": f"NICK{tag}"})
+    assert [item["person_id"] for item in found] == [person]
+
+
+@REQUIRES_DATABASE
+def test_an_account_with_no_profile_offers_nobody(cursor) -> None:
+    from rlwrld_worklog.org.unmapped import owner_candidates
+
+    assert owner_candidates(cursor, {"handle": "ghost"}) == []

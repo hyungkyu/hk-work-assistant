@@ -390,6 +390,89 @@ def account_details(cursor, kind: str, value: str) -> dict[str, Any]:
     }
 
 
+def owner_candidates(cursor, details: dict[str, Any]) -> list[dict[str, Any]]:
+    """People on the roster this account plausibly belongs to, strongest first.
+
+    HK, 2026-10-13: 기존의 학교 학생 계정이든, 교수 계정이든, 리얼월드 퇴사자
+    계정이든. 뭔가 있을거야. 학생/교수님들은 슬랙/노션 계정이 2개 일 수 있어.
+
+    So most of these accounts are a second account of somebody already
+    here -- a lab Slack beside the company one, a school Notion beside the
+    company one, the account of somebody who has left. The account's own
+    profile usually says who: its email is often one the roster already
+    holds for that person, and its name is theirs.
+
+    Two kinds of evidence, never mixed up:
+
+    * 이메일 일치 -- the profile email is an identity the roster holds. One
+      person; very likely right.
+    * 이름 일치 -- the profile name equals a roster name or nickname. Can be
+      several people (동명이인), so every match is listed and none is chosen.
+
+    Everybody on the roster counts, including people who have left, because
+    "the account of somebody who has left" is one of the cases HK named.
+    Nothing is linked here; a person clicks.
+    """
+    found: dict[str, dict[str, Any]] = {}
+
+    email = (details.get("email") or "").strip().lower()
+    if email:
+        cursor.execute(
+            """
+            SELECT person.person_id, person.name, identity.kind
+              FROM org_identity identity
+              JOIN org_person person ON person.person_id = identity.person_id
+             WHERE lower(identity.value) = %s
+            """,
+            (email,),
+        )
+        for person_id, name, kind in cursor.fetchall():
+            found.setdefault(
+                person_id,
+                {"person_id": person_id, "name": name, "why": f"이메일 일치 ({kind})", "strength": 2},
+            )
+
+    for raw in (details.get("name"), details.get("nickname")):
+        name = (raw or "").strip()
+        if not name:
+            continue
+        cursor.execute(
+            """
+            SELECT DISTINCT person.person_id, person.name
+              FROM org_person person
+              LEFT JOIN org_person_state state ON state.person_id = person.person_id
+             WHERE replace(person.name, ' ', '') = replace(%(n)s, ' ', '')
+                OR lower(coalesce(state.nickname, '')) = lower(%(n)s)
+            """,
+            {"n": name},
+        )
+        for person_id, person_name in cursor.fetchall():
+            found.setdefault(
+                person_id,
+                {"person_id": person_id, "name": person_name, "why": "이름 일치", "strength": 1},
+            )
+
+    if not found:
+        return []
+    # Say where each candidate is and whether they have left, so the person
+    # deciding between two 김동현 can tell them apart without opening a tab.
+    cursor.execute(
+        """
+        SELECT DISTINCT ON (state.person_id)
+               state.person_id, state.status, state.department_raw, state.employment_type
+          FROM org_person_state state
+         WHERE state.person_id = ANY(%s) AND state.status <> 'absent_from_sheet'
+         ORDER BY state.person_id, state.observation_id DESC
+        """,
+        (list(found),),
+    )
+    for person_id, status, department, employment in cursor.fetchall():
+        found[person_id].update(
+            {"status": status, "department": department, "employment_type": employment}
+        )
+    return sorted(found.values(), key=lambda item: (-item["strength"], item["name"]))
+
+
 def list_unmapped(
     database_url: str, *, state: str = "open", limit: int = 100
 ) -> dict[str, Any]:
@@ -424,6 +507,8 @@ def list_unmapped(
             ]
             for account in rows:
                 account["details"] = account_details(cursor, account["kind"], account["value"])
+                if account["state"] == "open":
+                    account["candidates"] = owner_candidates(cursor, account["details"])
             cursor.execute(
                 "SELECT state, count(*), sum(events) FROM org_unmapped_account GROUP BY state"
             )

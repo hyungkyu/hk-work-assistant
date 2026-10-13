@@ -2622,6 +2622,21 @@
           }
           const actions = document.createElement('td');
           if (account.state === 'open') {
+            // 주인 후보 (HK, 2026-10-13): most of these are a second account
+            // of somebody already here. One click links it; nothing is linked
+            // without the click. 이메일 일치 is near-certain, 이름 일치 can be
+            // 동명이인 -- every match is listed and none is preselected.
+            (account.candidates || []).forEach((candidate) => {
+              const pick = document.createElement('button');
+              pick.className = candidate.strength >= 2 ? 'button primary' : 'button';
+              pick.style.cssText = 'display:block;margin:0 0 6px;text-align:left;white-space:normal';
+              const left = candidate.status === 'retired' ? ' · 퇴사' : '';
+              pick.textContent = `${candidate.name} — ${candidate.why}${left}`;
+              pick.title = [candidate.department, candidate.employment_type, candidate.person_id]
+                .filter(Boolean).join(' · ');
+              pick.addEventListener('click', () => resolveAccount(account, candidate.person_id, false));
+              actions.appendChild(pick);
+            });
             const input = document.createElement('input');
             input.placeholder = 'person_id';
             input.style.cssText = 'width:150px;padding:6px 8px;margin-right:6px';
