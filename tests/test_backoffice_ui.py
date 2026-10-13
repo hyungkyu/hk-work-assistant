@@ -900,3 +900,48 @@ def test_the_screen_can_be_narrowed_to_one_region(html: str, script: str) -> Non
     # Only regions that are on screen; a vendor with no region is not offered
     # as an empty option.
     assert "(data.rows || []).filter((r) => r.region).map((r) => r.region)" in script
+
+
+# ---------------------------------------------------- 정의되지 않은 함수 호출
+
+def test_every_function_the_page_calls_is_defined() -> None:
+    """`showPage('person')` was called from the person panel and defined
+    nowhere, so 「일자별 기록 보기」 threw and nothing noticed: the page loads,
+    every other test passes, and the one button does nothing. Found on
+    2026-10-13 while wiring the 주인 없는 계정 tile.
+
+    Checks the page's own camelCase calls against its own definitions --
+    functions, constants and parameters. Methods (`x.foo()`) and browser
+    globals are out of scope.
+    """
+    source = (STATIC / "admin.js").read_text(encoding="utf-8")
+    code = re.sub(r"//[^\n]*", "", source)
+    code = re.sub(r"'(?:\\.|[^'\\])*'", '""', code)
+    code = re.sub(r"`(?:\\.|[^`\\])*`", '""', code, flags=re.S)
+
+    called = set(re.findall(r"(?<![\w.$])([a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*)\s*\(", code))
+    defined = set(re.findall(r"function\s+([A-Za-z_$][\w$]*)", code))
+    defined |= set(re.findall(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=", code))
+    for params in re.findall(r"function\s*[\w$]*\s*\(([^)]*)\)", code) + re.findall(
+        r"\(([^()]*)\)\s*=>", code
+    ):
+        defined |= set(re.findall(r"[A-Za-z_$][\w$]*", params))
+    browser = {
+        "setTimeout", "setInterval", "clearTimeout", "clearInterval", "encodeURIComponent",
+        "decodeURIComponent", "parseInt", "parseFloat", "isNaN", "isFinite",
+        "requestAnimationFrame", "structuredClone",
+    }
+    assert sorted(called - defined - browser) == []
+
+
+def test_the_unowned_accounts_tile_is_the_owners_and_leads_to_the_queue() -> None:
+    """HK, 2026-10-13: 조직도에 최대한 누구로 추정되는지 ... 상호 링크가 되어
+    있으면 좋겠네. And the tile shows account ids, which are the owner's only."""
+    source = (STATIC / "admin.js").read_text(encoding="utf-8")
+    block = source[source.index("const unmapped = chart.unmapped_accounts"):]
+    block = block[: block.index("const tree = $('org-tree')")]
+    assert "isOwner()" in block
+    assert "goTo('unmapped')" in block
+    assert "orgUnmappedGuesses" in block
+    html = (STATIC / "admin.html").read_text(encoding="utf-8")
+    assert '<a href="#/org">← 조직도로</a>' in html

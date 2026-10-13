@@ -2041,11 +2041,19 @@
       return card;
     }
 
+    // Go to a screen the way the menu does: through the hash, which is the
+    // one path every navigation takes. `showPage` was called here and never
+    // defined, so 「일자별 기록 보기」 threw instead of opening the screen.
+    function goTo(page) {
+      const target = `#/${page}`;
+      if (location.hash === target) applyHash(); else location.hash = target;
+    }
+
     function openPersonDay(personId) {
       $('person-id').value = personId;
       if (!$('person-day').value) $('person-day').value = yesterdayKST();
       $('org-person-drawer').classList.add('hidden');
-      showPage('person');
+      goTo('person');
       runPersonDay();
     }
 
@@ -2285,10 +2293,18 @@
           Object.values(access).reduce((a, b) => a + b, 0), describe(access), 'var(--accent-2)'));
         tiles.appendChild(countTile('소속 구분', Object.keys(counts.by_affiliation || {}).length,
           describe(counts.by_affiliation || {})));
+        // 주인 없는 계정: account ids, so the owner's only (HK, 2026-10-13:
+        // 나만), and a door to the screen where they are answered. The
+        // guesses come from that screen's own data, so the two never
+        // disagree about who an account might be.
         const unmapped = chart.unmapped_accounts || [];
-        if (unmapped.length) {
-          tiles.appendChild(countTile('주인 없는 계정', unmapped.length,
-            unmapped.slice(0, 4).map((a) => `${a.kind} ${a.value}`).join(' · '), 'var(--warning)'));
+        if (unmapped.length && isOwner()) {
+          const tile = countTile('주인 없는 계정', unmapped.length, '추정하는 중…', 'var(--warning)');
+          tile.style.cursor = 'pointer';
+          tile.title = '다이제스트 → 미확인 계정에서 주인을 정합니다';
+          tile.addEventListener('click', () => goTo('unmapped'));
+          tiles.appendChild(tile);
+          orgUnmappedGuesses(tile.querySelector('p.help'));
         }
 
         const tree = $('org-tree');
@@ -2571,6 +2587,25 @@
       } catch (error) {
         line.textContent = `불러오지 못했습니다: ${error.message}`;
         $('person-badge').textContent = '조회 실패';
+      }
+    }
+
+    async function orgUnmappedGuesses(note) {
+      try {
+        const payload = await api('/api/v1/admin/org/unmapped?state=open&limit=200');
+        const accounts = payload.accounts || [];
+        const guessed = accounts.filter((account) => (account.candidates || []).length);
+        const shown = guessed.slice(0, 4).map((account) => {
+          const d = account.details || {};
+          const who = d.name || d.nickname || d.email || account.value;
+          const best = account.candidates[0];
+          return `${who} → ${best.name}${account.candidates.length > 1 ? ` 외 ${account.candidates.length - 1}` : ''}`;
+        });
+        note.textContent = `${guessed.length}개는 주인 후보가 있음`
+          + (shown.length ? ` · ${shown.join(' · ')}` : '')
+          + ' · 눌러서 정하기';
+      } catch (error) {
+        note.textContent = `후보를 읽지 못했습니다: ${error.message}`;
       }
     }
 
