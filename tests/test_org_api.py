@@ -109,8 +109,10 @@ def test_the_chart_names_the_sheet_it_comes_from(owner: FakeRequest, monkeypatch
 def test_every_reading_route_is_a_get_and_only_resolve_is_a_post() -> None:
     """A screen that could regenerate its own contents would break the protocol.
 
-    Refresh is the one deliberate exception: a person pressing a button, CSRF
-    and all, to run the same sync the batch runs.
+    Refresh is a deliberate exception: a person pressing a button, CSRF and
+    all, to run the same sync the batch runs. Building a day is the second
+    (HK, 2026-10-12: 클릭하면 디비에서 실시간 생성하면 되지 않아?) -- the same
+    build the nightly batch runs, owner-only, CSRF, for a day not yet built.
     """
     from rlwrld_worklog.web import app
 
@@ -127,6 +129,8 @@ def test_every_reading_route_is_a_get_and_only_resolve_is_a_post() -> None:
         "/api/v1/admin/org/unmapped/resolve": ["post"],
         "/api/v1/admin/org/digest/status": ["get"],
         "/api/v1/admin/org/digest/{person_id}": ["get"],
+        "/api/v1/admin/org/digest/{person_id}/range": ["get"],
+        "/api/v1/admin/org/digest/build": ["post"],
     }
 
 
@@ -154,8 +158,11 @@ def test_a_day_with_no_digest_says_it_was_not_built(owner: FakeRequest, monkeypa
         migrations_dir=repository / "sql" / "migrations",
         dry_run=False,
     )
-    body = org_web.person_day_route(owner, person_id="p_nobody", day="2026-09-10")
-    assert body == {"person_id": "p_nobody", "day": "2026-09-10", "built": False}
+    # A day no test's digests cover. 2026-09-10 used to be used here, and it
+    # is covered by other tests' rows -- which, once a quiet day stopped
+    # reading as unbuilt (2026-10-13), correctly made it a quiet day.
+    body = org_web.person_day_route(owner, person_id="p_nobody", day="2031-06-01")
+    assert body == {"person_id": "p_nobody", "day": "2031-06-01", "built": False, "quiet": False}
 
 
 @REQUIRES_DATABASE

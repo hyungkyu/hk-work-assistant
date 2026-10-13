@@ -1438,6 +1438,99 @@ def read_digest(database_url: str, person_id: str, day: date) -> dict[str, Any] 
     }
 
 
+# The longest range one request may ask for. A month is what "how has this
+# person's work gone lately" needs; a year of every event would be a page
+# nobody can read and a response nobody should wait for.
+MAX_RANGE_DAYS = 31
+
+
+def day_is_covered(database_url: str, day: date) -> bool:
+    """Whether the builder has run for this day at all.
+
+    The builder writes a row only for people who did something, so a person
+    with no row on a covered day had a quiet day -- not an unbuilt one.
+    Showing those two the same way is the mistake the 일자별 screen made
+    until 2026-10-13: a person with nothing on a Saturday read as 미생성.
+    """
+    import psycopg
+
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1 FROM person_day_digest WHERE day = %s LIMIT 1", (day,))
+            return cursor.fetchone() is not None
+
+
+def read_range(database_url: str, person_id: str, start: date, end: date) -> dict[str, Any]:
+    """One person's days from start to end, oldest first.
+
+    HK, 2026-10-12: 기간 별로도 볼 수 있게 해줘. Each day is one of three
+    things, and they stay three: built with activity, built and quiet, or
+    not built yet. Only the last can be fixed by building it.
+    """
+    import psycopg
+
+    if end < start:
+        raise ValueError("end is before start")
+    span = (end - start).days + 1
+    if span > MAX_RANGE_DAYS:
+        raise ValueError(f"at most {MAX_RANGE_DAYS} days at once ({span} asked)")
+
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT name FROM org_person WHERE person_id = %s", (person_id,))
+            found = cursor.fetchone()
+            if found is None:
+                raise LookupError(person_id)
+            name = found[0]
+            cursor.execute(
+                "SELECT DISTINCT day FROM person_day_digest WHERE day BETWEEN %s AND %s",
+                (start, end),
+            )
+            covered = {row[0] for row in cursor.fetchall()}
+            cursor.execute(
+                """
+                SELECT day, events_total, counts, events, truncated_at
+                  FROM person_day_digest
+                 WHERE person_id = %s AND day BETWEEN %s AND %s
+                """,
+                (person_id, start, end),
+            )
+            rows = {row[0]: row[1:] for row in cursor.fetchall()}
+
+    days = []
+    total = 0
+    day = start
+    while day <= end:
+        if day in rows:
+            events_total, counts, events, truncated_at = rows[day]
+            total += events_total or 0
+            days.append(
+                {
+                    "day": day.isoformat(),
+                    "state": "activity",
+                    "events_total": events_total,
+                    "counts": counts,
+                    "events": events,
+                    "truncated_at": truncated_at,
+                }
+            )
+        elif day in covered:
+            days.append({"day": day.isoformat(), "state": "quiet", "events_total": 0, "events": []})
+        else:
+            days.append({"day": day.isoformat(), "state": "unbuilt", "events_total": None, "events": []})
+        day += timedelta(days=1)
+
+    return {
+        "person_id": person_id,
+        "name": name,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "events_total": total,
+        "unbuilt": [entry["day"] for entry in days if entry["state"] == "unbuilt"],
+        "days": days,
+    }
+
+
 def digest_status(database_url: str) -> dict[str, Any]:
     """Which days have digests, and how far back they go."""
     import psycopg

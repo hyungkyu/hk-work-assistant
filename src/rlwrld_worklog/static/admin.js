@@ -2309,9 +2309,169 @@
       }
     }
 
+    function personEventsTable(events) {
+      const table = document.createElement('table');
+      table.className = 'audit';
+      const body_ = document.createElement('tbody');
+      events.forEach((event) => {
+        const row = document.createElement('tr');
+        const isMeeting = event.source === 'google_calendar' || event.source === 'google-calendar';
+        const meetingTitle = isMeeting
+          ? (event.where || (event.title ? `회의: ${event.title}` : '회의'))
+          : (event.title || event.excerpt || '제목 없음');
+        const values = [event.time, event.event_type, meetingTitle,
+          event.where || [event.container, event.thread].filter(Boolean).join(' · ')];
+        values.forEach((value, index) => {
+          const cell = document.createElement('td');
+          if (index === 2 && !event.title && !event.where && !event.excerpt) cell.style.color = '#6d7b8e';
+          if (index === 2 && !isMeeting && event.permalink) {
+            const link = document.createElement('a');
+            link.href = event.permalink;
+            link.target = '_blank';
+            link.rel = 'noopener';
+            link.textContent = value;
+            cell.appendChild(link);
+          } else {
+            cell.textContent = value || '';
+          }
+          if (index === 2 && isMeeting) {
+            const summary = event.note || event.excerpt;
+            if (summary) {
+              const note = document.createElement('p');
+              note.className = 'event-summary';
+              note.textContent = summary;
+              cell.appendChild(note);
+            }
+            const links = (event.links || []).filter((item) => item && item.url);
+            const notesLink = links.find((item) => item.title !== '회의 참여');
+            const actions = document.createElement('div');
+            actions.className = 'event-links';
+            if (notesLink) {
+              const link = document.createElement('a');
+              link.className = 'button';
+              link.href = notesLink.url;
+              link.target = '_blank';
+              link.rel = 'noopener';
+              link.textContent = '자세히 보기';
+              actions.appendChild(link);
+            } else if (summary) {
+              const button = document.createElement('button');
+              button.className = 'button';
+              button.type = 'button';
+              button.textContent = 'DB 내용 보기';
+              button.addEventListener('click', () => openEventDetail(meetingTitle, summary));
+              actions.appendChild(button);
+            }
+            if (actions.childNodes.length) cell.appendChild(actions);
+          }
+          row.appendChild(cell);
+        });
+        body_.appendChild(row);
+      });
+      table.appendChild(body_);
+      const scroll = document.createElement('div');
+      scroll.className = 'table-scroll';
+      scroll.appendChild(table);
+      return scroll;
+    }
+
+    // 지금 만들기 (HK, 2026-10-12: 클릭하면 디비에서 실시간 생성하면 되지
+    // 않아?). The whole day, for everyone, from the database: about a second.
+    // Meeting-note bodies come later -- they are not collected yet.
+    function personBuildButton(day, after) {
+      const wrap = document.createElement('div');
+      wrap.className = 'event-links';
+      if (!isOwner()) {
+        const note = document.createElement('p');
+        note.className = 'help';
+        note.textContent = '만들기는 관리자만 할 수 있습니다. 밤 배치가 만듭니다.';
+        wrap.appendChild(note);
+        return wrap;
+      }
+      const button = document.createElement('button');
+      button.className = 'button primary';
+      button.type = 'button';
+      button.textContent = `${day} 지금 만들기`;
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        button.textContent = '만드는 중…';
+        try {
+          const result = await api('/api/v1/admin/org/digest/build', {
+            method: 'POST',
+            body: JSON.stringify({ day }),
+          });
+          toast(`${day} · ${result.people_with_activity ?? 0}명 · ${result.events ?? 0}건 `
+            + `(${result.seconds ?? '?'}초)${result.partial ? ' · 오늘이라 진행 중인 하루' : ''}`);
+          await after();
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = `${day} 지금 만들기`;
+          toast(`만들지 못했습니다: ${error.message}`);
+        }
+      });
+      wrap.appendChild(button);
+      return wrap;
+    }
+
+    async function runPersonRange(personId, start, end) {
+      const line = $('person-state');
+      const host = $('person-events');
+      const body = await api(
+        `/api/v1/admin/org/digest/${encodeURIComponent(personId)}/range?start=${start}&end=${end}`
+      );
+      const title = document.createElement('h2');
+      title.textContent = body.name;
+      $('person-head').appendChild(title);
+
+      const counts = { activity: 0, quiet: 0, unbuilt: 0 };
+      (body.days || []).forEach((entry) => { counts[entry.state] += 1; });
+      const tiles = $('person-counts');
+      tiles.appendChild(countTile('합계', body.events_total || 0, `${start} ~ ${end}`));
+      tiles.appendChild(countTile('활동 있는 날', counts.activity, ''));
+      tiles.appendChild(countTile('조용한 날', counts.quiet, '만들어졌고 활동 없음'));
+      if (counts.unbuilt) tiles.appendChild(countTile('미생성', counts.unbuilt, '아래에서 만들 수 있음'));
+
+      // Newest first: in a period, what somebody is doing now is the question.
+      [...(body.days || [])].reverse().forEach((entry) => {
+        const section = document.createElement('details');
+        section.className = 'card';
+        section.style.marginTop = '10px';
+        section.open = entry.state === 'activity' && (entry.events_total || 0) <= 40;
+        const summary = document.createElement('summary');
+        summary.textContent = entry.state === 'activity'
+          ? `${entry.day} · ${entry.events_total}건`
+          : (entry.state === 'quiet' ? `${entry.day} · 활동 없음` : `${entry.day} · 미생성`);
+        section.appendChild(summary);
+        if (entry.state === 'activity') {
+          section.appendChild(personEventsTable(entry.events || []));
+        } else if (entry.state === 'unbuilt') {
+          section.appendChild(personBuildButton(entry.day, runPersonDay));
+        }
+        host.appendChild(section);
+      });
+
+      $('person-badge').textContent = `${body.events_total || 0}건`;
+      line.textContent = `${start} ~ ${end} (KST) · 최근 날짜부터 · 시간 순, 전부`
+        + (body.unbuilt && body.unbuilt.length ? ` · 미생성 ${body.unbuilt.length}일` : '');
+    }
+
     async function runPersonDay() {
       const personId = $('person-id').value.trim();
       const day = $('person-day').value;
+      const until = $('person-until').value;
+      if (personId && day && until && until > day) {
+        $('person-head').textContent = '';
+        $('person-counts').textContent = '';
+        $('person-events').textContent = '';
+        $('person-state').textContent = '불러오는 중…';
+        try {
+          await runPersonRange(personId, day, until);
+        } catch (error) {
+          $('person-state').textContent = `불러오지 못했습니다: ${error.message}`;
+          $('person-badge').textContent = '조회 실패';
+        }
+        return;
+      }
       const line = $('person-state');
       $('person-head').textContent = '';
       $('person-counts').textContent = '';
@@ -2322,9 +2482,14 @@
         const body = await api(`/api/v1/admin/org/digest/${encodeURIComponent(personId)}?day=${day}`);
         if (!body.built) {
           // 만들지 않은 날과 활동이 없던 날은 다른 답이다.
-          line.textContent = `${day} 의 다이제스트가 아직 만들어지지 않았습니다 — 활동이 없었다는 뜻이 아닙니다. `
-            + `배치가 만들거나 worklog digest --since 로 백필합니다.`;
+          line.textContent = `${day} 는 아직 만들어지지 않았습니다 — 활동이 없었다는 뜻이 아닙니다.`;
           $('person-badge').textContent = '미생성';
+          $('person-events').appendChild(personBuildButton(day, runPersonDay));
+          return;
+        }
+        if (body.quiet) {
+          line.textContent = `${day} (KST) 는 만들어진 날이고, 이 사람은 그날 수집된 활동이 없습니다.`;
+          $('person-badge').textContent = '0건';
           return;
         }
         const state = body.state || {};
@@ -2366,69 +2531,7 @@
           empty.textContent = '이 날은 수집된 활동이 없습니다. 「활동 없음」과 「수집 실패」는 다른 답이고, 이것은 전자입니다.';
           host.appendChild(empty);
         } else {
-          const table = document.createElement('table');
-          table.className = 'audit';
-          const body_ = document.createElement('tbody');
-          events.forEach((event) => {
-            const row = document.createElement('tr');
-            const isMeeting = event.source === 'google_calendar' || event.source === 'google-calendar';
-            const meetingTitle = isMeeting
-              ? (event.where || (event.title ? `회의: ${event.title}` : '회의'))
-              : (event.title || event.excerpt || '제목 없음');
-            const values = [event.time, event.event_type, meetingTitle,
-              event.where || [event.container, event.thread].filter(Boolean).join(' · ')];
-            values.forEach((value, index) => {
-              const cell = document.createElement('td');
-              if (index === 2 && !event.title && !event.where && !event.excerpt) cell.style.color = '#6d7b8e';
-              if (index === 2 && !isMeeting && event.permalink) {
-                const link = document.createElement('a');
-                link.href = event.permalink;
-                link.target = '_blank';
-                link.rel = 'noopener';
-                link.textContent = value;
-                cell.appendChild(link);
-              } else {
-                cell.textContent = value || '';
-              }
-              if (index === 2 && isMeeting) {
-                const summary = event.note || event.excerpt;
-                if (summary) {
-                  const note = document.createElement('p');
-                  note.className = 'event-summary';
-                  note.textContent = summary;
-                  cell.appendChild(note);
-                }
-                const links = (event.links || []).filter((item) => item && item.url);
-                const notesLink = links.find((item) => item.title !== '회의 참여');
-                const actions = document.createElement('div');
-                actions.className = 'event-links';
-                if (notesLink) {
-                  const link = document.createElement('a');
-                  link.className = 'button';
-                  link.href = notesLink.url;
-                  link.target = '_blank';
-                  link.rel = 'noopener';
-                  link.textContent = '자세히 보기';
-                  actions.appendChild(link);
-                } else if (summary) {
-                  const button = document.createElement('button');
-                  button.className = 'button';
-                  button.type = 'button';
-                  button.textContent = 'DB 내용 보기';
-                  button.addEventListener('click', () => openEventDetail(meetingTitle, summary));
-                  actions.appendChild(button);
-                }
-                if (actions.childNodes.length) cell.appendChild(actions);
-              }
-              row.appendChild(cell);
-            });
-            body_.appendChild(row);
-          });
-          table.appendChild(body_);
-          const scroll = document.createElement('div');
-          scroll.className = 'table-scroll';
-          scroll.appendChild(table);
-          host.appendChild(scroll);
+          host.appendChild(personEventsTable(events));
         }
         $('person-badge').textContent = `${body.events_total || 0}건`;
         line.textContent = `${body.day} (KST) · ${new Date(body.generated_at).toLocaleString()} 에 `

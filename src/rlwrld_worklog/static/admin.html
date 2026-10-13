@@ -378,12 +378,15 @@
 
       <section class="page" id="page-person">
         <h1>일자별</h1>
-        <p class="lead">한 사람의 하루를 시간 순으로 전부 보여줍니다. 고르지 않고 요약하지 않으며, 이 경로에 모델은 없습니다.</p>
+        <p class="lead">한 사람의 하루, 또는 기간을 시간 순으로 전부 보여줍니다. 고르지 않고 요약하지 않으며, 이 경로에 모델은 없습니다.
+           아직 만들지 않은 날은 그 자리에서 만들 수 있습니다.</p>
         <article class="card">
           <div class="collection-toolbar">
             <div class="work-filters">
               <input id="person-id" placeholder="person_id (조직도에서 사람을 열고 일자별 기록 보기를 누르면 채워집니다)" style="min-width:280px">
-              <input id="person-day" type="date">
+              <input id="person-day" type="date" title="시작 날짜 (하루만 볼 때는 이 날짜만)">
+              <span class="help" style="align-self:center">~</span>
+              <input id="person-until" type="date" title="끝 날짜. 비우면 하루만 봅니다 (최대 31일)">
               <button class="button primary" id="person-run">보기</button>
             </div>
             <span class="badge" id="person-badge">-</span>

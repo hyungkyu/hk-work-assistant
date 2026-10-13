@@ -203,9 +203,74 @@ def person_day_route(
     way would make an unbuilt backfill look like a quiet week.
     """
     require_page_access("org")(request)
-    from .digest import read_digest
+    from .digest import day_is_covered, read_digest
 
-    found = read_digest(_database_url(), person_id, date.fromisoformat(day))
+    database_url = _database_url()
+    found = read_digest(database_url, person_id, date.fromisoformat(day))
     if found is None:
-        return {"person_id": person_id, "day": day, "built": False}
+        # The builder writes rows only for people who did something, so no
+        # row on a built day is a quiet day. It used to be reported as 미생성,
+        # which sent people to build a day that was already built.
+        quiet = day_is_covered(database_url, date.fromisoformat(day))
+        return {"person_id": person_id, "day": day, "built": quiet, "quiet": quiet}
     return {"built": True, **found}
+
+
+@router.get("/digest/{person_id}/range")
+def person_range_route(
+    request: Request,
+    person_id: str,
+    start: Annotated[str, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")],
+    end: Annotated[str, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")],
+) -> dict[str, Any]:
+    """A person's days over a period. HK, 2026-10-12: 기간 별로도 볼 수 있게."""
+    require_page_access("org")(request)
+    from .digest import read_range
+
+    try:
+        return read_range(
+            _database_url(), person_id, date.fromisoformat(start), date.fromisoformat(end)
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=f"no such person: {person_id}") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+class BuildDay(BaseModel):
+    day: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+@router.post("/digest/build")
+def build_day_route(request: Request, payload: BuildDay) -> dict[str, Any]:
+    """Build one day now, from the database alone.
+
+    HK, 2026-10-12: 클릭하면 디비에서 실시간 생성하면 되지 않아? It does --
+    a whole day for every person measured 1.2 seconds -- and it builds the
+    whole day rather than one person, because "the day ran" is decided by
+    whether any row exists for it: a single person's row would make the
+    nightly catch-up skip everybody else.
+
+    No Google Drive here, so meeting-note bodies are left out until those
+    are collected with the calendar instead of fetched at build time.
+    Owner only: it writes, and it rewrites what the nightly batch built.
+    """
+    current = require_super_admin_session(request)
+    _require_csrf(request, current)
+    from datetime import datetime, timedelta, timezone
+
+    from .digest import build_day
+
+    day = date.fromisoformat(payload.day)
+    today = (datetime.now(timezone.utc) + timedelta(hours=9)).date()
+    if day > today:
+        raise HTTPException(status_code=400, detail="a day that has not happened yet")
+    result = build_day(_database_url(), day).as_dict()
+    return {
+        "day": payload.day,
+        "partial": day == today,
+        "people_with_activity": result.get("people_with_activity"),
+        "events": result.get("events"),
+        "seconds": result.get("seconds"),
+        "errors": result.get("errors"),
+    }
