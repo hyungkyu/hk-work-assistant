@@ -1988,6 +1988,18 @@
       sub.textContent = [nickname, person.employment_type || person.title]
         .filter(Boolean).join(' · ');
       card.append(name, sub);
+      // A departed card says when the roster first said so. The sheet has
+      // no leaving date, and a departure older than the first sync says
+      // that instead of borrowing the sync's date.
+      if (person.departure) {
+        const when = document.createElement('small');
+        when.style.color = 'var(--muted)';
+        when.textContent = person.departed_before_first_sync
+          ? '첫 동기화 이전부터'
+          : (person.departed_seen_at
+            ? `${new Date(person.departed_seen_at).toLocaleDateString()} 확인` : '확인 시점 미상');
+        card.appendChild(when);
+      }
       (extra || []).forEach((line) => {
         const more = document.createElement('small');
         more.style.color = 'var(--muted)';
@@ -2178,19 +2190,21 @@
         host.appendChild(empty);
         return;
       }
+      // Drawn as the chart is drawn (HK, 2026-10-13: 퇴사/연구계약 종료도
+      // 조직도 형태로): where somebody was is the useful thing about
+      // somebody who left, and a flat grid hid it.
       (departed.bands || []).forEach((band) => {
         if (!band.people) return;
+        host.appendChild(orgBandLabel(band.name, band.people));
+        const tree = (departed.trees || {})[band.name];
+        if (tree && tree.length) {
+          orgGroups(tree, host);
+          return;
+        }
         const grid = orgGrid();
-        members.filter((person) => person.departure === band.name).forEach((person) => {
-          const where = person.departure === '연구계약종료' && person.advisor
-            ? person.advisor : (person.department_raw || '소속 미상');
-          const when = person.departed_before_first_sync
-            ? '첫 동기화 이전부터'
-            : (person.departed_seen_at
-              ? `${new Date(person.departed_seen_at).toLocaleDateString()} 확인` : '확인 시점 미상');
-          grid.appendChild(orgPersonCard(person, [where, when]));
-        });
-        host.append(orgBandLabel(band.name, band.people), grid);
+        members.filter((person) => person.departure === band.name)
+          .forEach((person) => grid.appendChild(orgPersonCard(person)));
+        host.appendChild(grid);
       });
     }
 

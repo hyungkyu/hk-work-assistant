@@ -136,6 +136,11 @@ def place_professors(people: list[dict]) -> list[str]:
         if lab:
             person["chart_path"] = [LAB_ROOT, lab]
         else:
+            # A lab with no students listed is still a lab (HK, 2026-10-13:
+            # 김용재 교수님은 학생이 없어도 연구실로 표기해줘). The node is named
+            # the way students name their advisor, so when somebody joins
+            # and writes it, they land on this node rather than a new one.
+            person["chart_path"] = [LAB_ROOT, f"{person.get('name')} 교수님"]
             unmatched.append(str(person.get("name")))
     return unmatched
 
@@ -413,12 +418,22 @@ def departed_block(people: list[dict], since: dict[str, tuple]) -> dict[str, Any
         {"name": band, "people": sum(1 for person in members if person["departure"] == band)}
         for band in DEPARTED_ORDER
     ]
-    return {"people": len(members), "bands": bands, "members": members}
+    # The same shape as the live chart, per band (HK, 2026-10-13: 퇴사/연구계약
+    # 종료도 조직도 형태로 표시해주고). Where somebody was is the useful thing
+    # about somebody who left, and a flat list hid it.
+    trees = {
+        band: build_tree([person for person in members if person["departure"] == band])
+        for band in DEPARTED_ORDER
+    }
+    return {"people": len(members), "bands": bands, "members": members, "trees": trees}
 
 
 # The two tabs, as the chart names them for 원소속 / 겸소속.
 COMPANY_SOURCE = "roster_seed_2"
 LAB_SOURCE = "roster_seed_ext"
+# The one engagement that makes the company 원소속 for somebody on both tabs.
+# Everything else -- 인턴, 방문 연구원, 계약직 -- leaves the school as home.
+EMPLOYED_OUTRIGHT = "정규직"
 
 
 def latest_observations(cursor) -> dict[str, int]:
@@ -540,13 +555,22 @@ def org_chart(database_url: str, *, include_retired: bool = False) -> dict[str, 
         lab = rows_of_one.get(LAB_SOURCE)
         if not (company and lab):
             continue
-        company["affiliation_role"] = "원소속"
-        company["also_at"] = " | ".join(lab["chart_path"][1:]) or lab["chart_path"][0]
-        lab["affiliation_role"] = "겸소속"
-        lab["also_at"] = " | ".join(company["chart_path"][1:]) or company["chart_path"][0]
+        # Which side is home depends on how the company engages them (HK,
+        # 2026-10-13: 인턴/방문연구원은 학교가 원소속 ... 명규는 회사가 원소속,
+        # 회사 정규직이거든). An intern or a visiting researcher is a student
+        # first; somebody the company employs outright is the company's.
+        company_is_home = _folded(company.get("employment_type")) == _folded(EMPLOYED_OUTRIGHT)
+        home, away = (company, lab) if company_is_home else (lab, company)
+        home["affiliation_role"] = "원소속"
+        away["affiliation_role"] = "겸소속"
+        home["also_at"] = " | ".join(away["chart_path"][1:]) or away["chart_path"][0]
+        away["also_at"] = " | ".join(home["chart_path"][1:]) or home["chart_path"][0]
 
     unmatched = place_professors(people)
     annotate(people)
+    # The departed are drawn as a tree too now, which needs the same grouping
+    # fields the live chart's members carry.
+    annotate(departed)
     since: dict[str, tuple] = {}
     if departed:
         with psycopg.connect(database_url) as connection:

@@ -167,6 +167,8 @@ def test_a_person_on_both_tabs_is_marked_primary_and_concurrent() -> None:
     # Left the lab, now on staff: a lab row marked absent. Not 겸직, and the
     # case that matters -- without the absent filter they would be called it.
     graduated = f"p_cc_{uuid.uuid4().hex[:8]}"
+    # 정규직 on the company tab and in a lab: the company is home (HK: 명규).
+    employed = f"p_cc_{uuid.uuid4().hex[:8]}"
     observations = []
     try:
         with psycopg.connect(url) as connection, connection.cursor() as cursor:
@@ -184,11 +186,13 @@ def test_a_person_on_both_tabs_is_marked_primary_and_concurrent() -> None:
                 if source == "roster_seed_2":
                     cursor.execute(
                         "INSERT INTO org_person (person_id, name, first_seen, last_seen) "
-                        "VALUES (%s,'겸직자',%s,%s), (%s,'한쪽만',%s,%s), (%s,'졸업생',%s,%s)",
+                        "VALUES (%s,'겸직자',%s,%s), (%s,'한쪽만',%s,%s), (%s,'졸업생',%s,%s), "
+                        "(%s,'정규직겸직',%s,%s)",
                         (
                             person, observation, observation,
                             alone, observation, observation,
                             graduated, observation, observation,
+                            employed, observation, observation,
                         ),
                     )
                     for someone in (alone, graduated):
@@ -205,12 +209,17 @@ def test_a_person_on_both_tabs_is_marked_primary_and_concurrent() -> None:
                         "(%s,%s,'student','limited','absent_from_sheet',%s)",
                         (observation, graduated, dept),
                     )
-                cursor.execute(
-                    "INSERT INTO org_person_state (observation_id, person_id, affiliation, "
-                    "access_level, status, department_raw, advisor) VALUES "
-                    "(%s,%s,%s,'staff_equivalent','active',%s,%s)",
-                    (observation, person, affiliation, dept, "주한별" if affiliation == "student" else None),
-                )
+                for someone, engaged in ((person, "방문 연구원"), (employed, "정규직")):
+                    cursor.execute(
+                        "INSERT INTO org_person_state (observation_id, person_id, affiliation, "
+                        "access_level, status, department_raw, advisor, employment_type) VALUES "
+                        "(%s,%s,%s,'staff_equivalent','active',%s,%s,%s)",
+                        (
+                            observation, someone, affiliation, dept,
+                            "주한별" if affiliation == "student" else None,
+                            engaged if affiliation == "internal" else None,
+                        ),
+                    )
             connection.commit()
 
         chart = org_chart(url)
@@ -221,26 +230,41 @@ def test_a_person_on_both_tabs_is_marked_primary_and_concurrent() -> None:
                 yield from cards(node.get("children", []))
 
         everyone = [
-            card for card in cards(chart["tree"]) if card["person_id"] in (person, alone, graduated)
+            card for card in cards(chart["tree"])
+            if card["person_id"] in (person, alone, graduated, employed)
         ]
         roles = sorted(
             (card["source"], card.get("affiliation_role")) for card in everyone if card["person_id"] == person
         )
-        assert roles == [("roster_seed_2", "원소속"), ("roster_seed_ext", "겸소속")]
+        # A visiting researcher is a student first (HK, 2026-10-13: 인턴/방문
+        # 연구원은 학교가 원소속) ...
+        assert roles == [("roster_seed_2", "겸소속"), ("roster_seed_ext", "원소속")]
+        # ... and somebody the company employs outright is the company's.
+        employed_roles = sorted(
+            (card["source"], card.get("affiliation_role"))
+            for card in everyone
+            if card["person_id"] == employed
+        )
+        assert employed_roles == [("roster_seed_2", "원소속"), ("roster_seed_ext", "겸소속")]
         assert all(
             card.get("affiliation_role") is None
             for card in everyone
             if card["person_id"] in (alone, graduated)
         ), "on one tab only -- including somebody who left the other -- is marked nothing"
-        lab = next(card for card in everyone if card.get("affiliation_role") == "겸소속")
+        lab = next(
+            card for card in everyone
+            if card["person_id"] == person and card["source"] == "roster_seed_ext"
+        )
         assert "Model Team" in lab["also_at"], "the lab card names the company place"
     finally:
         with psycopg.connect(url) as connection, connection.cursor() as cursor:
             cursor.execute(
-                "DELETE FROM org_person_state WHERE person_id = ANY(%s)", ([person, alone, graduated],)
+                "DELETE FROM org_person_state WHERE person_id = ANY(%s)",
+                ([person, alone, graduated, employed],),
             )
             cursor.execute(
-                "DELETE FROM org_person WHERE person_id = ANY(%s)", ([person, alone, graduated],)
+                "DELETE FROM org_person WHERE person_id = ANY(%s)",
+                ([person, alone, graduated, employed],),
             )
             cursor.execute(
                 "DELETE FROM roster_observation WHERE observation_id = ANY(%s)", (observations,)

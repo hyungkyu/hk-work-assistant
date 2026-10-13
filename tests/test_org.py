@@ -189,14 +189,22 @@ def test_a_professor_is_placed_on_the_lab_named_after_them() -> None:
     assert people[0]["chart_path"] == [LAB_ROOT, "주한별 교수님"]
 
 
-def test_a_professor_whose_lab_has_no_students_is_reported_not_filed_by_guess() -> None:
-    """Either a lab with nobody in the sheet yet, or two tabs spelling one name."""
+def test_a_professor_whose_lab_has_no_students_still_gets_a_lab_and_is_reported() -> None:
+    """HK, 2026-10-13: 김용재 교수님은 학생이 없어도 연구실로 표기해줘.
+
+    Until then such a professor was left loose under the root, on the grounds
+    that it might be a spelling difference between the tabs. A lab with no
+    students yet is the commoner case and the one HK named, so it gets its
+    own node -- named the way students name an advisor, so the first student
+    who writes it lands there. It is still reported, because the spelling
+    case has not gone away.
+    """
     people = [
         _person("임종우", [LAB_ROOT], affiliation="professor"),
         _person("학생하나", [LAB_ROOT, "주한별 교수님"], affiliation="student"),
     ]
     assert place_professors(people) == ["임종우"]
-    assert people[0]["chart_path"] == [LAB_ROOT]
+    assert people[0]["chart_path"] == [LAB_ROOT, "임종우 교수님"]
 
 
 def test_honorifics_and_spacing_do_not_stop_a_professor_matching_their_lab() -> None:
@@ -823,3 +831,33 @@ def test_a_profile_lists_where_the_record_starts_and_then_only_changes() -> None
     assert [entry["observed_at"] for entry in entries] == ["d1", "d3", "d4"]
     assert entries[1]["changes"] == [{"field": "department_raw", "before": "A", "after": "B"}]
     assert entries[2]["changes"][0]["field"] == "status"
+
+
+def test_the_departed_are_drawn_as_a_tree_per_band() -> None:
+    """HK, 2026-10-13: 퇴사/연구계약 종료도 조직도 형태로 표시해주고.
+
+    Where somebody was is the useful thing about somebody who left; a flat
+    grid hid it. Each band gets the same tree the live chart gets.
+    """
+    from rlwrld_worklog.org.chart import COMPANY_ROOT, annotate, departed_block
+
+    people = [
+        {"person_id": "a", "name": "가", "chart_path": [COMPANY_ROOT, "Model Team"],
+         "affiliation": "internal", "status": "retired"},
+        {"person_id": "b", "name": "나", "chart_path": [COMPANY_ROOT, "Platform Team"],
+         "affiliation": "internal", "status": "retired"},
+        {"person_id": "c", "name": "다", "chart_path": [LAB_ROOT, "주한별 교수님"],
+         "affiliation": "student", "status": "retired"},
+    ]
+    annotate(people)
+    block = departed_block(people, {})
+
+    company = block["trees"]["퇴사"]
+    assert [node["name"] for node in company] == [COMPANY_ROOT]
+    assert sorted(child["name"] for child in company[0]["children"]) == [
+        "Model Team",
+        "Platform Team",
+    ]
+    lab = block["trees"]["연구계약종료"]
+    assert lab[0]["children"][0]["name"] == "주한별 교수님"
+    assert lab[0]["children"][0]["members"][0]["name"] == "다"
