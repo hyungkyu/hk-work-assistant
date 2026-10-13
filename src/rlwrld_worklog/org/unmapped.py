@@ -290,104 +290,203 @@ def _text(value: Any) -> str | None:
 
 
 def account_details(cursor, kind: str, value: str) -> dict[str, Any]:
-    """Everything already collected that says who an account might be.
+    """Everything already collected that says who one account might be."""
+    return accounts_details(cursor, [(kind, value)])[(kind, value)]
+
+
+def accounts_details(cursor, accounts: list[tuple[str, str]]) -> dict[tuple[str, str], dict[str, Any]]:
+    """What the sources say about many accounts, in a handful of queries.
 
     HK, 2026-10-13: 주인없는 계정은 구체적으로 이메일, 이름, 닉네임, 슬랙
     아이디, 노션 아이디, 슬럼 아이디, 깃헙 아이디 등을 구체적으로 알려주시면
     좋겠어. 내가 그걸 매핑할거야.
 
-    The queue used to show a bare handle and a count -- U07EKRU6F7H, 212
-    events -- which is a question nobody can answer. Slack and Notion keep a
-    profile for every account (name, display name, email), and every source
-    records where the account was active; together that is usually enough
-    for a person to say who it is. Nothing here is a guess at the answer:
-    it is what the sources said, shown so a person can decide.
+    Slack and Notion keep a profile for every account (name, display name,
+    email); every source records where an account was active. Nothing here
+    is a guess at the answer: it is what the sources said.
+
+    Batched, because the first version asked per account and the 미확인 계정
+    screen took long enough to complain about (HK, same day: 이 페이지가 너무
+    느린데?). Two hundred accounts each scanned timeline_events by an actor
+    column that had no index -- two hundred full scans of the largest table
+    here. Now: one query per source for profiles, one indexed query for
+    where everybody was active, whatever the number of accounts.
     """
-    details: dict[str, Any] = {"handle": value, "kind": kind}
-
-    if kind == "slack":
-        cursor.execute(
-            """
-            SELECT raw_payload FROM ledger_records
-             WHERE source = 'slack' AND entity_type = 'user'
-               AND regexp_replace(source_entity_id, '^.*:', '') = %s
-             ORDER BY collected_at DESC LIMIT 1
-            """,
-            (value,),
-        )
-        row = cursor.fetchone()
-        payload = row[0] if row and isinstance(row[0], dict) else {}
-        profile = payload.get("profile") if isinstance(payload.get("profile"), dict) else {}
-        details.update(
-            {
-                "name": _text(profile.get("real_name") or payload.get("real_name")),
-                "nickname": _text(profile.get("display_name")),
-                "email": _text(profile.get("email")),
-                "title": _text(profile.get("title")),
-                "username": _text(payload.get("name")),
-                "bot": bool(payload.get("is_bot")) or None,
-                "deactivated": bool(payload.get("deleted")) or None,
-            }
-        )
-    elif kind == "notion":
-        cursor.execute(
-            """
-            SELECT raw_payload FROM ledger_records
-             WHERE source = 'notion' AND entity_type = 'user'
-               AND (source_entity_id = %(v)s OR source_entity_id LIKE '%%:' || %(v)s)
-             ORDER BY collected_at DESC LIMIT 1
-            """,
-            {"v": value},
-        )
-        row = cursor.fetchone()
-        payload = row[0] if row and isinstance(row[0], dict) else {}
-        person = payload.get("person") if isinstance(payload.get("person"), dict) else {}
-        details.update(
-            {
-                "name": _text(payload.get("name")),
-                "email": _text(person.get("email")),
-                "bot": (payload.get("type") == "bot") or None,
-            }
-        )
-    elif kind in EMAIL_KINDS:
-        details["email"] = value
-
-    # Where it was active. The channel or repository somebody works in is
-    # often what gives them away, and it is the one hint every source has.
-    source = {"slack": "slack", "github": "github", "notion": "notion", "slurm": "slurm"}.get(kind)
-    places: list[dict[str, Any]] = []
-    if source:
-        cursor.execute(
-            """
-            SELECT container_id, count(*) AS events
-              FROM timeline_events
-             WHERE source = %s AND actor_external_id = %s AND container_id IS NOT NULL
-             GROUP BY container_id
-             ORDER BY events DESC
-             LIMIT 3
-            """,
-            (source, value),
-        )
-        for container, events in cursor.fetchall():
-            label = None
-            if source == "slack":
-                cursor.execute(
-                    """
-                    SELECT denormalized_label_snapshot FROM ledger_records
-                     WHERE source = 'slack' AND entity_type = 'conversation'
-                       AND regexp_replace(source_entity_id, '^.*:', '') = %s
-                     ORDER BY collected_at DESC LIMIT 1
-                    """,
-                    (container,),
-                )
-                found = cursor.fetchone()
-                snapshot = found[0] if found and isinstance(found[0], dict) else {}
-                label = _text(snapshot.get("name"))
-            places.append({"where": f"#{label}" if label else container, "events": events})
-    details["places"] = places
-    return {key: item for key, item in details.items() if item not in (None, [], "")} | {
-        "places": places
+    out: dict[tuple[str, str], dict[str, Any]] = {
+        (kind, value): {"handle": value, "kind": kind} for kind, value in accounts
     }
+    by_kind: dict[str, list[str]] = {}
+    for kind, value in accounts:
+        by_kind.setdefault(kind, []).append(value)
+
+    slack = by_kind.get("slack") or []
+    if slack:
+        cursor.execute(
+            """
+            SELECT DISTINCT ON (handle) handle, raw_payload
+              FROM (
+                SELECT regexp_replace(source_entity_id, '^.*:', '') AS handle,
+                       raw_payload, collected_at
+                  FROM ledger_records
+                 WHERE source = 'slack' AND entity_type = 'user'
+              ) users
+             WHERE handle = ANY(%s)
+             ORDER BY handle, collected_at DESC
+            """,
+            (slack,),
+        )
+        for handle, payload in cursor.fetchall():
+            payload = payload if isinstance(payload, dict) else {}
+            profile = payload.get("profile") if isinstance(payload.get("profile"), dict) else {}
+            out[("slack", handle)].update(
+                {
+                    "name": _text(profile.get("real_name") or payload.get("real_name")),
+                    "nickname": _text(profile.get("display_name")),
+                    "email": _text(profile.get("email")),
+                    "title": _text(profile.get("title")),
+                    "username": _text(payload.get("name")),
+                    "bot": bool(payload.get("is_bot")) or None,
+                    "deactivated": bool(payload.get("deleted")) or None,
+                    # Slack does not say who made a bot; the app it belongs
+                    # to is the most it gives, and often names the service.
+                    "app": _text(profile.get("api_app_id")) if payload.get("is_bot") else None,
+                }
+            )
+
+    notion = by_kind.get("notion") or []
+    if notion:
+        cursor.execute(
+            """
+            SELECT DISTINCT ON (handle) handle, raw_payload
+              FROM (
+                SELECT regexp_replace(source_entity_id, '^.*:', '') AS handle,
+                       raw_payload, collected_at
+                  FROM ledger_records
+                 WHERE source = 'notion' AND entity_type = 'user'
+              ) users
+             WHERE handle = ANY(%s)
+             ORDER BY handle, collected_at DESC
+            """,
+            (notion,),
+        )
+        for handle, payload in cursor.fetchall():
+            payload = payload if isinstance(payload, dict) else {}
+            person = payload.get("person") if isinstance(payload.get("person"), dict) else {}
+            bot = payload.get("bot") if isinstance(payload.get("bot"), dict) else {}
+            owner = bot.get("owner") if isinstance(bot.get("owner"), dict) else {}
+            owner_user = owner.get("user") if isinstance(owner.get("user"), dict) else {}
+            owner_person = (
+                owner_user.get("person") if isinstance(owner_user.get("person"), dict) else {}
+            )
+            out[("notion", handle)].update(
+                {
+                    "name": _text(payload.get("name")),
+                    "email": _text(person.get("email")),
+                    "bot": (payload.get("type") == "bot") or None,
+                    # A Notion bot names who made it (HK, 2026-10-13: 봇은 봇을
+                    # 만든 사람이 있을 것 같고). Usually only the id; the name
+                    # and email are filled in below from that user's record.
+                    "owner_notion_id": _text(owner_user.get("id")),
+                    "owner_name": _text(owner_user.get("name")),
+                    "owner_email": _text(owner_person.get("email")),
+                    "workspace_bot": (owner.get("type") == "workspace") or None,
+                }
+            )
+
+    owners = sorted(
+        {
+            details["owner_notion_id"]
+            for details in out.values()
+            if details.get("owner_notion_id") and not details.get("owner_name")
+        }
+    )
+    if owners:
+        cursor.execute(
+            """
+            SELECT DISTINCT ON (handle) handle, raw_payload
+              FROM (
+                SELECT regexp_replace(source_entity_id, '^.*:', '') AS handle,
+                       raw_payload, collected_at
+                  FROM ledger_records
+                 WHERE source = 'notion' AND entity_type = 'user'
+              ) users
+             WHERE handle = ANY(%s)
+             ORDER BY handle, collected_at DESC
+            """,
+            (owners,),
+        )
+        found = {}
+        for handle, payload in cursor.fetchall():
+            payload = payload if isinstance(payload, dict) else {}
+            person = payload.get("person") if isinstance(payload.get("person"), dict) else {}
+            found[handle] = (_text(payload.get("name")), _text(person.get("email")))
+        for details in out.values():
+            name, email = found.get(details.get("owner_notion_id") or "", (None, None))
+            details["owner_name"] = details.get("owner_name") or name
+            details["owner_email"] = details.get("owner_email") or email
+
+    for kind in EMAIL_KINDS:
+        for value in by_kind.get(kind) or []:
+            out[(kind, value)]["email"] = value
+
+    # Where each was active, in one indexed query (0021). The channel or
+    # repository somebody works in is often what gives them away.
+    source_of = {"slack": "slack", "github": "github", "notion": "notion", "slurm": "slurm"}
+    pairs = [(source_of[kind], value) for kind, value in accounts if kind in source_of]
+    places: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    if pairs:
+        cursor.execute(
+            """
+            SELECT source, actor_external_id, container_id, count(*) AS events
+              FROM timeline_events
+             WHERE (source, actor_external_id) IN (
+                       SELECT * FROM unnest(%s::text[], %s::text[]))
+               AND container_id IS NOT NULL
+             GROUP BY source, actor_external_id, container_id
+            """,
+            ([pair[0] for pair in pairs], [pair[1] for pair in pairs]),
+        )
+        for source, actor, container, events in cursor.fetchall():
+            places.setdefault((source, actor), []).append({"where": container, "events": events})
+
+    channels = sorted(
+        {item["where"] for (source, _), rows in places.items() if source == "slack" for item in rows}
+    )
+    names: dict[str, str] = {}
+    if channels:
+        cursor.execute(
+            """
+            SELECT DISTINCT ON (handle) handle, denormalized_label_snapshot
+              FROM (
+                SELECT regexp_replace(source_entity_id, '^.*:', '') AS handle,
+                       denormalized_label_snapshot, collected_at
+                  FROM ledger_records
+                 WHERE source = 'slack' AND entity_type = 'conversation'
+              ) conversations
+             WHERE handle = ANY(%s)
+             ORDER BY handle, collected_at DESC
+            """,
+            (channels,),
+        )
+        for handle, snapshot in cursor.fetchall():
+            label = _text((snapshot or {}).get("name")) if isinstance(snapshot, dict) else None
+            if label:
+                names[handle] = label
+
+    for kind, value in accounts:
+        found = sorted(
+            places.get((source_of.get(kind, ""), value), []), key=lambda item: -item["events"]
+        )[:3]
+        shown = [
+            {"where": f"#{names[item['where']]}" if kind == "slack" and item["where"] in names
+             else item["where"], "events": item["events"]}
+            for item in found
+        ]
+        details = out[(kind, value)]
+        out[(kind, value)] = {
+            key: item for key, item in details.items() if item not in (None, [], "")
+        } | {"places": shown}
+    return out
 
 
 def owner_candidates(cursor, details: dict[str, Any]) -> list[dict[str, Any]]:
@@ -452,6 +551,41 @@ def owner_candidates(cursor, details: dict[str, Any]) -> list[dict[str, Any]]:
                 {"person_id": person_id, "name": person_name, "why": "이름 일치", "strength": 1},
             )
 
+    # A bot's maker (Notion says who). Its activity is that person's doing,
+    # which is a reading HK may or may not want -- offered, never applied.
+    owner_id = details.get("owner_notion_id")
+    if owner_id:
+        cursor.execute(
+            """
+            SELECT person.person_id, person.name
+              FROM org_identity identity
+              JOIN org_person person ON person.person_id = identity.person_id
+             WHERE identity.kind = 'notion' AND identity.value = %s
+            """,
+            (owner_id,),
+        )
+        for person_id, name in cursor.fetchall():
+            found.setdefault(
+                person_id,
+                {"person_id": person_id, "name": name, "why": "봇을 만든 사람", "strength": 1},
+            )
+    owner_email = (details.get("owner_email") or "").strip().lower()
+    if owner_email:
+        cursor.execute(
+            """
+            SELECT person.person_id, person.name
+              FROM org_identity identity
+              JOIN org_person person ON person.person_id = identity.person_id
+             WHERE lower(identity.value) = %s
+            """,
+            (owner_email,),
+        )
+        for person_id, name in cursor.fetchall():
+            found.setdefault(
+                person_id,
+                {"person_id": person_id, "name": name, "why": "봇을 만든 사람", "strength": 1},
+            )
+
     if not found:
         return []
     # Say where each candidate is and whether they have left, so the person
@@ -505,8 +639,9 @@ def list_unmapped(
                 }
                 for row in cursor.fetchall()
             ]
+            details = accounts_details(cursor, [(row["kind"], row["value"]) for row in rows])
             for account in rows:
-                account["details"] = account_details(cursor, account["kind"], account["value"])
+                account["details"] = details[(account["kind"], account["value"])]
                 if account["state"] == "open":
                     account["candidates"] = owner_candidates(cursor, account["details"])
             cursor.execute(

@@ -2665,11 +2665,16 @@
           const who = [d.name, d.nickname && d.nickname !== d.name ? `(${d.nickname})` : null, d.title]
             .filter(Boolean).join(' ');
           const flags = [d.bot ? '봇' : null, d.deactivated ? '비활성' : null].filter(Boolean);
+          // For a bot, who made it -- the question that decides whose it is
+          // (HK, 2026-10-13: 봇은 봇을 만든 사람이 있을 것 같고).
+          const maker = d.owner_name || d.owner_email
+            ? `만든 사람: ${[d.owner_name, d.owner_email].filter(Boolean).join(' · ')}`
+            : (d.workspace_bot ? '워크스페이스 봇' : (d.app ? `app ${d.app}` : null));
           const places = (d.places || []).map((place) => `${place.where} ${place.events}`).join(', ');
           const when = account.last_seen_at ? new Date(account.last_seen_at).toLocaleDateString() : '';
           [KIND_LABEL[account.kind] || account.kind,
            handle,
-           [who, flags.length ? `[${flags.join('·')}]` : ''].filter(Boolean).join(' ') || '—',
+           [who, flags.length ? `[${flags.join('·')}]` : '', maker].filter(Boolean).join(' ') || '—',
            d.email || '—',
            places || '—',
            `${account.events}건${when ? ` · ${when}` : ''}`]

@@ -302,3 +302,34 @@ def test_bulk_answers_only_the_unambiguous_ones() -> None:
                 ([f"T:{handle}" for handle in accounts.values()],),
             )
             connection.commit()
+
+
+@REQUIRES_DATABASE
+def test_a_notion_bot_names_who_made_it_and_offers_that_person(cursor) -> None:
+    """HK, 2026-10-13: 봇은 봇을 만든 사람이 있을 것 같고 ... 내가 보고 판정하기 쉽게."""
+    from rlwrld_worklog.org.unmapped import account_details, owner_candidates
+
+    tag = uuid.uuid4().hex[:8]
+    maker_id, bot_id = f"maker-{tag}", f"bot-{tag}"
+    _ledger(
+        cursor,
+        source="notion",
+        entity_type="user",
+        entity_id=f"W:{maker_id}",
+        payload={"type": "person", "name": f"만든이{tag}", "person": {"email": f"m{tag}@x.ai"}},
+    )
+    _ledger(
+        cursor,
+        source="notion",
+        entity_type="user",
+        entity_id=f"W:{bot_id}",
+        payload={"type": "bot", "name": "sync bot", "bot": {"owner": {"type": "user", "user": {"id": maker_id}}}},
+    )
+    maker = _roster_person(cursor, f"만든이{tag}", identities=[("notion", maker_id)])
+
+    found = account_details(cursor, "notion", bot_id)
+    assert found["bot"] is True
+    assert found["owner_name"] == f"만든이{tag}", "the maker's name, looked up by id"
+    assert found["owner_email"] == f"m{tag}@x.ai"
+    offered = owner_candidates(cursor, found)
+    assert [(item["person_id"], item["why"]) for item in offered] == [(maker, "봇을 만든 사람")]
