@@ -333,6 +333,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     org_status_parser.add_argument("--database-url", default=None)
 
+    org_merge_parser = org_commands.add_parser(
+        "merge-dual",
+        help="Join a person listed on both tabs (겸직) into one, keeping both "
+        "affiliations. Shows the list without --apply",
+    )
+    org_merge_parser.add_argument("--database-url", default=None)
+    org_merge_parser.add_argument(
+        "--except",
+        dest="except_names",
+        action="append",
+        default=[],
+        help="Repeatable. A name that is two different people (동명이인)",
+    )
+    org_merge_parser.add_argument("--apply", action="store_true")
+
     org_reset_parser = org_commands.add_parser(
         "reset",
         help="Drop everybody the roster sheet no longer lists, keeping anyone a "
@@ -1423,6 +1438,26 @@ def org_command(args: argparse.Namespace) -> int:
                 rebuilt.append({"day": day, "events": built.as_dict().get("events")})
             payload["rebuilt"] = rebuilt
         _print_json("org_reset", payload)
+        return 0
+
+    if args.org_command == "merge-dual":
+        from .org.merge import merge
+
+        outcome = merge(database_url, exclude=args.except_names, apply=args.apply)
+        payload = outcome.as_dict()
+        if args.apply and outcome.days_to_rebuild:
+            from . import digest as digest_module
+
+            payload["rebuilt"] = [
+                {
+                    "day": day,
+                    "events": digest_module.build_day(
+                        database_url, date.fromisoformat(day)
+                    ).as_dict().get("events"),
+                }
+                for day in outcome.days_to_rebuild
+            ]
+        _print_json("org_merge_dual", payload)
         return 0
 
     if args.org_command == "status":
