@@ -119,7 +119,9 @@ def test_a_slack_account_shows_its_name_nickname_email_and_channel(cursor) -> No
     assert found["nickname"] == "민지"
     assert found["email"] == "minji@lab.kr"
     assert found["username"] == "minji.k"
-    assert found["places"] == [{"where": "#model-team", "events": 3}], "a channel by its name"
+    assert found["places"] == [{"where": "#model-team", "events": 3, "id": channel}], (
+        "a channel by its name, and its id for the link"
+    )
 
 
 @REQUIRES_DATABASE
@@ -138,7 +140,7 @@ def test_an_account_with_no_profile_still_says_where_it_worked(cursor) -> None:
     )
     found = account_details(cursor, "github", login)
     assert found["handle"] == login
-    assert found["places"] == [{"where": "RLWRLD/vla", "events": 1}]
+    assert found["places"] == [{"where": "RLWRLD/vla", "events": 1, "id": "RLWRLD/vla"}]
     assert "name" not in found, "nothing is invented where the source said nothing"
 
 

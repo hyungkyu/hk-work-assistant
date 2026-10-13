@@ -479,7 +479,7 @@ def accounts_details(cursor, accounts: list[tuple[str, str]]) -> dict[tuple[str,
         )[:3]
         shown = [
             {"where": f"#{names[item['where']]}" if kind == "slack" and item["where"] in names
-             else item["where"], "events": item["events"]}
+             else item["where"], "events": item["events"], "id": item["where"]}
             for item in found
         ]
         details = out[(kind, value)]

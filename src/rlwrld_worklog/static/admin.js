@@ -2657,6 +2657,25 @@
           slack: '슬랙', notion: '노션', github: '깃헙', slurm: '슬럼',
           email_official: '이메일', email_personal: '이메일(개인)', email_school: '이메일(학교)',
         };
+        // Links to the account itself (HK, 2026-10-13: 슬랙/노션/깃헙에는
+        // 하이퍼링크를 달아줘). Notion has no page for a user, so a Notion
+        // account links through the pages it worked on instead.
+        const ACCOUNT_URL = {
+          slack: (id) => `https://app.slack.com/team/${encodeURIComponent(id)}`,
+          github: (id) => `https://github.com/${encodeURIComponent(id)}`,
+        };
+        const PLACE_URL = {
+          notion: (id) => `https://www.notion.so/${String(id).replace(/-/g, '')}`,
+          github: (id) => `https://github.com/${String(id).split('/').map(encodeURIComponent).join('/')}`,
+        };
+        const linked = (text, url) => {
+          const a = document.createElement('a');
+          a.href = url;
+          a.target = '_blank';
+          a.rel = 'noopener';
+          a.textContent = text;
+          return a;
+        };
         (payload.accounts || []).forEach((account) => {
           const row = document.createElement('tr');
           const d = account.details || {};
@@ -2670,17 +2689,27 @@
           const maker = d.owner_name || d.owner_email
             ? `만든 사람: ${[d.owner_name, d.owner_email].filter(Boolean).join(' · ')}`
             : (d.workspace_bot ? '워크스페이스 봇' : (d.app ? `app ${d.app}` : null));
-          const places = (d.places || []).map((place) => `${place.where} ${place.events}`).join(', ');
+          const placeUrl = PLACE_URL[account.kind];
+          const places = (d.places || []).map((place) => (placeUrl && place.id
+            ? linked(`${place.where} ${place.events}`, placeUrl(place.id))
+            : `${place.where} ${place.events}`));
           const when = account.last_seen_at ? new Date(account.last_seen_at).toLocaleDateString() : '';
           [KIND_LABEL[account.kind] || account.kind,
-           handle,
+           ACCOUNT_URL[account.kind] ? [linked(handle, ACCOUNT_URL[account.kind](account.value))] : handle,
            [who, flags.length ? `[${flags.join('·')}]` : '', maker].filter(Boolean).join(' ') || '—',
            d.email || '—',
-           places || '—',
+           places.length ? places : '—',
            `${account.events}건${when ? ` · ${when}` : ''}`]
             .forEach((value) => {
               const cell = document.createElement('td');
-              cell.textContent = value;
+              if (Array.isArray(value)) {
+                value.forEach((part, index) => {
+                  if (index) cell.append(', ');
+                  cell.append(part);
+                });
+              } else {
+                cell.textContent = value;
+              }
               if (value === '—') cell.style.color = 'var(--muted)';
               row.appendChild(cell);
             });
