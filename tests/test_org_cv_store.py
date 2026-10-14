@@ -97,3 +97,18 @@ def test_only_listed_fields_can_be_edited(cursor, tmp_path) -> None:
         edit_row(cursor, "cv_education", row, "employee_no", "1")
     with pytest.raises(ValueError):
         edit_row(cursor, "cv_education", row, "level", "유치원")
+
+
+def test_a_bundle_carries_many_people_and_a_newer_one_wins(cursor, tmp_path) -> None:
+    from rlwrld_worklog.org.cv_store import load_if_newer, read_profile
+
+    a, b = _number(), _number()
+    (tmp_path / "bundle-all.json").write_text(json.dumps([
+        {"employee_no": a, "headline": "묶음 A"}, {"employee_no": b, "headline": "묶음 B"}],
+        ensure_ascii=False))
+    assert sorted(load_if_newer(cursor, [a, b], tmp_path)) == sorted([a, b])
+    assert read_profile(cursor, [b])["headline"] == "묶음 B"
+    _write(tmp_path, a, headline="낱개 A")
+    os.utime(tmp_path / f"{a}.json", (2e9, 2e9))
+    assert load_if_newer(cursor, [a], tmp_path) == [a]
+    assert read_profile(cursor, [a])["headline"] == "낱개 A"

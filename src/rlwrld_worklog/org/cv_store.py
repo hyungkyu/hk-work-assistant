@@ -160,30 +160,65 @@ def load_profile(cursor, data: dict[str, Any], *, source_mtime: float | None = N
     return number
 
 
+_BUNDLES: dict[str, tuple[float, dict[str, dict[str, Any]]]] = {}
+
+
+def _bundled(root: Path) -> dict[str, tuple[float, dict[str, Any]]]:
+    """Profiles delivered many to a file: ``bundle-*.json``, a list of analyses.
+
+    The whole organisation at once (HK, 2026-10-14: 전체 인원에 대한 것으로
+    확대) is one file rather than two hundred. Parsed once per file version.
+    """
+    out: dict[str, tuple[float, dict[str, Any]]] = {}
+    for path in sorted(root.glob("bundle-*.json")) if root.is_dir() else []:
+        mtime = path.stat().st_mtime
+        cached = _BUNDLES.get(str(path))
+        if cached is None or cached[0] != mtime:
+            try:
+                items = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            by_number = {
+                str(item.get("employee_no")): item
+                for item in items if isinstance(item, dict) and item.get("employee_no")
+            } if isinstance(items, list) else {}
+            _BUNDLES[str(path)] = cached = (mtime, by_number)
+        for number, item in cached[1].items():
+            if number not in out or out[number][0] < mtime:
+                out[number] = (mtime, item)
+    return out
+
+
 def load_if_newer(cursor, employee_numbers: list[str], root: Path | None = None) -> list[str]:
     """Load each 사번's file when it is newer than the copy here and nobody edited it."""
     root = root or profiles_root()
+    bundled = _bundled(root)
     loaded = []
     for number in employee_numbers:
         if not _EMPLOYEE_NO.match(number or ""):
             continue
         path = root / f"{number}.json"
-        if not path.is_file():
+        mtime, data = None, None
+        if path.is_file():
+            mtime = path.stat().st_mtime
+        if number in bundled and (mtime is None or bundled[number][0] > mtime):
+            mtime, data = bundled[number]
+        if mtime is None:
             continue
-        mtime = path.stat().st_mtime
         cursor.execute(
             "SELECT source_mtime, edited_at FROM cv_profile WHERE employee_no = %s", (number,)
         )
         row = cursor.fetchone()
         if row and (row[1] is not None or (row[0] is not None and row[0] >= mtime)):
             continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
+        if data is None:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
         if not isinstance(data, dict):
             continue
-        data["employee_no"] = number
+        data = {**data, "employee_no": number}
         load_profile(cursor, data, source_mtime=mtime)
         loaded.append(number)
     return loaded
@@ -191,7 +226,8 @@ def load_if_newer(cursor, employee_numbers: list[str], root: Path | None = None)
 
 def load_all(cursor, root: Path | None = None) -> list[str]:
     root = root or profiles_root()
-    numbers = [path.stem for path in sorted(root.glob("*.json"))] if root.is_dir() else []
+    numbers = [path.stem for path in sorted(root.glob("*.json")) if _EMPLOYEE_NO.match(path.stem)] if root.is_dir() else []
+    numbers = sorted(set(numbers) | set(_bundled(root)))
     return load_if_newer(cursor, numbers, root)
 
 
