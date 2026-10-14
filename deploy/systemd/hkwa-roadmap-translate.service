@@ -1,0 +1,14 @@
+[Unit]
+Description=Translate roadmap rows left in Korean, with the local model
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Documents/ChatGPT/RLWRLD workspace
+# DATABASE_URL lives here, as for the collection: a user service inherits
+# nothing from a login shell.
+EnvironmentFile=-%h/.config/hk-work-assistant/collect.env
+ExecStart=/bin/bash "%h/Documents/ChatGPT/RLWRLD workspace/scripts/roadmap-translate-tick.sh"
+# A full roadmap of ~150 rows took under a minute on the RTX 5080; model load
+# is seconds. Well above both, and still bounded.
+TimeoutStartSec=1200

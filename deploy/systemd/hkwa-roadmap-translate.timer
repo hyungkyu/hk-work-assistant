@@ -1,0 +1,12 @@
+[Unit]
+Description=Translate pending roadmap rows every fifteen minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitInactiveSec=15min
+Persistent=true
+AccuracySec=60s
+Unit=hkwa-roadmap-translate.service
+
+[Install]
+WantedBy=timers.target

@@ -741,6 +741,19 @@ def build_parser() -> argparse.ArgumentParser:
     roadmap_refresh_parser.add_argument(
         "--dry-run", action="store_true", help="Report what would change and write nothing"
     )
+    roadmap_translate_parser = roadmap_commands.add_parser(
+        "translate",
+        help="Translate rows whose English and Japanese are behind the Korean, with a local model",
+    )
+    roadmap_translate_parser.add_argument("--database-url", default=None)
+    roadmap_translate_parser.add_argument(
+        "--apply", action="store_true", help="Translate and write; without it, only count what is pending"
+    )
+    roadmap_translate_parser.add_argument("--limit", type=int, default=None)
+    roadmap_translate_parser.add_argument(
+        "--remember", type=Path, default=None,
+        help="A JSON file of rows refused before at the same Korean, skipped until it changes",
+    )
 
     collection = subparsers.add_parser(
         "collection", help="Read the record of what has been collected"
@@ -2531,6 +2544,39 @@ def roadmap_refresh(args: argparse.Namespace) -> int:
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0
 
+
+def roadmap_translate(args: argparse.Namespace) -> int:
+    """Put the rows a refresh left in Korean into English and Japanese.
+
+    Run on the host, by a batch, because that is where the GPU is; the
+    refresh it follows runs in the container.
+    """
+    import json
+
+    from .roadmap_translate import LocalTranslator, translate_pending
+
+    database_url = args.database_url or os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise SystemExit("DATABASE_URL or --database-url is required")
+    remembered: dict[str, str] = {}
+    if args.remember and args.remember.exists():
+        try:
+            stored = json.loads(args.remember.read_text(encoding="utf-8"))
+            remembered = {str(k): str(v) for k, v in stored.items()} if isinstance(stored, dict) else {}
+        except ValueError:
+            # A lost memory retries a few rows once more; that is the cheap failure.
+            remembered = {}
+
+    result = translate_pending(
+        database_url, LocalTranslator(), limit=args.limit, apply=args.apply, skip=remembered,
+    )
+    if args.remember and result.refused:
+        remembered.update(result.refused)
+        args.remember.parent.mkdir(parents=True, exist_ok=True)
+        args.remember.write_text(json.dumps(remembered, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    print(json.dumps({"apply": bool(args.apply), **result.as_dict()}, ensure_ascii=False, sort_keys=True))
+    return 0
+
 def _resolve_one_person(database_url: str, args) -> str:
     """The person a command is about, by id when given and by name otherwise.
 
@@ -2644,6 +2690,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return roadmap_seed(args)
     if args.command == "roadmap" and args.roadmap_command == "refresh":
         return roadmap_refresh(args)
+    if args.command == "roadmap" and args.roadmap_command == "translate":
+        return roadmap_translate(args)
     if args.command == "work":
         return run_work(args)
     raise AssertionError(f"Unhandled command: {args.command}")

@@ -16,6 +16,7 @@ for u in hkwa-incoming.service hkwa-incoming.timer \
          hkwa-board-audit.service hkwa-board-audit.timer \
          hkwa-collect.service hkwa-collect.timer \
          hkwa-collection-audit.service hkwa-collection-audit.timer \
+         hkwa-roadmap-translate.service hkwa-roadmap-translate.timer \
          hkwa-wake.service hkwa-wake.timer; do
   [ -f "$root/deploy/systemd/$u" ] || continue
   sed "s#%h/Documents/ChatGPT/RLWRLD workspace#$root#g" \
@@ -80,6 +81,7 @@ fi
 systemctl --user daemon-reload
 for t in hkwa-incoming.timer hkwa-deploy.timer hkwa-board-audit.timer \
          hkwa-collect.timer hkwa-collection-audit.timer hkwa-digest.timer \
+         hkwa-roadmap-translate.timer \
          hkwa-wake.timer; do
   [ -f "$units/$t" ] || continue
   systemctl --user enable --now "$t"

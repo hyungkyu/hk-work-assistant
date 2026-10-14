@@ -29,6 +29,7 @@ Quick index:
 | `deploy-tick.sh` | `hkwa-deploy.service` (timer, 10 min) | yes, by design |
 | `board-audit-tick.sh` | `hkwa-board-audit.service` (timer, 30 min) | yes, by design |
 | `collection-audit-tick.sh` | `hkwa-collection-audit.service` (timer, 02:00 KST) | yes, by design |
+| `roadmap-translate-tick.sh` | `hkwa-roadmap-translate.service` (timer, 15 min) | yes — loads the model only when a row is pending |
 | `run-logged.sh` | anyone running a batch by hand or on a timer | yes |
 | `backfill-days.sh` | a person, for a range of KST days | yes — it skips the days already banked |
 
