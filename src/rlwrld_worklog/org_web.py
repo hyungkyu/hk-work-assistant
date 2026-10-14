@@ -137,55 +137,110 @@ def person_profile_route(
         from .org.profile import person_accounts
 
         found["accounts"] = person_accounts(database_url, person_id)
-        # 인사정보 상세 (HK, 2026-10-13): career, projects, papers -- owner only,
-        # read from the archive, keyed by 사번.
-        from .org.cv import read_cv
-
+        # 인사정보 상세: 원본 -> 디비 -> 화면 (HK, 2026-10-14). A file newer
+        # than the copy here is loaded first, unless the person was edited.
         numbers = [
             item["value"]
             for group in found["accounts"]
             if group["kind"] == "employee_no"
             for item in group["values"]
         ]
-        found["cv"] = read_cv(numbers)
+        found["cv"] = _cv_read(database_url, numbers)
     return found
 
 
-@router.get("/cv/related")
-def cv_related_route(
-    request: Request,
-    kind: Annotated[str, Query(pattern="^(org|school|advisor|project|paper)$")],
-    name: Annotated[str, Query(min_length=1, max_length=400)],
-) -> dict[str, Any]:
-    """Who else was at this company, school, lab, project or paper, and when.
-
-    Owner only, like the analysis it reads (HK, 2026-10-13).
-    """
-    require_super_admin_session(request)
+def _cv_read(database_url: str, numbers: list[str]) -> dict[str, Any] | None:
     import psycopg
 
-    from .org.cv import related
+    from .org.cv_store import load_if_newer, read_profile
 
-    found = related(kind, name)
-    numbers = sorted({item["employee_no"] for item in found})
-    people: dict[str, tuple[str, str]] = {}
-    if numbers:
-        with psycopg.connect(_database_url()) as connection, connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT identity.value, person.person_id, person.name
-                  FROM org_identity identity
-                  JOIN org_person person ON person.person_id = identity.person_id
-                 WHERE identity.kind = 'employee_no' AND identity.value = ANY(%s)
-                """,
-                (numbers,),
-            )
-            people = {number: (pid, pname) for number, pid, pname in cursor.fetchall()}
-    for item in found:
-        pid, pname = people.get(item["employee_no"], (None, None))
-        item["person_id"] = pid
-        item["person_name"] = pname
-    return {"kind": kind, "name": name, "members": found}
+    with psycopg.connect(database_url) as connection, connection.cursor() as cursor:
+        load_if_newer(cursor, numbers)
+        return read_profile(cursor, numbers)
+
+
+def _cv_cursor_call(fn, *args):
+    import psycopg
+
+    with psycopg.connect(_database_url()) as connection, connection.cursor() as cursor:
+        try:
+            return fn(cursor, *args)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.get("/cv/related/{entity_id}")
+def cv_related_route(request: Request, entity_id: Annotated[int, Path(ge=1)]) -> dict[str, Any]:
+    """Who else was at this company, school, lab, project or paper, and when.
+
+    HK, 2026-10-13: 클릭하면, 해당 회사의 모든 구성원, 겹치는 기간. Owner only.
+    """
+    require_super_admin_session(request)
+    from .org.cv_store import related
+
+    return _cv_cursor_call(related, entity_id)
+
+
+@router.get("/cv/entities")
+def cv_entities_route(
+    request: Request, kind: Annotated[str, Query(pattern="^(org|school|advisor|project|paper)$")]
+) -> dict[str, Any]:
+    """The names a row can be merged into, and pairs that look like one place."""
+    require_super_admin_session(request)
+    from .org.cv_store import entity_list, suggest_same
+
+    return {
+        "entities": _cv_cursor_call(entity_list, kind),
+        "suggested": _cv_cursor_call(suggest_same, kind),
+    }
+
+
+class CvEdit(BaseModel):
+    table: str = Field(pattern="^cv_(profile|education|experience|project|publication|etc)$")
+    row_id: str = Field(min_length=1, max_length=40)
+    field: str = Field(min_length=1, max_length=40)
+    value: Any = None
+
+
+@router.post("/cv/edit")
+def cv_edit_route(request: Request, payload: CvEdit) -> dict[str, Any]:
+    """Correct one field read wrongly from the original. Kept across re-reads."""
+    current = require_super_admin_session(request)
+    _require_csrf(request, current)
+    from .org.cv_store import edit_row
+
+    row: Any = payload.row_id if payload.table == "cv_profile" else int(payload.row_id)
+    _cv_cursor_call(edit_row, payload.table, row, payload.field, payload.value)
+    store().audit("cv.edited", actor=session_actor(current), details=payload.model_dump())
+    return {"ok": True}
+
+
+class CvEntity(BaseModel):
+    entity_id: int = Field(ge=1)
+    rename: str | None = Field(default=None, max_length=400)
+    merge_into: int | None = Field(default=None, ge=1)
+    unmerge: bool = False
+
+
+@router.post("/cv/entity")
+def cv_entity_route(request: Request, payload: CvEntity) -> dict[str, Any]:
+    """Rename, merge (삼성전자 -> 삼성) or separate again a company, school, ..."""
+    current = require_super_admin_session(request)
+    _require_csrf(request, current)
+    from .org.cv_store import merge_entity, rename_entity, unmerge_entity
+
+    if payload.unmerge:
+        _cv_cursor_call(unmerge_entity, payload.entity_id)
+    elif payload.merge_into:
+        _cv_cursor_call(merge_entity, payload.entity_id, payload.merge_into)
+    elif payload.rename:
+        _cv_cursor_call(rename_entity, payload.entity_id, payload.rename)
+    else:
+        raise HTTPException(status_code=400, detail="rename, merge_into or unmerge")
+    store().audit("cv.entity", actor=session_actor(current), details=payload.model_dump())
+    return {"ok": True}
 
 
 @router.get("/status")

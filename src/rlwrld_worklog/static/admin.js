@@ -2081,19 +2081,31 @@
       }
     }
 
+    const ACCOUNT_URL_BY_KIND = {
+      slack: (id) => `https://app.slack.com/team/${encodeURIComponent(id)}`,
+      github: (id) => `https://github.com/${encodeURIComponent(id)}`,
+      email_official: (id) => `mailto:${id}`,
+      email_personal: (id) => `mailto:${id}`,
+      email_school: (id) => `mailto:${id}`,
+    };
     const PROFILE_FIELD_LABEL = {
       department_raw: '조직', employment_type: '고용형태', status: '재직구분',
       title: '외부호칭', advisor: '지도교수', nickname: '닉네임',
     };
     const PROFILE_STATUS = { active: '재직', retired: '퇴사', absent_from_sheet: '시트에 없음' };
 
-    // 인사정보 상세 (HK, 2026-10-13): links first, then the career the way
-    // LinkedIn lays it out -- 경력, 학력, 프로젝트, 논문 with 저자 순서. Owner
-    // only; the server sends `cv` to nobody else.
+    // 인사정보 상세 -- drawn from the database (HK, 2026-10-14: 원본 -> 디비 ->
+    // 보여지는 것은 디비에서 조회해서 드로잉), one template for everyone:
+    // 학력 | 경력 (&프로젝트) | 논문 | 기타. 편집 turns every field into an
+    // input; an edit is kept across the next read of the original. Owner only.
     const CV_LINKS = [
       ['homepage', '홈페이지'], ['linkedin', 'LinkedIn'], ['scholar', 'Google Scholar'],
       ['x', 'X'], ['github', 'GitHub'],
     ];
+    const CV_KIND_LABEL = { org: '회사', school: '학교', advisor: '지도교수', project: '프로젝트', paper: '논문' };
+    const CV_POSITION_TONE = { '1저자': 'primary', '공동1저자': 'primary', '교신': 'accent' };
+    let cvEditing = false;
+    let cvPerson = null;
     function cvEl(tag, css, text) {
       const el = document.createElement(tag);
       if (css) el.style.cssText = css;
@@ -2101,190 +2113,336 @@
       return el;
     }
     function cvLink(text, url) {
-      const a = cvEl('a', '', text);
+      const a = cvEl('a', 'word-break:break-all', text);
       a.href = url; a.target = '_blank'; a.rel = 'noopener';
       return a;
     }
-    // One template for everyone (HK, 2026-10-13: 학력|경력 (&프로젝트)|논문|
-    // 기타 ... 모든 구성원의 템플릿은 동일하게). A section with nothing in it
-    // still shows, saying so, so two people's panels line up.
-    function cvHeading(section, title, count) {
-      section.appendChild(cvEl('p', 'margin:16px 0 6px;font-weight:600;font-size:13.5px;'
-        + 'padding-bottom:4px;border-bottom:1px solid var(--line-soft,#1e2734)',
-        count != null ? `${title} (${count})` : title));
+    function cvPeriod(from, to) {
+      if (!from && !to) return '';
+      return `${from || '?'} - ${to || '현재'}`;
     }
-    function cvEmpty(section, text) {
-      section.appendChild(cvEl('p', 'font-size:12.5px;color:var(--muted);margin:2px 0', text || '자료 없음'));
+    // Redraw from the database, keeping the pop-up where it was scrolled.
+    async function cvReopen() {
+      if (!cvPerson) return;
+      const box = $('org-person-drawer').firstElementChild;
+      const top = box ? box.scrollTop : 0;
+      await openPersonPanel(cvPerson);
+      if (box) box.scrollTop = top;
     }
-    function cvNotes(host, note) {
-      const lines = Array.isArray(note) ? note : (note ? [note] : []);
-      lines.forEach((line) => host.appendChild(
-        cvEl('div', 'color:var(--muted);font-size:12.5px;margin-top:2px', lines.length > 1 ? `• ${line}` : line)));
+    async function cvSave(table, rowId, field, value) {
+      try {
+        await api('/api/v1/admin/org/cv/edit', {
+          method: 'POST', body: JSON.stringify({ table, row_id: String(rowId), field, value }),
+        });
+        toast('저장했습니다');
+      } catch (error) {
+        toast(`저장하지 못했습니다: ${error.message}`);
+      }
+      cvReopen();
     }
-    // A name that opens who else was there and when (HK, 2026-10-13: 학교,
-    // 지도교수, 프로젝트, 논문, 회사 등등을 클릭하면, 해당 회사의 모든 구성원,
-    // 겹치는 기간). The answer opens under the name; a second click closes it.
-    const CV_KIND_LABEL = { org: '회사', school: '학교', advisor: '지도교수', project: '프로젝트', paper: '논문' };
+    // A value; in 편집 an input (or a select) that saves on Enter / change.
+    function cvField(value, table, rowId, field, options) {
+      const opts = options || {};
+      const shown = Array.isArray(value) ? value.join('\n') : (value == null ? '' : String(value));
+      if (!cvEditing || !rowId) return cvEl('span', opts.css || '', shown || (opts.empty || ''));
+      if (opts.choices) {
+        const select = cvEl('select', 'padding:3px 6px');
+        opts.choices.forEach((choice) => {
+          const option = cvEl('option', '', choice);
+          option.value = choice;
+          if (choice === value) option.selected = true;
+          select.appendChild(option);
+        });
+        select.addEventListener('change', () => cvSave(table, rowId, field, select.value));
+        return select;
+      }
+      const multi = Array.isArray(value) || opts.multi;
+      const input = cvEl(multi ? 'textarea' : 'input', `padding:3px 6px;width:${opts.width || '100%'};font:inherit;box-sizing:border-box`);
+      input.value = shown;
+      input.placeholder = opts.placeholder || field;
+      if (multi) input.rows = Math.max(2, shown.split('\n').length);
+      const save = () => {
+        if (input.value === shown) return;
+        cvSave(table, rowId, field, multi ? input.value.split('\n').map((s) => s.trim()).filter(Boolean) : input.value);
+      };
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && (!multi || event.metaKey || event.ctrlKey)) { event.preventDefault(); save(); }
+      });
+      input.addEventListener('blur', save);
+      return input;
+    }
     function cvYear(text) {
       const found = String(text || '').match(/(\d{4})(?:\.(\d{1,2}))?/);
       return found ? Number(found[1]) + (found[2] ? (Number(found[2]) - 1) / 12 : 0) : null;
     }
     function cvOverlap(a, b) {
       const now = new Date().getFullYear() + new Date().getMonth() / 12;
-      const as = cvYear(a.start); const bs = cvYear(b.start);
+      const as = cvYear(a.date_from); const bs = cvYear(b.date_from);
       if (as == null || bs == null) return null;
-      const ae = a.end ? cvYear(a.end) : now; const be = b.end ? cvYear(b.end) : now;
-      const from = Math.max(as, bs); const to = Math.min(ae ?? now, be ?? now);
+      const to = Math.min(a.date_to ? cvYear(a.date_to) ?? now : now, b.date_to ? cvYear(b.date_to) ?? now : now);
+      const from = Math.max(as, bs);
       return to > from ? to - from : 0;
     }
-    function cvRelated(kind, name, mine) {
-      const link = cvEl('a', 'cursor:pointer;text-decoration:underline dotted', name);
-      link.title = `같은 ${CV_KIND_LABEL[kind]}의 구성원 보기`;
+    // A company, school, advisor, project or paper. Click: who else was there,
+    // when, and the overlap. In 편집: rename it, merge it into another name
+    // (삼성전자 -> 삼성), or point this row at a different name.
+    function cvEntity(entity, kind, mine, rowTable, rowId) {
+      const wrap = cvEl('span');
+      if (cvEditing && rowId) {
+        wrap.appendChild(cvField(entity ? entity.name : '', rowTable, rowId, kind,
+          { width: '220px', placeholder: CV_KIND_LABEL[kind] }));
+        return wrap;
+      }
+      if (!entity) return wrap;
+      const link = cvEl('a', 'cursor:pointer;text-decoration:underline dotted', entity.name);
+      link.title = entity.read_as ? `원본: ${entity.read_as}` : `같은 ${CV_KIND_LABEL[kind]}의 구성원 보기`;
+      wrap.appendChild(link);
       let box = null;
       link.addEventListener('click', async (event) => {
         event.preventDefault();
         if (box) { box.remove(); box = null; return; }
-        box = cvEl('div', 'margin:6px 0;padding:8px 10px;border:1px solid var(--line-soft,#1e2734);border-radius:8px;font-size:12.5px', '불러오는 중…');
-        link.after(box);
+        box = cvEl('div', 'margin:6px 0;padding:8px 10px;border:1px solid var(--line-soft,#1e2734);border-radius:6px;font-size:12.5px;font-weight:400', '불러오는 중…');
+        wrap.appendChild(box);
         try {
-          const found = await api(`/api/v1/admin/org/cv/related?kind=${kind}&name=${encodeURIComponent(name)}`);
+          const found = await api(`/api/v1/admin/org/cv/related/${entity.id}`);
           box.textContent = '';
+          const people = new Set(found.members.map((m) => m.employee_no)).size;
           box.appendChild(cvEl('div', 'font-weight:600;margin-bottom:4px',
-            `${CV_KIND_LABEL[kind]} · ${name} — ${new Set(found.members.map((m) => m.employee_no)).size}명`));
+            `${CV_KIND_LABEL[kind]} · ${found.entity.name} — ${people}명`));
+          if (found.merged.length) {
+            box.appendChild(cvEl('div', 'color:var(--muted);margin-bottom:4px',
+              `합쳐진 이름: ${found.merged.map((m) => m.name).join(', ')}`));
+          }
           found.members.forEach((member) => {
-            const row = cvEl('div', 'display:grid;grid-template-columns:90px 120px 1fr;gap:8px;padding:2px 0');
+            const row = cvEl('div', 'display:grid;grid-template-columns:90px 150px 1fr;gap:8px;padding:2px 0');
             const who = cvEl('a', 'cursor:pointer', member.person_name || member.employee_no);
             if (member.person_id) {
               who.addEventListener('click', () => openPersonPanel({ person_id: member.person_id, name: member.person_name }));
             }
             row.appendChild(who);
-            row.appendChild(cvEl('span', 'color:var(--muted)',
-              [member.start, member.end || (member.start ? '현재' : '')].filter(Boolean).join(' – ')));
+            row.appendChild(cvEl('span', 'color:var(--muted)', cvPeriod(member.date_from, member.date_to)));
             const years = mine ? cvOverlap(mine, member) : null;
-            row.appendChild(cvEl('span', '', [member.role, member.name !== name ? member.name : null,
+            row.appendChild(cvEl('span', '', [member.role, member.read_as ? `원본: ${member.read_as}` : null,
               years ? `겹친 기간 약 ${years >= 1 ? `${years.toFixed(1)}년` : `${Math.round(years * 12)}개월`}` : null]
               .filter(Boolean).join(' · ')));
             box.appendChild(row);
           });
+          // 이름 정리: rename, merge into another, or separate again.
+          const tools = cvEl('div', 'display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center');
+          const rename = cvEl('input', 'padding:3px 6px;width:160px');
+          rename.placeholder = '새 이름';
+          const renameButton = cvEl('button', '', '이름 바꾸기');
+          renameButton.className = 'button';
+          renameButton.addEventListener('click', () => cvEntityAct({ entity_id: found.entity.id, rename: rename.value }));
+          const merge = cvEl('select', 'padding:3px 6px;max-width:220px');
+          merge.appendChild(cvEl('option', '', '합칠 대상 고르기…'));
+          const mergeButton = cvEl('button', '', '합치기');
+          mergeButton.className = 'button';
+          mergeButton.addEventListener('click', () => {
+            if (merge.value) cvEntityAct({ entity_id: found.entity.id, merge_into: Number(merge.value) });
+          });
+          api(`/api/v1/admin/org/cv/entities?kind=${kind}`).then((list) => {
+            const suggested = new Set();
+            (list.suggested || []).forEach((pair) => {
+              if (pair.a.id === found.entity.id) suggested.add(pair.b.id);
+              if (pair.b.id === found.entity.id) suggested.add(pair.a.id);
+            });
+            list.entities.filter((e) => e.id !== found.entity.id)
+              .sort((x, y) => (suggested.has(y.id) - suggested.has(x.id)) || x.name.localeCompare(y.name))
+              .forEach((e) => {
+                const option = cvEl('option', '', `${suggested.has(e.id) ? '★ ' : ''}${e.name}`);
+                option.value = e.id;
+                merge.appendChild(option);
+              });
+          }).catch(() => {});
+          tools.append(rename, renameButton, merge, mergeButton);
+          found.merged.forEach((m) => {
+            const split = cvEl('button', '', `${m.name} 분리`);
+            split.className = 'button';
+            split.addEventListener('click', () => cvEntityAct({ entity_id: m.id, unmerge: true }));
+            tools.appendChild(split);
+          });
+          box.appendChild(tools);
         } catch (error) {
           box.textContent = `불러오지 못했습니다: ${error.message}`;
         }
       });
-      return link;
+      return wrap;
     }
-    function cvLine(parts) {
-      const line = cvEl('div', 'font-weight:500');
-      parts.filter((part) => part && (part.text || typeof part === 'string')).forEach((part, index) => {
-        if (index) line.append(' · ');
-        line.append(typeof part === 'string' ? part : cvRelated(part.kind, part.text, part.mine));
-      });
-      return line;
+    async function cvEntityAct(body) {
+      try {
+        await api('/api/v1/admin/org/cv/entity', { method: 'POST', body: JSON.stringify(body) });
+        toast('반영했습니다');
+      } catch (error) {
+        toast(`반영하지 못했습니다: ${error.message}`);
+      }
+      cvReopen();
     }
-    function cvTimeline(section, items, line) {
-      items.forEach((item) => {
-        const row = cvEl('div', 'display:grid;grid-template-columns:110px 1fr;gap:10px;padding:6px 0;font-size:13px');
-        row.appendChild(cvEl('span', 'color:var(--muted)', [item.start, item.end || (item.start ? '현재' : '')].filter(Boolean).join(' – ')));
-        const right = cvEl('div');
-        right.appendChild(cvLine(line(item)));
-        cvNotes(right, item.note);
-        (item.projects || []).forEach((project) => {
-          const box = cvEl('div', 'margin:6px 0 0 10px;padding-left:8px;border-left:2px solid var(--line-soft,#1e2734)');
-          const head = cvLine(['프로젝트', { kind: 'project', text: project.name, mine: item }, project.role]);
-          head.style.fontSize = '12.5px';
-          box.appendChild(head);
-          cvNotes(box, project.note);
-          right.appendChild(box);
-        });
-        row.appendChild(right);
-        section.appendChild(row);
-      });
+    function cvHeading(section, title, count) {
+      section.appendChild(cvEl('p', 'margin:18px 0 6px;font-weight:600;font-size:13.5px;'
+        + 'padding-bottom:4px;border-bottom:1px solid var(--line-soft,#1e2734)',
+        count != null ? `${title} (${count})` : title));
     }
-    const CV_POSITION_TONE = { '1저자': 'primary', '공동1저자': 'primary', '교신': 'accent' };
-    function personCvSection(cv) {
+    function cvEmpty(section) {
+      section.appendChild(cvEl('p', 'font-size:12.5px;color:var(--muted);margin:2px 0', '자료 없음'));
+    }
+    function cvNotes(host, note, table, rowId) {
+      if (cvEditing && rowId) {
+        host.appendChild(cvField(note || [], table, rowId, 'note', { multi: true, placeholder: '메모 (한 줄에 하나)' }));
+        return;
+      }
+      const lines = note || [];
+      lines.forEach((line) => host.appendChild(
+        cvEl('div', 'color:var(--muted);font-size:12.5px;margin-top:2px', lines.length > 1 ? `• ${line}` : line)));
+    }
+    function cvDates(item, table) {
+      if (!cvEditing) return cvEl('span', 'color:var(--muted);white-space:nowrap', cvPeriod(item.date_from, item.date_to));
+      const box = cvEl('span', 'display:flex;gap:4px;align-items:center');
+      box.append(cvField(item.date_from, table, item.row_id, 'date_from', { width: '72px', placeholder: 'from' }), '-',
+        cvField(item.date_to, table, item.row_id, 'date_to', { width: '72px', placeholder: 'to' }));
+      return box;
+    }
+    function cvRow(section, left, right) {
+      const row = cvEl('div', 'display:grid;grid-template-columns:150px 1fr;gap:12px;padding:6px 0;font-size:13px');
+      row.append(left, right);
+      section.appendChild(row);
+    }
+    function cvKeyValue(host, label, value) {
+      const line = cvEl('div', 'display:flex;gap:6px;margin-top:2px');
+      line.appendChild(cvEl('span', 'color:var(--muted);min-width:54px', label));
+      line.appendChild(value);
+      host.appendChild(line);
+    }
+    function personCvSection(cv, person) {
+      cvPerson = person;
       const section = personSection('인사정보 상세 (관리자에게만 보입니다)',
-        cv.built_at ? `${new Date(cv.built_at).toLocaleString()} 분석` : null);
-      const links = cvEl('div', 'display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 8px');
+        [cv.built_at ? `${new Date(cv.built_at).toLocaleString()} 분석` : null,
+         cv.edited_at ? `${new Date(cv.edited_at).toLocaleString()} 수정됨 — 원본을 다시 읽어도 유지` : null]
+          .filter(Boolean).join(' · '));
+      const editButton = cvEl('button', 'margin-bottom:8px', cvEditing ? '편집 끝' : '편집');
+      editButton.className = cvEditing ? 'button primary' : 'button';
+      editButton.addEventListener('click', () => { cvEditing = !cvEditing; cvReopen(); });
+      section.appendChild(editButton);
+      // Links as 이름 : URL lines (HK, 2026-10-14), not buttons.
       const sources = cv.sources || {};
+      const links = cvEl('div', 'display:grid;grid-template-columns:max-content 1fr;gap:3px 12px;font-size:13px;margin:4px 0 8px');
       CV_LINKS.forEach(([key, label]) => {
         if (!sources[key]) return;
-        const a = cvLink(label, sources[key]);
-        a.className = 'button';
-        links.appendChild(a);
+        links.append(cvEl('span', 'color:var(--muted)', label), cvLink(sources[key], sources[key]));
       });
       if (sources.cv && sources.cv.url) {
-        const a = cvLink(`CV · ${sources.cv.label || '열기'}`, sources.cv.url);
-        a.className = 'button primary';
-        links.appendChild(a);
+        links.append(cvEl('span', 'color:var(--muted)', 'CV'), cvLink(sources.cv.label || sources.cv.url, sources.cv.url));
       }
-      section.appendChild(links);
+      if (links.childNodes.length) section.appendChild(links);
       const fetched = Object.entries(cv.fetched || {});
       if (fetched.length) {
         section.appendChild(cvEl('p', 'font-size:12px;color:var(--muted);margin:0 0 8px',
           `가져온 곳: ${fetched.map(([k, v]) => `${k} ${v.ok ? '✓' : '✗'}${v.note ? ` (${v.note})` : ''}`).join(' · ')}`));
       }
-      if (cv.headline) section.appendChild(cvEl('p', 'font-size:14px;font-weight:600;margin:6px 0 4px', cv.headline));
-      if (cv.summary) section.appendChild(cvEl('p', 'font-size:13px;line-height:1.55;margin:0 0 6px', cv.summary));
+      const head = cvField(cv.headline, 'cv_profile', cv.employee_no, 'headline', { css: 'font-size:14px;font-weight:600' });
+      section.appendChild(head);
+      const summary = cvField(cv.summary, 'cv_profile', cv.employee_no, 'summary', { multi: true, css: 'display:block;font-size:13px;line-height:1.55;margin:4px 0 6px' });
+      section.appendChild(summary);
       const metrics = cv.metrics || {};
       const said = [
         metrics.citations != null ? `인용 ${metrics.citations}` : null,
         metrics.h_index != null ? `h-index ${metrics.h_index}` : null,
-        metrics.papers != null ? `논문 ${metrics.papers}편` : null,
-        metrics.first_author != null ? `1저자(공동 포함) ${metrics.first_author}편` : null,
+        `논문 ${(cv.publications || []).length}편`,
+        `1저자(공동 포함) ${(cv.publications || []).filter((p) => ['1저자', '공동1저자'].includes(p.position)).length}편`,
       ].filter(Boolean);
-      if (said.length) {
-        const row = cvEl('div', 'display:flex;flex-wrap:wrap;gap:6px;margin:6px 0');
-        said.forEach((text) => row.appendChild(cvEl('span', '', text)));
-        row.childNodes.forEach((el) => { el.className = 'badge'; });
-        section.appendChild(row);
-      }
+      const row = cvEl('div', 'display:flex;flex-wrap:wrap;gap:6px;margin:6px 0');
+      said.forEach((text) => { const b = cvEl('span', '', text); b.className = 'badge'; row.appendChild(b); });
+      section.appendChild(row);
+
+      // 학력: 구분 / 학교 / 전공 / 학위 / 지도교수 / 연구실 / 기간 (from - to).
       cvHeading(section, '학력');
-      if ((cv.education || []).length) {
-        cvTimeline(section, cv.education, (item) => [
-          { kind: 'school', text: item.school, mine: item }, item.degree,
-          item.advisor ? '지도교수' : null, { kind: 'advisor', text: item.advisor, mine: item }]);
-      } else cvEmpty(section);
+      if (!(cv.education || []).length) cvEmpty(section);
+      (cv.education || []).forEach((item) => {
+        const left = cvEl('div');
+        left.appendChild(cvField(item.level, 'cv_education', item.row_id, 'level',
+          { choices: cv.levels, css: 'font-weight:600' }));
+        left.appendChild(cvEl('div'));
+        left.lastChild.appendChild(cvDates(item, 'cv_education'));
+        const right = cvEl('div');
+        cvKeyValue(right, '학교', cvEntity(item.school, 'school', item, 'cv_education', item.row_id));
+        if (item.major || cvEditing) cvKeyValue(right, '전공', cvField(item.major, 'cv_education', item.row_id, 'major'));
+        if (item.degree || cvEditing) cvKeyValue(right, '학위', cvField(item.degree, 'cv_education', item.row_id, 'degree'));
+        if (item.advisor || cvEditing) cvKeyValue(right, '지도교수', cvEntity(item.advisor, 'advisor', item, 'cv_education', item.row_id));
+        if (item.lab || cvEditing) cvKeyValue(right, '연구실', cvField(item.lab, 'cv_education', item.row_id, 'lab'));
+        cvNotes(right, item.note, 'cv_education', item.row_id);
+        cvRow(section, left, right);
+      });
+
       cvHeading(section, '경력 (&프로젝트)');
-      if ((cv.experience || []).length) {
-        cvTimeline(section, cv.experience, (item) => [item.title, { kind: 'org', text: item.org, mine: item }]);
-      } else cvEmpty(section);
+      if (!(cv.experience || []).length) cvEmpty(section);
+      (cv.experience || []).forEach((item) => {
+        const right = cvEl('div');
+        const title = cvEl('div', 'font-weight:500;display:flex;gap:6px;flex-wrap:wrap;align-items:baseline');
+        title.append(cvField(item.title, 'cv_experience', item.row_id, 'title', { width: '220px', placeholder: '직함' }),
+          cvEl('span', 'color:var(--muted)', '·'), cvEntity(item.org, 'org', item, 'cv_experience', item.row_id));
+        right.appendChild(title);
+        cvNotes(right, item.note, 'cv_experience', item.row_id);
+        (item.projects || []).forEach((project) => {
+          const box = cvEl('div', 'margin:6px 0 0 10px;padding-left:8px;border-left:2px solid var(--line-soft,#1e2734)');
+          const line = cvEl('div', 'font-size:12.5px;font-weight:500;display:flex;gap:6px;flex-wrap:wrap;align-items:baseline');
+          line.append('프로젝트', cvEntity(project.project, 'project', item, 'cv_project', project.row_id),
+            cvField(project.role, 'cv_project', project.row_id, 'role', { width: '140px', placeholder: '역할', css: 'color:var(--muted)' }));
+          box.appendChild(line);
+          cvNotes(box, project.note, 'cv_project', project.row_id);
+          right.appendChild(box);
+        });
+        cvRow(section, cvDates(item, 'cv_experience'), right);
+      });
+
       const papers = cv.publications || [];
       cvHeading(section, '논문', papers.length);
-      if (!papers.length) cvEmpty(section, '논문 없음');
+      if (!papers.length) cvEmpty(section);
       papers.forEach((paper) => {
         const card = cvEl('div', 'padding:8px 0;border-bottom:1px solid var(--line-soft,#1e2734);font-size:13px');
-        const head = cvEl('div', 'display:flex;gap:6px;align-items:baseline;flex-wrap:wrap');
-        const badge = cvEl('span', '', paper.position || '');
-        badge.className = `badge ${CV_POSITION_TONE[paper.position] || ''}`;
-        if (paper.position) head.appendChild(badge);
-        head.appendChild(cvRelated('paper', paper.title, null));
-        if (paper.url) head.appendChild(cvLink('원문', paper.url));
-        card.appendChild(head);
-        card.appendChild(cvEl('div', 'color:var(--muted);font-size:12.5px;margin-top:2px',
-          [paper.venue, paper.year, paper.citations != null ? `인용 ${paper.citations}` : null, paper.award]
-            .filter(Boolean).join(' · ')));
-        if (paper.authors) card.appendChild(cvEl('div', 'font-size:12px;color:var(--muted);margin-top:2px', paper.authors));
-        if (paper.summary) card.appendChild(cvEl('div', 'margin-top:4px', paper.summary));
+        const top = cvEl('div', 'display:flex;gap:6px;align-items:baseline;flex-wrap:wrap');
+        if (cvEditing) {
+          top.appendChild(cvField(paper.position, 'cv_publication', paper.row_id, 'position', { width: '90px', placeholder: '저자 순서' }));
+        } else if (paper.position) {
+          const badge = cvEl('span', '', paper.position);
+          badge.className = `badge ${CV_POSITION_TONE[paper.position] || ''}`;
+          top.appendChild(badge);
+        }
+        top.appendChild(cvEntity(paper.paper, 'paper', null, 'cv_publication', paper.row_id));
+        if (paper.url && !cvEditing) top.appendChild(cvLink('원문', paper.url));
+        card.appendChild(top);
+        if (cvEditing) {
+          [['venue', '학회/저널'], ['year', '연도'], ['citations', '인용'], ['award', '수상'], ['url', 'URL'], ['authors', '저자'], ['summary', '요약']]
+            .forEach(([field, label]) => cvKeyValue(card, label, cvField(paper[field], 'cv_publication', paper.row_id, field)));
+        } else {
+          card.appendChild(cvEl('div', 'color:var(--muted);font-size:12.5px;margin-top:2px',
+            [paper.venue, paper.year, paper.citations != null ? `인용 ${paper.citations}` : null, paper.award]
+              .filter(Boolean).join(' · ')));
+          if (paper.authors) card.appendChild(cvEl('div', 'font-size:12px;color:var(--muted);margin-top:2px', paper.authors));
+          if (paper.summary) card.appendChild(cvEl('div', 'margin-top:4px', paper.summary));
+        }
         section.appendChild(card);
       });
+
       cvHeading(section, '기타 (어학·수상·활동 등)');
-      const etc = (cv.etc || []).filter((group) => (group.items || []).length);
-      if (!etc.length) cvEmpty(section);
-      etc.forEach((group) => {
-        const row = cvEl('div', 'display:grid;grid-template-columns:110px 1fr;gap:10px;padding:5px 0;font-size:13px');
-        row.appendChild(cvEl('span', 'color:var(--muted)', group.label));
+      if (!(cv.etc || []).length) cvEmpty(section);
+      (cv.etc || []).forEach((group) => {
         const right = cvEl('div');
-        group.items.forEach((item) => {
-          if (item && typeof item === 'object' && item.url) {
+        if (cvEditing) {
+          right.appendChild(cvField((group.items || []).map((i) => (typeof i === 'object' ? (i.url ? `${i.text} ${i.url}` : i.text) : i)),
+            'cv_etc', group.row_id, 'items', { multi: true }));
+        } else {
+          (group.items || []).forEach((item) => {
             const line = cvEl('div');
-            line.appendChild(cvLink(item.text || item.url, item.url));
+            if (item && typeof item === 'object' && item.url) line.appendChild(cvLink(item.text || item.url, item.url));
+            else line.textContent = typeof item === 'object' ? item.text : item;
             right.appendChild(line);
-          } else right.appendChild(cvEl('div', '', typeof item === 'object' ? item.text : item));
-        });
-        row.appendChild(right);
-        section.appendChild(row);
+          });
+        }
+        cvRow(section, cvField(group.label, 'cv_etc', group.row_id, 'label', { css: 'color:var(--muted)' }), right);
       });
+
       if ((cv.flags || []).length) {
-        section.appendChild(cvEl('p', 'margin:14px 0 6px;font-weight:600;font-size:13px', '확인 필요'));
+        cvHeading(section, '확인 필요');
         cv.flags.forEach((flag) => section.appendChild(cvEl('div', 'font-size:12.5px;padding:2px 0', `• ${flag}`)));
       }
       return section;
@@ -2336,9 +2494,14 @@
           dt.textContent = group.label;
           const dd = document.createElement('dd');
           dd.style.cssText = 'margin:0;word-break:break-all';
-          dd.textContent = group.values
-            .map((item) => item.value + (item.linked_by_hand ? ' (직접 연결)' : ''))
-            .join(' · ');
+          // Slack and GitHub open the account (HK, 2026-10-14: 슬랙, 깃헙, 노션에
+          // 하이퍼링크가 없네). Notion has no address for a person, so no link.
+          const url = ACCOUNT_URL_BY_KIND[group.kind];
+          group.values.forEach((item, index) => {
+            if (index) dd.append(' · ');
+            dd.append(url ? cvLink(item.value, url(item.value)) : item.value);
+            if (item.linked_by_hand) dd.append(' (직접 연결)');
+          });
           accounts.append(dt, dd);
         });
         hrSection.appendChild(accounts);
@@ -2369,7 +2532,7 @@
       hrSection.appendChild(extraHead);
       notConnected(hrSection, hr.extra);
       body.appendChild(hrSection);
-      if (profile.cv) body.appendChild(personCvSection(profile.cv));
+      if (profile.cv) body.appendChild(personCvSection(profile.cv, person));
 
       const recent = personSection('최근 하고 있는 일');
       notConnected(recent, profile.recent_work);
