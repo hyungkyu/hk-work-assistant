@@ -51,7 +51,26 @@ def role_of(current: Mapping[str, Any] | None, database_url: str | None = None) 
     return row[0] if row else "general"
 
 
+# What 민감 정보 취급자 starts with, written once (admin_access_meta).
+DEFAULTS = (("sensitive", "area:cv_detail"), ("sensitive", "area:roster_accounts"))
+
+
+def _ensure_defaults(cursor) -> None:
+    cursor.execute(
+        "INSERT INTO admin_access_meta (key) VALUES ('defaults') ON CONFLICT DO NOTHING RETURNING key"
+    )
+    if cursor.fetchone() is None:
+        return
+    for role, resource in DEFAULTS:
+        cursor.execute(
+            "INSERT INTO admin_grant (role_id, resource, granted_by) VALUES (%s, %s, 'defaults') "
+            "ON CONFLICT DO NOTHING",
+            (role, resource),
+        )
+
+
 def grants(role: str, database_url: str | None = None) -> set[str]:
+    """What a role was granted beyond the 공개 screens everyone signed in has."""
     url = database_url or _database_url()
     if not url or role == "owner":
         return set()
@@ -59,6 +78,7 @@ def grants(role: str, database_url: str | None = None) -> set[str]:
 
     try:
         with psycopg.connect(url) as connection, connection.cursor() as cursor:
+            _ensure_defaults(cursor)
             cursor.execute("SELECT resource FROM admin_grant WHERE role_id = %s", (role,))
             return {row[0] for row in cursor.fetchall()}
     except Exception:
@@ -86,11 +106,15 @@ def overview(database_url: str, pages: list[dict[str, Any]]) -> dict[str, Any]:
             {"email": e, "role": r, "granted_at": t.isoformat() if t else None, "granted_by": b}
             for e, r, t, b in cursor.fetchall()
         ]
+        _ensure_defaults(cursor)
         cursor.execute("SELECT role_id, resource FROM admin_grant")
         rows = cursor.fetchall()
     matrix: dict[str, list[str]] = {role: [] for role, _ in ROLES if role != "owner"}
     for role, resource in rows:
         matrix.setdefault(role, []).append(resource)
+    # 일반's screens are the 공개 switch, shown here as they are.
+    open_pages = [f"page:{page['page_id']}" for page in pages if page.get("requires") == "company_user"]
+    matrix["general"] = sorted(set(matrix.get("general", [])) | set(open_pages))
     resources = [
         {
             "resource": f"page:{page['page_id']}",
@@ -140,6 +164,8 @@ def set_grant(database_url: str, role: str, resource: str, on: bool, actor: str)
     if role not in ("general", "sensitive"):
         raise ValueError("역할은 general / sensitive 중 하나")
     if resource.startswith("page:"):
+        if role == "general":
+            raise ValueError("일반의 메뉴는 메뉴 편집의 공개 스위치로 정합니다")
         if resource[5:] not in menu.TOGGLABLE:
             raise ValueError("이 화면은 서버가 권한을 묻지 않아 줄 수 없습니다")
     elif resource not in AREAS:

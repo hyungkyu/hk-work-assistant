@@ -166,7 +166,14 @@ def require_page_access(page_id: str, *, closed: Any = None):
             from . import access
 
             current = _session(request)
-            if current and current.get("role") == "company_user" and access.allows(current, f"page:{page_id}"):
+            # Only 민감 정보 취급자 is widened here: 일반's screens are exactly
+            # the 공개 switch above, so shutting a screen shuts it for them.
+            if (
+                current
+                and current.get("role") == "company_user"
+                and access.role_of(current) == "sensitive"
+                and access.allows(current, f"page:{page_id}")
+            ):
                 return current
         return (closed or require_super_admin_session)(request)
 

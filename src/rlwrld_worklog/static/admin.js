@@ -3465,8 +3465,10 @@
             const box = document.createElement('input');
             box.type = 'checkbox';
             box.checked = (data.grants[role] || []).includes(item.resource);
-            box.disabled = !item.grantable;
+            const viaSwitch = role === 'general' && item.kind === '메뉴';
+            box.disabled = !item.grantable || viaSwitch;
             if (!item.grantable) td.title = '서버가 권한을 묻지 않는 화면이라 나만 볼 수 있습니다';
+            else if (viaSwitch) td.title = '일반의 메뉴는 위 메뉴 편집의 공개 스위치로 정합니다';
             box.addEventListener('change', () => accessAct('/api/v1/admin/menu/access/grant',
               { role, resource: item.resource, on: box.checked }));
             td.appendChild(box);
