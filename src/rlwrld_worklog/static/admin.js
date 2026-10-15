@@ -2326,9 +2326,22 @@
       // Links as 이름 : URL lines (HK, 2026-10-14), not buttons.
       const sources = cv.sources || {};
       const links = cvEl('div', 'display:grid;grid-template-columns:max-content 1fr;gap:3px 12px;font-size:13px;margin:4px 0 8px');
+      // A saved snapshot sits next to its link: when it was taken, and the
+      // file itself (HK, 2026-10-15: 언제 다운받은 스냅샷 ... 다운로드).
+      const snapshots = sources.snapshots || [];
       CV_LINKS.forEach(([key, label]) => {
-        if (!sources[key]) return;
-        links.append(cvEl('span', 'color:var(--muted)', label), cvLink(sources[key], sources[key]));
+        const mine = snapshots.filter((snap) => snap.kind === key);
+        if (!sources[key] && !mine.length) return;
+        const value = cvEl('span', 'display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline');
+        if (sources[key]) value.appendChild(cvLink(sources[key], sources[key]));
+        mine.forEach((snap) => {
+          const a = cvLink(`스냅샷 ${snap.at} (${snap.label || 'PDF'}) 다운로드`,
+            `/api/v1/admin/org/cv/file/${encodeURIComponent(snap.file)}`);
+          a.setAttribute('download', snap.file);
+          a.style.fontSize = '12.5px';
+          value.appendChild(a);
+        });
+        links.append(cvEl('span', 'color:var(--muted)', label), value);
       });
       if (sources.cv && sources.cv.url) {
         links.append(cvEl('span', 'color:var(--muted)', 'CV'), cvLink(sources.cv.label || sources.cv.url, sources.cv.url));

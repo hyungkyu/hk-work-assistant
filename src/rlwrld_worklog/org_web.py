@@ -183,6 +183,29 @@ def cv_related_route(request: Request, entity_id: Annotated[int, Path(ge=1)]) ->
     return _cv_cursor_call(related, entity_id)
 
 
+@router.get("/cv/file/{name}")
+def cv_file_route(
+    request: Request,
+    name: Annotated[str, Path(pattern=r"^[0-9A-Za-z_-]{1,40}-[a-z0-9_-]{1,40}-\d{8}\.pdf$")],
+):
+    """A saved snapshot of a profile -- a LinkedIn PDF -- to download.
+
+    HK, 2026-10-15: linkedin 주소 옆에 언제 다운받은 스냅샷 ... 다운로드 받을 수
+    있게. Kept under ``<archive>/profiles/files/``, named
+    ``<사번>-<kind>-<YYYYMMDD>.pdf``; the pattern above is the only name that
+    can reach the disk. Owner only.
+    """
+    require_super_admin_session(request)
+    from fastapi.responses import FileResponse
+
+    from .org.cv import profiles_root
+
+    path = profiles_root() / "files" / name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="no such snapshot")
+    return FileResponse(path, media_type="application/pdf", filename=name)
+
+
 @router.get("/cv/entities")
 def cv_entities_route(
     request: Request, kind: Annotated[str, Query(pattern="^(org|school|advisor|project|paper)$")]
