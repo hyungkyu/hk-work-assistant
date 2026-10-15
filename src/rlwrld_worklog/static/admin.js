@@ -1681,6 +1681,10 @@
     // `work` while the restricted notice was on screen, because that notice has
     // no menu entry — and the address bar then said something untrue.
     let activePage = DEFAULT_PAGE;
+    // The person whose pop-up is open on 조직도, kept in the address bar so the
+    // pop-up has an address of its own (HK, 2026-10-15: 팝업창이 뜨더라도 고유
+    // 주소를 갖았으면 좋겠어 ... 모두 다 공유 가능한 주소창): #/org?person=p_….
+    let orgOpenPerson = null;
 
     function currentPage() {
       return activePage;
@@ -1697,6 +1701,8 @@
         if ($('coverage-end').value) parameters.set('end', $('coverage-end').value);
       } else if (page === 'work') {
         if (workState.assignee) parameters.set('assigned_to', workState.assignee);
+      } else if (page === 'org' && orgOpenPerson) {
+        parameters.set('person', orgOpenPerson);
       }
       const query = parameters.toString();
       return `#/${page}${query ? `?${query}` : ''}`;
@@ -1766,7 +1772,21 @@
       if (page === 'roadmap') loadRoadmap();
       if (page === 'mapping') loadMapping();
       if (page === 'search') { loadSearchCorpus(); }
-      if (page === 'org') loadOrg();
+      if (page === 'org') {
+        loadOrg();
+        const wanted = parameters.get('person');
+        if (wanted && /^p_[0-9a-f]{12}$/.test(wanted)) {
+          if (wanted !== orgOpenPerson || $('org-person-drawer').classList.contains('hidden')) {
+            openPersonPanel({ person_id: wanted, name: '' }, { fromHash: true });
+          }
+        } else {
+          orgOpenPerson = null;
+          $('org-person-drawer').classList.add('hidden');
+        }
+      } else {
+        orgOpenPerson = null;
+        $('org-person-drawer').classList.add('hidden');
+      }
       if (page === 'unmapped') loadUnmapped();
       if (page === 'pairs') loadPairs({ reset: true });
       if (page === 'menu') loadMenu();
@@ -2461,10 +2481,19 @@
       return section;
     }
 
-    async function openPersonPanel(person) {
+    // Close the pop-up and take its address off the bar.
+    function closePersonPanel() {
+      $('org-person-drawer').classList.add('hidden');
+      if (orgOpenPerson) { orgOpenPerson = null; writeHash(); }
+    }
+
+    async function openPersonPanel(person, options) {
       const drawer = $('org-person-drawer');
       const body = $('org-person-body');
-      $('org-person-title').textContent = orgDisplayName(person);
+      const opening = orgOpenPerson !== person.person_id;
+      orgOpenPerson = person.person_id;
+      if (activePage === 'org' && opening && !(options && options.fromHash)) writeHash();
+      $('org-person-title').textContent = person.name ? orgDisplayName(person) : '';
       body.textContent = '';
       const loading = document.createElement('p');
       loading.className = 'work-state';
@@ -2479,6 +2508,18 @@
         return;
       }
       body.textContent = '';
+      if (!$('org-person-title').textContent) $('org-person-title').textContent = profile.name || person.person_id;
+      // The address to share, right under the name.
+      const share = document.createElement('p');
+      share.className = 'help';
+      share.style.cssText = 'margin:0 0 8px;word-break:break-all';
+      const here = `${location.origin}${location.pathname}#/org?person=${person.person_id}`;
+      share.append('주소: ');
+      const shareLink = document.createElement('a');
+      shareLink.href = here;
+      shareLink.textContent = here;
+      share.appendChild(shareLink);
+      body.appendChild(share);
 
       const hr = profile.hr || {};
       const hrSection = personSection('인사정보',
@@ -3717,13 +3758,13 @@
     $('pairs-state').addEventListener('change', () => loadPairs({ reset: true }));
     $('pairs-person').addEventListener('change', () => loadPairs({ reset: true }));
     $('org-refresh').addEventListener('click', refreshOrg);
-    $('org-person-close').addEventListener('click', () => $('org-person-drawer').classList.add('hidden'));
+    $('org-person-close').addEventListener('click', closePersonPanel);
     // A click on the dimmed backdrop, or Escape, closes the pop-up too.
     $('org-person-drawer').addEventListener('click', (event) => {
-      if (event.target === $('org-person-drawer')) $('org-person-drawer').classList.add('hidden');
+      if (event.target === $('org-person-drawer')) closePersonPanel();
     });
     document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') $('org-person-drawer').classList.add('hidden');
+      if (event.key === 'Escape' && !$('org-person-drawer').classList.contains('hidden')) closePersonPanel();
     });
     $('unmapped-reload').addEventListener('click', loadUnmapped);
     $('unmapped-state').addEventListener('change', loadUnmapped);
