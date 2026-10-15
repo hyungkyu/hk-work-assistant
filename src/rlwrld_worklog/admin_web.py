@@ -160,7 +160,31 @@ def require_page_access(page_id: str, *, closed: Any = None):
             # the screen to colleagues and shut it to the agents who work on
             # it, which is not what anybody means by 공개.
             return require_reader_session(request)
+        # 권한 체계 (HK, 2026-10-15): a role granted this screen opens it to
+        # the people who hold that role, and to nobody else.
+        if page_id in menu.TOGGLABLE:
+            from . import access
+
+            current = _session(request)
+            if current and current.get("role") == "company_user" and access.allows(current, f"page:{page_id}"):
+                return current
         return (closed or require_super_admin_session)(request)
+
+    return guard
+
+
+def require_area(resource: str):
+    """A guard for one part of a screen (권한 체계, HK 2026-10-15)."""
+
+    def guard(request: Request) -> dict[str, Any]:
+        from . import access
+
+        current = _session(request)
+        if current is None:
+            raise HTTPException(status_code=401, detail="login required")
+        if not access.allows(current, resource):
+            raise HTTPException(status_code=403, detail=f"no access to {resource}")
+        return current
 
     return guard
 

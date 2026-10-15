@@ -1789,7 +1789,7 @@
       }
       if (page === 'unmapped') loadUnmapped();
       if (page === 'pairs') loadPairs({ reset: true });
-      if (page === 'menu') loadMenu();
+      if (page === 'menu') { loadMenu(); loadAccess(); }
       if (page === 'release') loadReleaseNotes();
       if (page === 'person') { if (!$('person-day').value) $('person-day').value = yesterdayKST(); }
       if (page === 'audit') loadAudit();
@@ -2339,7 +2339,9 @@
         [cv.built_at ? `${new Date(cv.built_at).toLocaleString()} 분석` : null,
          cv.edited_at ? `${new Date(cv.edited_at).toLocaleString()} 수정됨 — 원본을 다시 읽어도 유지` : null]
           .filter(Boolean).join(' · '));
+      if (!cv.can_edit) cvEditing = false;
       const editButton = cvEl('button', 'margin-bottom:8px', cvEditing ? '편집 끝' : '편집');
+      editButton.style.display = cv.can_edit ? '' : 'none';
       editButton.className = cvEditing ? 'button primary' : 'button';
       editButton.addEventListener('click', () => { cvEditing = !cvEditing; cvReopen(); });
       section.appendChild(editButton);
@@ -3411,6 +3413,84 @@
     // page_id -> the one <button> for that screen, from the markup.
     const menuButtons = new Map();
 
+    // -------------------------------------------------- 권한
+    async function loadAccess() {
+      const usersHost = $('access-users');
+      const matrixHost = $('access-matrix');
+      if (!usersHost) return;
+      try {
+        const data = await api('/api/v1/admin/menu/access');
+        $('access-badge').textContent = `${data.users.length}명 지정`;
+        const roleLabel = Object.fromEntries(data.roles.map((r) => [r.role, r.label]));
+        usersHost.textContent = '';
+        if (!data.users.length) {
+          const empty = document.createElement('p');
+          empty.className = 'help';
+          empty.textContent = '지정된 사람이 없습니다. 모두 「일반」입니다.';
+          usersHost.appendChild(empty);
+        }
+        data.users.forEach((user) => {
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;gap:10px;align-items:center;padding:3px 0;font-size:13px';
+          const who = document.createElement('span');
+          who.textContent = `${user.email} — ${roleLabel[user.role] || user.role}`;
+          const remove = document.createElement('button');
+          remove.className = 'button';
+          remove.textContent = '해제';
+          remove.addEventListener('click', () => accessAct('/api/v1/admin/menu/access/user', { email: user.email, role: null }));
+          row.append(who, remove);
+          usersHost.appendChild(row);
+        });
+        const table = document.createElement('table');
+        table.style.cssText = 'border-collapse:collapse;font-size:13px';
+        const head = document.createElement('tr');
+        ['구분', '메뉴 · 영역', '일반', '민감 정보 취급자'].forEach((text) => {
+          const th = document.createElement('th');
+          th.textContent = text;
+          th.style.cssText = 'text-align:left;padding:4px 10px';
+          head.appendChild(th);
+        });
+        table.appendChild(head);
+        data.resources.forEach((item) => {
+          const row = document.createElement('tr');
+          [item.kind, item.label].forEach((text) => {
+            const td = document.createElement('td');
+            td.textContent = text;
+            td.style.padding = '3px 10px';
+            row.appendChild(td);
+          });
+          ['general', 'sensitive'].forEach((role) => {
+            const td = document.createElement('td');
+            td.style.cssText = 'padding:3px 10px;text-align:center';
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            box.checked = (data.grants[role] || []).includes(item.resource);
+            box.disabled = !item.grantable;
+            if (!item.grantable) td.title = '서버가 권한을 묻지 않는 화면이라 나만 볼 수 있습니다';
+            box.addEventListener('change', () => accessAct('/api/v1/admin/menu/access/grant',
+              { role, resource: item.resource, on: box.checked }));
+            td.appendChild(box);
+            row.appendChild(td);
+          });
+          table.appendChild(row);
+        });
+        matrixHost.textContent = '';
+        matrixHost.appendChild(table);
+      } catch (error) {
+        usersHost.textContent = `불러오지 못했습니다: ${error.message}`;
+      }
+    }
+
+    async function accessAct(path, body) {
+      try {
+        await api(path, { method: 'POST', body: JSON.stringify(body) });
+        toast('반영했습니다');
+      } catch (error) {
+        toast(`반영하지 못했습니다: ${error.message}`, true);
+      }
+      loadAccess();
+    }
+
     async function loadMenu() {
       const line = $('menu-state');
       try {
@@ -3759,6 +3839,10 @@
     $('pairs-person').addEventListener('change', () => loadPairs({ reset: true }));
     $('org-refresh').addEventListener('click', refreshOrg);
     $('org-person-close').addEventListener('click', closePersonPanel);
+    $('access-add').addEventListener('click', () => {
+      const email = $('access-email').value.trim();
+      if (email) accessAct('/api/v1/admin/menu/access/user', { email, role: $('access-role').value });
+    });
     // A click on the dimmed backdrop, or Escape, closes the pop-up too.
     $('org-person-drawer').addEventListener('click', (event) => {
       if (event.target === $('org-person-drawer')) closePersonPanel();

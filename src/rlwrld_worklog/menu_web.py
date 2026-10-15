@@ -15,7 +15,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .admin_web import _require_csrf, require_reader_session, require_super_admin_session
+from .admin_web import _require_csrf, require_reader_session, require_super_admin_session, session_actor
 
 router = APIRouter(prefix="/api/v1/admin/menu")
 
@@ -37,7 +37,7 @@ def menu_route(request: Request) -> dict[str, Any]:
     # owner guard leaves the safe, owner-only HTML defaults in place and makes
     # every public entry invisible.  Saving the arrangement remains owner-only
     # below.
-    require_reader_session(request)
+    current = require_reader_session(request)
     from . import menu
 
     declared = menu.declared_pages()
@@ -63,7 +63,89 @@ def menu_route(request: Request) -> dict[str, Any]:
             "source": "markup",
             "reason": str(error)[:200],
         }
-    return {**found, "source": "database"}
+    return {**_for_session(current, found, url), "source": "database"}
+
+
+def _for_session(current: dict[str, Any], found: dict[str, Any], url: str) -> dict[str, Any]:
+    """A colleague's menu shows the screens their role was granted as open.
+
+    권한 체계 (HK, 2026-10-15). The owner sees the arrangement as saved, so
+    the editor keeps showing the real 공개 switches.
+    """
+    if current.get("role") != "company_user":
+        return found
+    from . import access
+
+    granted = {
+        resource[5:]
+        for resource in access.grants(access.role_of(current, url) or "general", url)
+        if resource.startswith("page:")
+    }
+    if not granted:
+        return found
+
+    def mark(entry: dict[str, Any]) -> dict[str, Any]:
+        if entry.get("page_id") in granted:
+            return {**entry, "requires": "company_user", "owner_only": False}
+        return entry
+
+    return {
+        **found,
+        "pages": [mark(page) for page in found.get("pages", [])],
+        "groups": [
+            {**group, "entries": [mark(entry) for entry in group.get("entries", [])]}
+            for group in found.get("groups", [])
+        ],
+    }
+
+
+@router.get("/access")
+def access_route(request: Request) -> dict[str, Any]:
+    """권한: roles, who holds which, and what each role may reach. Owner only."""
+    require_super_admin_session(request)
+    from . import access, menu
+
+    url = _database_url()
+    if not url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
+    return access.overview(url, menu.read(url).get("pages", []))
+
+
+class AccessUser(BaseModel):
+    email: str = Field(min_length=3, max_length=200)
+    role: str | None = Field(default=None, pattern="^(general|sensitive)$")
+
+
+@router.post("/access/user")
+def access_user_route(request: Request, payload: AccessUser) -> dict[str, Any]:
+    current = require_super_admin_session(request)
+    _require_csrf(request, current)
+    from . import access
+
+    try:
+        access.set_user_role(_database_url() or "", payload.email, payload.role, session_actor(current))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"ok": True}
+
+
+class AccessGrant(BaseModel):
+    role: str = Field(pattern="^(general|sensitive)$")
+    resource: str = Field(pattern="^(page|area):[a-z0-9_]+$")
+    on: bool
+
+
+@router.post("/access/grant")
+def access_grant_route(request: Request, payload: AccessGrant) -> dict[str, Any]:
+    current = require_super_admin_session(request)
+    _require_csrf(request, current)
+    from . import access
+
+    try:
+        access.set_grant(_database_url() or "", payload.role, payload.resource, payload.on, session_actor(current))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"ok": True}
 
 
 class MenuEntry(BaseModel):

@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from .admin_web import (
     _require_csrf,
+    require_area,
     require_page_access,
     require_super_admin_session,
     session_actor,
@@ -133,19 +134,30 @@ def person_profile_route(
     found = person_profile(database_url, person_id)
     if found is None:
         raise HTTPException(status_code=404, detail="no such person on the roster")
-    if current.get("role") == "super_admin":
+    # 권한 체계 (HK, 2026-10-15): 로스터 계정 and 인사정보 상세 are areas a
+    # role is granted; the owner holds every area.
+    from .access import allows
+
+    show_accounts = allows(current, "area:roster_accounts")
+    show_cv = allows(current, "area:cv_detail")
+    if show_accounts or show_cv:
         from .org.profile import person_accounts
 
-        found["accounts"] = person_accounts(database_url, person_id)
+        all_accounts = person_accounts(database_url, person_id)
+        if show_accounts:
+            found["accounts"] = all_accounts
         # 인사정보 상세: 원본 -> 디비 -> 화면 (HK, 2026-10-14). A file newer
         # than the copy here is loaded first, unless the person was edited.
-        numbers = [
-            item["value"]
-            for group in found["accounts"]
-            if group["kind"] == "employee_no"
-            for item in group["values"]
-        ]
-        found["cv"] = _cv_read(database_url, numbers)
+        if show_cv:
+            numbers = [
+                item["value"]
+                for group in all_accounts
+                if group["kind"] == "employee_no"
+                for item in group["values"]
+            ]
+            found["cv"] = _cv_read(database_url, numbers)
+            if found["cv"] is not None:
+                found["cv"]["can_edit"] = allows(current, "area:cv_edit")
     return found
 
 
@@ -177,7 +189,7 @@ def cv_related_route(request: Request, entity_id: Annotated[int, Path(ge=1)]) ->
 
     HK, 2026-10-13: 클릭하면, 해당 회사의 모든 구성원, 겹치는 기간. Owner only.
     """
-    require_super_admin_session(request)
+    require_area("area:cv_detail")(request)
     from .org.cv_store import related
 
     return _cv_cursor_call(related, entity_id)
@@ -195,7 +207,7 @@ def cv_file_route(
     ``<사번>-<kind>-<YYYYMMDD>.pdf``; the pattern above is the only name that
     can reach the disk. Owner only.
     """
-    require_super_admin_session(request)
+    require_area("area:cv_detail")(request)
     from fastapi.responses import FileResponse
 
     from .org.cv import profiles_root
@@ -211,7 +223,7 @@ def cv_entities_route(
     request: Request, kind: Annotated[str, Query(pattern="^(org|school|advisor|project|paper)$")]
 ) -> dict[str, Any]:
     """The names a row can be merged into, and pairs that look like one place."""
-    require_super_admin_session(request)
+    require_area("area:cv_detail")(request)
     from .org.cv_store import entity_list, suggest_same
 
     return {
@@ -230,7 +242,7 @@ class CvEdit(BaseModel):
 @router.post("/cv/edit")
 def cv_edit_route(request: Request, payload: CvEdit) -> dict[str, Any]:
     """Correct one field read wrongly from the original. Kept across re-reads."""
-    current = require_super_admin_session(request)
+    current = require_area("area:cv_edit")(request)
     _require_csrf(request, current)
     from .org.cv_store import edit_row
 
@@ -250,7 +262,7 @@ class CvEntity(BaseModel):
 @router.post("/cv/entity")
 def cv_entity_route(request: Request, payload: CvEntity) -> dict[str, Any]:
     """Rename, merge (삼성전자 -> 삼성) or separate again a company, school, ..."""
-    current = require_super_admin_session(request)
+    current = require_area("area:cv_edit")(request)
     _require_csrf(request, current)
     from .org.cv_store import merge_entity, rename_entity, unmerge_entity
 

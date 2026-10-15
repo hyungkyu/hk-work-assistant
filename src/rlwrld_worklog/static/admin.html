@@ -548,6 +548,22 @@
           <p class="help">묶음 이름을 비우면 위 항목과 같은 묶음이 됩니다.
              저장하면 바로 왼쪽에 반영됩니다.</p>
         </article>
+        <!-- 권한 체계 (HK, 2026-10-15): 나 (전체) / 민감 정보 취급자 / 일반. -->
+        <article class="card" id="access-card">
+          <div class="card-header"><h2>권한</h2><span class="badge" id="access-badge">-</span></div>
+          <p class="help">나 (전체)는 모든 것을 봅니다. 회사 계정으로 로그인한 사람은 따로 지정하지 않으면 「일반」입니다.
+             체크한 메뉴·영역만 그 역할에게 열립니다. 바꾸면 바로 반영됩니다.</p>
+          <div class="work-filters" style="margin:8px 0">
+            <input id="access-email" placeholder="이메일 (Google 로그인)" style="width:240px;padding:6px 8px">
+            <select id="access-role" style="padding:6px 8px">
+              <option value="sensitive">민감 정보 취급자</option>
+              <option value="general">일반</option>
+            </select>
+            <button class="button primary" id="access-add">지정</button>
+          </div>
+          <div id="access-users"></div>
+          <div id="access-matrix" style="margin-top:12px;overflow-x:auto"></div>
+        </article>
       </section>
 
       <section class="page" id="page-schedules">
