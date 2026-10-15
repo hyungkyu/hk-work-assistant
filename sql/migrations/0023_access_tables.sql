@@ -1,4 +1,4 @@
--- 0023_access
+-- 0023_access_tables
 --
 -- 권한 체계: who may open which screen, and which part of a screen.
 --
@@ -38,3 +38,7 @@ CREATE TABLE IF NOT EXISTS admin_access_meta (
     key        text PRIMARY KEY,
     written_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- Named 0023_access_tables, not 0023_access: the first version under that
+-- name ran on 통합데브's database, and a rewritten file under an applied name
+-- is a checksum mismatch forever. A new name runs once everywhere.
